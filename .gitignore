@@ -3,3 +3,9 @@ dist
 .DS_Store
 *.log
 .github-token
+
+# Playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+testing/sessions/
