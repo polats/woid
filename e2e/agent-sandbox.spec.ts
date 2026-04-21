@@ -10,13 +10,29 @@ const BRIDGE = 'http://localhost:13457'
 const ROOMS  = 'http://localhost:12567'
 const RELAY  = 'http://localhost:17777'
 
-async function reachable(url: string, opts?: RequestInit) {
+async function reachable(url: string) {
   try {
-    const r = await fetch(url, opts)
+    const r = await fetch(url)
     return r.ok || r.status === 400
-  } catch {
-    return false
-  }
+  } catch { return false }
+}
+
+async function createCharacter(name: string) {
+  const r = await fetch(`${BRIDGE}/characters`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  return await r.json()
+}
+
+async function spawn(pubkey: string, extras: Record<string, unknown> = {}) {
+  const r = await fetch(`${BRIDGE}/agents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pubkey, ...extras }),
+  })
+  return await r.json()
 }
 
 test.describe('agent-sandbox', () => {
@@ -28,17 +44,16 @@ test.describe('agent-sandbox', () => {
     ])
     test.skip(
       !(rs && pb && rl),
-      `agent-sandbox services not up (room-server=${rs} pi-bridge=${pb} relay=${rl}). Run 'npm run agent-sandbox:up'.`,
+      `agent-sandbox services not up — run 'npm run agent-sandbox:up'.`,
     )
   })
 
   test('all three services respond to /health', async () => {
-    const rsBody = await (await fetch(`${ROOMS}/health`)).json()
-    expect(rsBody.ok).toBe(true)
-
-    const pbBody = await (await fetch(`${BRIDGE}/health`)).json()
-    expect(pbBody.ok).toBe(true)
-    expect(pbBody.service).toBe('pi-bridge')
+    const rs = await (await fetch(`${ROOMS}/health`)).json()
+    expect(rs.ok).toBe(true)
+    const pb = await (await fetch(`${BRIDGE}/health`)).json()
+    expect(pb.ok).toBe(true)
+    expect(pb.service).toBe('pi-bridge')
   })
 
   test('admin endpoint returns a persistent identity', async () => {
@@ -50,53 +65,101 @@ test.describe('agent-sandbox', () => {
 
   test('/models returns tool-capable catalog with a default', async () => {
     const m = await (await fetch(`${BRIDGE}/models`)).json()
-    expect(m.default).toMatch(/\//) // provider/id form
+    expect(m.default).toMatch(/\//)
     expect(Array.isArray(m.models)).toBe(true)
     expect(m.models.length).toBeGreaterThan(5)
-    const hasDefault = m.models.some((x: { id: string }) => x.id === m.default)
-    expect(hasDefault).toBe(true)
+    expect(m.models.some((x: { id: string }) => x.id === m.default)).toBe(true)
   })
 
-  test('spawning with an explicit model is reflected in the agent record and UI badge', async ({ page }) => {
-    const m = await (await fetch(`${BRIDGE}/models`)).json()
-    // Pick the smallest (non-default) model so the badge is distinguishable.
-    const picked = m.models.find((x: { id: string }) => x.id !== m.default) || m.models[0]
-    expect(picked).toBeTruthy()
-
-    const name = `mdl-${Date.now().toString().slice(-6)}`
-    const spawn = await (await fetch(`${BRIDGE}/agents`, {
+  test('POST /characters/:pubkey/generate-profile fills about via NIM', async () => {
+    const c = await createCharacter(`gen-${Date.now().toString().slice(-6)}`)
+    const r = await fetch(`${BRIDGE}/characters/${c.pubkey}/generate-profile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, model: picked.id }),
-    })).json()
-    expect(spawn.model).toBe(picked.id)
+      body: JSON.stringify({ seed: 'desert radio pirate' }),
+    })
+    if (r.status === 502) {
+      test.info().annotations.push({ type: 'skip-reason', description: 'NIM upstream unavailable' })
+      await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
+      return
+    }
+    expect(r.ok).toBe(true)
+    const persona = await r.json()
+    expect((persona.about?.length ?? 0) > 10).toBe(true)
+    expect(persona.profileSource).toBe('ai')
+    expect(persona.profileModel).toMatch(/\//) // provider/id form
+    expect(persona.name).toBe(c.name) // not overwritten
+    await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
+  })
 
-    const list = await (await fetch(`${BRIDGE}/agents`)).json()
-    const rec = list.agents.find((a: { agentId: string }) => a.agentId === spawn.agentId)
-    expect(rec?.model).toBe(picked.id)
+  test('PATCH /characters updates about + publishes kind:0 to relay', async ({ page }) => {
+    const c = await createCharacter(`patch-${Date.now().toString().slice(-6)}`)
+    const r = await fetch(`${BRIDGE}/characters/${c.pubkey}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ about: 'field scout', name: 'field-scout-1' }),
+    })
+    expect(r.ok).toBe(true)
+    const updated = await r.json()
+    expect(updated.about).toBe('field scout')
+    expect(updated.name).toBe('field-scout-1')
 
-    // UI — the badge renders the short name (last path segment)
-    await page.goto('/#/agent-sandbox')
-    const row = page.locator('.agent-sandbox-pane')
-      .filter({ hasText: 'Active agents' })
-      .locator('li', { hasText: name })
-    await expect(row).toBeVisible({ timeout: 10_000 })
-    await expect(row.locator('.agent-model-badge')).toContainText(picked.id.split('/').pop())
+    // Relay should now have a kind:0 authored by this character with the updated name.
+    const relayWs = RELAY.replace(/^http/, 'ws')
+    const kind0 = await page.evaluate(
+      async ({ url, author }) => {
+        return await new Promise<{ content: string } | null>((resolve) => {
+          const ws = new WebSocket(url)
+          const subId = 'e2e-k0-' + Math.random().toString(36).slice(2)
+          const t = setTimeout(() => { try { ws.close() } catch {}; resolve(null) }, 5000)
+          ws.onopen = () => ws.send(JSON.stringify(['REQ', subId, { kinds: [0], authors: [author], limit: 1 }]))
+          ws.onmessage = (ev) => {
+            const m = JSON.parse(ev.data as string)
+            if (m[0] === 'EVENT' && m[1] === subId) { clearTimeout(t); try { ws.close() } catch {}; resolve({ content: m[2].content }) }
+            if (m[0] === 'EOSE') { clearTimeout(t); try { ws.close() } catch {}; resolve(null) }
+          }
+          ws.onerror = () => { clearTimeout(t); resolve(null) }
+        })
+      },
+      { url: relayWs, author: c.pubkey },
+    )
+    expect(kind0, 'PATCH should publish a kind:0 for the character').not.toBeNull()
+    const profile = JSON.parse(kind0!.content)
+    expect(profile.name).toBe('field-scout-1')
+    expect(profile.about).toBe('field scout')
 
-    // Cleanup
-    await fetch(`${BRIDGE}/agents/${spawn.agentId}`, { method: 'DELETE' })
+    await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
+  })
+
+  test('streaming generate emits model, delta, and done events', async () => {
+    const c = await createCharacter(`stream-${Date.now().toString().slice(-6)}`)
+    const r = await fetch(`${BRIDGE}/characters/${c.pubkey}/generate-profile/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seed: 'dusty librarian' }),
+    })
+    if (r.status === 502) {
+      await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
+      test.info().annotations.push({ type: 'skip-reason', description: 'NIM upstream unavailable' })
+      return
+    }
+    expect(r.ok).toBe(true)
+    expect(r.headers.get('content-type') || '').toContain('text/event-stream')
+
+    const text = await r.text()
+    expect(text).toMatch(/event: model/)
+    expect(text).toMatch(/event: delta/)
+    expect(text).toMatch(/event: done/)
+
+    await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
   })
 
   test('admin announces new agents to the relay within a few seconds', async ({ page }) => {
     const admin = await (await fetch(`${BRIDGE}/admin`)).json()
-    const spawnResp = await (await fetch(`${BRIDGE}/agents`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: `announce-${Date.now().toString().slice(-6)}` }),
-    })).json()
-    expect(spawnResp.npub).toMatch(/^[0-9a-f]{64}$/)
+    const c = await createCharacter(`announce-${Date.now().toString().slice(-6)}`)
+    const result = await spawn(c.pubkey)
+    expect(result.agentId).toBeTruthy()
 
-    // Query the relay for admin kind:1 events mentioning this agent
     const relayWs = RELAY.replace(/^http/, 'ws')
     const event = await page.evaluate(
       async ({ url, admin, agentPubkey }) => {
@@ -114,126 +177,148 @@ test.describe('agent-sandbox', () => {
               clearTimeout(timeout); try { ws.close() } catch {}
               resolve({ content: msg[2].content })
             }
-            if (msg[0] === 'EOSE') {
-              clearTimeout(timeout); try { ws.close() } catch {}
-              resolve(null)
-            }
+            if (msg[0] === 'EOSE') { clearTimeout(timeout); try { ws.close() } catch {}; resolve(null) }
           }
           ws.onerror = () => { clearTimeout(timeout); resolve(null) }
         })
       },
-      { url: relayWs, admin: admin.pubkey, agentPubkey: spawnResp.npub },
+      { url: relayWs, admin: admin.pubkey, agentPubkey: c.pubkey },
     )
-    expect(event, 'admin should publish a welcome kind:1 with p-tag for the new agent').not.toBeNull()
+    expect(event).not.toBeNull()
     expect(event!.content).toContain('new on the air')
 
-    // Cleanup
-    await fetch(`${BRIDGE}/agents/${spawnResp.agentId}`, { method: 'DELETE' })
+    await fetch(`${BRIDGE}/agents/${result.agentId}`, { method: 'DELETE' })
+    await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
   })
 
-  test('sandbox UI surfaces admin + relay info and the feed populates', async ({ page }) => {
-    await page.goto('/#/agent-sandbox')
-    // Info strip visible
-    await expect(page.locator('.agent-sandbox-info')).toBeVisible()
-    await expect(page.getByText('Administrator')).toBeVisible({ timeout: 5_000 })
-
-    // Relay feed status should reach 'connected' via native WS
-    const feedStatus = page.locator('.agent-sandbox-pane').filter({ hasText: 'Relay feed' }).locator('.status-connected')
-    await expect(feedStatus).toBeVisible({ timeout: 5_000 })
-  })
-
-  test('sandbox view loads and renders the three panes', async ({ page }) => {
+  test('sandbox view: info strip + cards column + room pane', async ({ page }) => {
     const consoleErrors: string[] = []
     page.on('pageerror', (err) => consoleErrors.push(err.message))
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text())
-    })
+    page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()) })
 
     await page.goto('/#/agent-sandbox')
-    await expect(page.getByRole('heading', { name: 'Create agent' })).toBeVisible()
+    await expect(page.locator('.sandbox2-info')).toBeVisible()
+    await expect(page.locator('.sandbox2-info').getByText('Administrator')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByRole('heading', { name: 'Agents' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Room' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Relay feed' })).toBeVisible()
-
-    // Room status should reach 'connected' (observer joins the Colyseus room)
+    // Colyseus connects — observer shows 'connected'
     await expect(page.locator('.status-connected').first()).toBeVisible({ timeout: 10_000 })
 
-    // Filter out the known-noisy one-shot fetch failures from /api/github/me (no token in CI).
     const real = consoleErrors.filter((e) => !e.includes('/api/github/me'))
     expect(real, `console errors:\n${real.join('\n')}`).toHaveLength(0)
   })
 
-  test('spawning an agent registers it on pi-bridge and publishes kind:1 to relay', async ({ page }) => {
+  test('+ New mints a character, shows a card, opens the profile modal', async ({ page }) => {
     await page.goto('/#/agent-sandbox')
-    await expect(page.getByRole('heading', { name: 'Create agent' })).toBeVisible()
+    const before = await (await fetch(`${BRIDGE}/characters`)).json()
+    await page.locator('.sandbox2-cards header').getByRole('button', { name: '+ New' }).click()
+    // A new card appears in the list.
+    await expect.poll(async () => {
+      const r = await fetch(`${BRIDGE}/characters`)
+      return (await r.json()).characters.length
+    }, { timeout: 5_000 }).toBeGreaterThan(before.characters.length)
+    // Profile modal auto-opens for the new character.
+    await expect(page.locator('.agent-profile-modal')).toBeVisible()
+    await expect(page.locator('.agent-profile-modal header h2')).toHaveText(/^ag-/)
+    // Save a profile edit.
+    await page.getByLabel('About').fill('ui-test about')
+    // Save + publish closes the modal on success.
+    await page.getByRole('button', { name: /Save/ }).click()
+    await expect(page.locator('.agent-profile-modal')).toHaveCount(0, { timeout: 5_000 })
 
-    const name = `scout-${Date.now().toString().slice(-6)}`
+    // Cleanup — delete everything we made so repeated runs stay clean.
+    const after = await (await fetch(`${BRIDGE}/characters`)).json()
+    const seed = new Set(before.characters.map((c: { pubkey: string }) => c.pubkey))
+    for (const c of after.characters) {
+      if (!seed.has(c.pubkey)) await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
+    }
+  })
 
-    await page.getByLabel('Name').fill(name)
-    await page.getByLabel('Seed message (optional)').fill(
-      'Post exactly one short greeting to the room using post.sh, then stop.',
-    )
-    await page.getByRole('button', { name: /Spawn/ }).click()
+  test('card spawn flow: card turns running, relay gets agent kind:1, inspector shows events', async ({ page }) => {
+    const name = `flow-${Date.now().toString().slice(-6)}`
+    const c = await createCharacter(name)
 
-    // Agent appears in the "Active agents" list in the left pane
-    const agentRow = page
-      .locator('.agent-sandbox-pane')
-      .filter({ hasText: 'Active agents' })
-      .locator('li', { hasText: name })
-    await expect(agentRow).toBeVisible({ timeout: 15_000 })
+    await page.goto('/#/agent-sandbox')
+    const card = page.locator('.sandbox2-card', { hasText: name })
+    await expect(card).toBeVisible({ timeout: 10_000 })
 
-    // Cross-check on the bridge's own /agents endpoint
-    const bridgeList = await (await fetch(`${BRIDGE}/agents`)).json()
-    const match = bridgeList.agents.find((a: { name: string }) => a.name === name)
-    expect(match, 'agent should appear in GET /agents').toBeTruthy()
-    expect(match.npub).toMatch(/^[0-9a-f]{64}$/)
+    // Spawn via the card's spawn button.
+    await card.getByRole('button', { name: 'spawn' }).click()
+    await expect(card).toHaveClass(/running/, { timeout: 15_000 })
 
-    // Poll the relay for a kind:1 event authored by THIS agent's pubkey.
-    // Agent spawn → pi inference → post.sh → /internal/post → relay publish.
-    // Cold-start on NIM can take 20-60s.
+    // Inspector drawer opens for the new runtime (spawn() sets inspectedId).
+    const drawer = page.locator('.agent-inspector')
+    await expect(drawer).toBeVisible({ timeout: 5_000 })
+
+    // Poll the relay directly for a kind:1 authored by this character.
     const relayWs = RELAY.replace(/^http/, 'ws')
     const deadline = Date.now() + 120_000
-    let event: { pubkey: string; content: string } | null = null
-    while (Date.now() < deadline && !event) {
-      event = await page.evaluate(
-        async ({ url, authorHex }) => {
-          return await new Promise<{ pubkey: string; content: string } | null>((resolve) => {
+    let found: { content: string } | null = null
+    while (Date.now() < deadline && !found) {
+      found = await page.evaluate(
+        async ({ url, author }) => {
+          return await new Promise<{ content: string } | null>((resolve) => {
             const ws = new WebSocket(url)
             const subId = 'e2e-' + Math.random().toString(36).slice(2)
-            const timeout = setTimeout(() => { try { ws.close() } catch {}; resolve(null) }, 4000)
-            ws.onopen = () => ws.send(JSON.stringify(['REQ', subId, { kinds: [1], authors: [authorHex], limit: 5 }]))
+            const t = setTimeout(() => { try { ws.close() } catch {}; resolve(null) }, 4000)
+            ws.onopen = () => ws.send(JSON.stringify(['REQ', subId, { kinds: [1], authors: [author], limit: 5 }]))
             ws.onmessage = (ev) => {
-              const msg = JSON.parse(ev.data as string)
-              if (msg[0] === 'EVENT' && msg[1] === subId) {
-                clearTimeout(timeout); try { ws.close() } catch {}
-                resolve({ pubkey: msg[2].pubkey, content: msg[2].content })
-              }
-              if (msg[0] === 'EOSE') {
-                clearTimeout(timeout); try { ws.close() } catch {}
-                resolve(null)
-              }
+              const m = JSON.parse(ev.data as string)
+              if (m[0] === 'EVENT' && m[1] === subId) { clearTimeout(t); try { ws.close() } catch {}; resolve({ content: m[2].content }) }
+              if (m[0] === 'EOSE')                  { clearTimeout(t); try { ws.close() } catch {}; resolve(null) }
             }
-            ws.onerror = () => { clearTimeout(timeout); resolve(null) }
+            ws.onerror = () => { clearTimeout(t); resolve(null) }
           })
         },
-        { url: relayWs, authorHex: match.npub },
+        { url: relayWs, author: c.pubkey },
       )
-      if (!event) await page.waitForTimeout(2000)
+      if (!found) await page.waitForTimeout(2000)
     }
+    expect(found, `expected a kind:1 event from ${c.pubkey} on the relay`).not.toBeNull()
 
-    expect(event, `expected a kind:1 event from agent ${match.npub} on the relay`).not.toBeNull()
-    expect(event!.pubkey).toBe(match.npub)
+    // Inspector populates assistant/tool rows from the NDJSON stream.
+    await expect(drawer.locator('.ai-row-assistant, .ai-row-tool-call').first()).toBeVisible({ timeout: 10_000 })
 
-    // Observability — clicking the agent row opens the inspector drawer,
-    // which backfills pi events (at least a tool_execution_start or assistant message).
-    await agentRow.click()
-    const drawer = page.locator('.agent-inspector')
-    await expect(drawer).toBeVisible()
-    // Expect at least one assistant or tool-call row from the pi NDJSON stream
-    await expect(
-      drawer.locator('.ai-row-assistant, .ai-row-tool-call').first(),
-    ).toBeVisible({ timeout: 10_000 })
+    // Stop the runtime from the card, then remove the character.
+    await card.getByRole('button', { name: 'stop' }).click()
+    await expect(card).not.toHaveClass(/running/, { timeout: 10_000 })
+    await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
+  })
 
-    // Cleanup — stop the agent we spawned
-    await page.getByRole('button', { name: 'stop' }).first().click()
+  test('pi exit releases the Colyseus seat (no ghost presence)', async ({ page }) => {
+    const c = await createCharacter(`ghost-${Date.now().toString().slice(-6)}`)
+    const result = await spawn(c.pubkey, { seedMessage: 'Just reply with the word done and stop.' })
+
+    await page.goto('/#/agent-sandbox')
+
+    // Wait for the bridge to mark the agent exited.
+    const deadline = Date.now() + 90_000
+    let exited = false
+    while (Date.now() < deadline && !exited) {
+      const list = await (await fetch(`${BRIDGE}/agents`)).json()
+      const rec = list.agents.find((a: { agentId: string }) => a.agentId === result.agentId)
+      if (rec?.exitedAt) { exited = true; break }
+      await page.waitForTimeout(2000)
+    }
+    expect(exited).toBe(true)
+
+    // Presence in the room pane no longer lists this character's name.
+    await expect.poll(async () => {
+      const rows = page.locator('.sandbox2-room-body .agent-sandbox-list li', { hasText: c.name })
+      return await rows.count()
+    }, { timeout: 10_000 }).toBe(0)
+
+    // The card transitions back to idle (no 'running' class).
+    const card = page.locator('.sandbox2-card', { hasText: c.name })
+    await expect(card).not.toHaveClass(/running/, { timeout: 10_000 })
+
+    await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
+  })
+
+  test('relay-feed page renders and connects', async ({ page }) => {
+    await page.goto('/#/relay-feed')
+    // Heading is the h1 in the main pane; sidebar also has the section label.
+    await expect(page.locator('.relay-feed-view h1')).toHaveText('Nostr Relay')
+    await expect(page.locator('.relay-feed-view .status-connected')).toBeVisible({ timeout: 10_000 })
   })
 })

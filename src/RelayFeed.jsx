@@ -1,0 +1,79 @@
+import { useEffect, useState } from 'react'
+import config from '../woid.config.json'
+import { useRelayFeed } from './hooks/useRelayFeed.js'
+
+const cfg = config.agentSandbox || {}
+
+export default function RelayFeed() {
+  const { events, status } = useRelayFeed({ url: cfg.relayUrl, kinds: [0, 1], limit: 100 })
+  const [characters, setCharacters] = useState([])
+  const [adminInfo, setAdminInfo] = useState(null)
+
+  useEffect(() => {
+    if (!cfg.bridgeUrl) return
+    fetch(`${cfg.bridgeUrl}/admin`).then((r) => r.json()).then(setAdminInfo).catch(() => {})
+    const load = () =>
+      fetch(`${cfg.bridgeUrl}/characters`)
+        .then((r) => r.json())
+        .then((j) => setCharacters(j.characters || []))
+        .catch(() => {})
+    load()
+    const t = setInterval(load, 5000)
+    return () => clearInterval(t)
+  }, [])
+
+  const npubToName = new Map()
+  for (const c of characters) if (c.pubkey) npubToName.set(c.pubkey, c.name)
+  if (adminInfo?.pubkey) npubToName.set(adminInfo.pubkey, adminInfo.profile?.name || 'Administrator')
+
+  return (
+    <div className="relay-feed-view">
+      <header>
+        <h1>Nostr Relay</h1>
+        <div className="relay-feed-meta">
+          <code>{cfg.relayUrl}</code>
+          <span className={`status status-${status}`}>{status}</span>
+          <span className="muted">{events.length} events</span>
+        </div>
+      </header>
+
+      {events.length === 0 ? (
+        <p className="muted">Waiting for events…</p>
+      ) : (
+        <ul className="relay-feed-list">
+          {events.map((ev) => {
+            const isProfile = ev.kind === 0
+            let profile = null
+            if (isProfile) {
+              try { profile = JSON.parse(ev.content) } catch {}
+            }
+            return (
+              <li key={ev.id} className={isProfile ? 'relay-feed-item-profile' : ''}>
+                <div className="relay-feed-author">
+                  <strong>{npubToName.get(ev.pubkey) || ev.pubkey.slice(0, 10) + '…'}</strong>
+                  <span className="relay-feed-kind">kind:{ev.kind}</span>
+                  <time dateTime={new Date(ev.created_at * 1000).toISOString()}>
+                    {new Date(ev.created_at * 1000).toLocaleTimeString()}
+                  </time>
+                </div>
+                {isProfile ? (
+                  <div className="relay-feed-profile">
+                    {profile?.picture && (
+                      <img src={profile.picture} alt={profile.name || ev.pubkey.slice(0, 8)} />
+                    )}
+                    <div>
+                      <div><strong>{profile?.name ?? '(no name)'}</strong></div>
+                      {profile?.about && <div className="muted">{profile.about}</div>}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relay-feed-content">{ev.content}</div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}

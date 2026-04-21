@@ -21,6 +21,21 @@ real client instead of only via `nak req` or the in-app feed panel.
 Community-mode vars are **build-time** (Vite `define` baked into the bundle), so
 any relay change requires a rebuild: `docker compose build jumble`.
 
+## Gotcha: insecure connection block
+
+Jumble's `SmartPool.ensureRelay` (`src/lib/smart-pool.ts:22`) rejects `ws://` and
+`http://` URLs unless the user has toggled "Allow insecure connections" in
+Settings. The rejection is silent — subscribe's `.catch(() => undefined)`
+swallows the error, the feed EOSEs with 0 events, and the UI shows "No notes
+found / check your connection" with no console error.
+
+Our relay is `ws://localhost:17777`, which trips this check. The Dockerfile
+sed-injects a tiny `<script>` into `index.html` that sets
+`localStorage.allowInsecureConnection=true` before the app bundle loads, so a
+fresh visit Just Works without a settings detour.
+
+Remove this injection once we front the relay with TLS (`wss://`).
+
 ## Scope decisions
 
 - **Localhost-only**: browser connects directly to `ws://localhost:17777`, which

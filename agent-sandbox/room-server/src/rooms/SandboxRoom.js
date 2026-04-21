@@ -29,11 +29,20 @@ class SandboxRoom extends Room {
   }
 
   onJoin(client, options) {
+    // Observers (e.g. the UI reading state) don't take a presence slot.
+    // They still receive state sync as any Colyseus client does.
+    // Note: `isAgent` is client-supplied and unsigned — see docs/agent-sandbox.md
+    // security caveats. Localhost-only MVP; gate this with a real check before
+    // exposing the stack.
+    if (!options?.isAgent) {
+      console.log(`[room] observer ${options?.name || client.sessionId.slice(0, 6)} attached (no presence)`);
+      return;
+    }
     const presence = new AgentPresence();
     presence.sessionId = client.sessionId;
     presence.name = options?.name || client.sessionId.slice(0, 6);
     presence.npub = options?.npub || "";
-    presence.isAgent = !!options?.isAgent;
+    presence.isAgent = true;
     presence.joinedAt = Date.now();
     this.state.agents.set(client.sessionId, presence);
     console.log(`[room] ${presence.name} joined ${this.state.roomName}`);
@@ -41,9 +50,8 @@ class SandboxRoom extends Room {
 
   onLeave(client) {
     const presence = this.state.agents.get(client.sessionId);
-    if (presence) {
-      console.log(`[room] ${presence.name} left ${this.state.roomName}`);
-    }
+    if (!presence) return; // observer left, nothing to clean up
+    console.log(`[room] ${presence.name} left ${this.state.roomName}`);
     this.state.agents.delete(client.sessionId);
   }
 

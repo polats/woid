@@ -7,6 +7,7 @@ import Diagram from './Diagram.jsx'
 import Reference from './Reference.jsx'
 import Chat from './Chat.jsx'
 import Sandbox from './Sandbox.jsx'
+import RelayFeed from './RelayFeed.jsx'
 import Testing from './Testing.jsx'
 import Doc from './views/Doc.jsx'
 
@@ -22,6 +23,7 @@ function parseHash() {
   const h = window.location.hash.replace(/^#\/?/, '')
   if (h === 'tasks') return { view: 'tasks' }
   if (h === 'agent-sandbox') return { view: 'agent-sandbox' }
+  if (h === 'relay-feed') return { view: 'relay-feed' }
   if (h === 'testing') return { view: 'testing' }
   if (h.startsWith('testing/')) return { view: 'testing', sessionName: decodeURIComponent(h.slice(8)) }
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
@@ -94,6 +96,7 @@ export default function App() {
       <main className="content-area">
         {route.view === 'tasks' && <Board />}
         {route.view === 'agent-sandbox' && config.features?.agentSandbox && <Sandbox />}
+        {route.view === 'relay-feed' && config.features?.agentSandbox && <RelayFeed />}
         {route.view === 'testing' && <Testing initialSession={route.sessionName} />}
         {route.view === 'diagram' && <Diagram key={route.id} id={route.id} />}
         {route.view === 'reference' && <Reference key={route.id} id={route.id} />}

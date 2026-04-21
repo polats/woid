@@ -3,14 +3,14 @@ import cors from "cors";
 import { spawn } from "child_process";
 import { createInterface } from "readline";
 import { EventEmitter } from "events";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, cpSync, rmSync, renameSync, createReadStream } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir, tmpdir } from "os";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
-import { npubEncode } from "nostr-tools/nip19";
+import { npubEncode, decode as nip19Decode } from "nostr-tools/nip19";
 import WebSocket from "ws";
 
 // nostr-tools SimplePool uses global WebSocket; Node doesn't expose one by default.
@@ -25,6 +25,11 @@ const PI_BIN = process.env.PI_BIN || "pi";
 const WORKSPACE = process.env.WORKSPACE || join(tmpdir(), "woid-agent-sandbox");
 const RELAY_URL = process.env.RELAY_URL || "ws://localhost:7777";
 const NVIDIA_NIM_API_KEY = process.env.NVIDIA_NIM_API_KEY || "";
+// URL browsers/Nostr clients use to fetch resources served by this bridge.
+// Inside docker-compose the bridge is reachable at http://pi-bridge:3457,
+// but kind:0 profiles need a URL external tools can resolve — default to
+// the host-mapped port.
+const PUBLIC_BRIDGE_URL = process.env.PUBLIC_BRIDGE_URL || "http://localhost:13457";
 const SKILL_TEMPLATES_DIR = join(__dirname, "skill-templates");
 const DEFAULT_SKILLS = ["post"];
 
@@ -187,6 +192,24 @@ async function publishAdminProfile() {
   return publishSignedEvent(event, "admin:profile");
 }
 
+async function publishCharacterProfile(pubkey) {
+  const c = loadCharacter(pubkey);
+  if (!c) return null;
+  const profile = { name: c.name };
+  if (c.about) profile.about = c.about;
+  if (c.avatarUrl) profile.picture = c.avatarUrl;
+  const event = finalizeEvent(
+    {
+      kind: 0,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [],
+      content: JSON.stringify(profile),
+    },
+    c.sk,
+  );
+  return publishSignedEvent(event, `char:profile:${c.name}`);
+}
+
 async function publishAdminWelcome({ agentPubkey, agentName, roomName }) {
   const mention = `nostr:${npubEncode(agentPubkey)}`;
   const content = `[ new on the air ] ${mention} — "${agentName}" joined room "${roomName}"`;
@@ -206,23 +229,394 @@ async function publishAdminWelcome({ agentPubkey, agentName, roomName }) {
   return publishSignedEvent(event, "admin:welcome");
 }
 
-// ── Agent lifecycle ──
+// ── Character store ──
+//
+// Persistent Nostr identities, one dir per character keyed by pubkey hex.
+// Characters survive pi-bridge restarts; runtimes (spawned pi processes) do not.
+//
+// $WORKSPACE/characters/<pubkey>/
+//   agent.json         { name, about, stylePrompt, avatarUrl, profileSource, createdAt, updatedAt, model }
+//   sk.hex             (mode 0600)
+//   .pi/identity       (= pubkey hex, for post.sh)
+//   .pi/skills/
+
+const CHARACTERS_DIR = join(WORKSPACE, "characters");
+mkdirSync(CHARACTERS_DIR, { recursive: true });
+
+// Characters are stored by npub for human browsability. Internal code
+// keeps the hex pubkey as the canonical id (that's what Nostr events sign
+// with and what /internal/post reports). Dir-name translation is local.
+function getCharDir(pubkey) {
+  return join(CHARACTERS_DIR, npubEncode(pubkey));
+}
+
+// One-shot migration: legacy dirs were named with the hex pubkey.
+// Rename any surviving hex-named dir to its npub equivalent on boot.
+function migrateHexCharDirs() {
+  if (!existsSync(CHARACTERS_DIR)) return;
+  const entries = readdirSync(CHARACTERS_DIR, { withFileTypes: true });
+  for (const d of entries) {
+    if (!d.isDirectory()) continue;
+    if (!/^[0-9a-f]{64}$/.test(d.name)) continue;
+    const src = join(CHARACTERS_DIR, d.name);
+    const dst = join(CHARACTERS_DIR, npubEncode(d.name));
+    if (existsSync(dst)) continue; // already migrated
+    try {
+      renameSync(src, dst);
+      console.log(`[char] migrated ${d.name.slice(0, 12)}... → npub`);
+    } catch (err) {
+      console.error(`[char] migration failed for ${d.name}: ${err.message}`);
+    }
+  }
+}
+migrateHexCharDirs();
+
+function installSkills(charDir) {
+  mkdirSync(join(charDir, ".pi", "skills"), { recursive: true });
+  for (const skill of DEFAULT_SKILLS) {
+    const src = join(SKILL_TEMPLATES_DIR, skill);
+    const dst = join(charDir, ".pi", "skills", skill);
+    if (!existsSync(dst) && existsSync(src)) cpSync(src, dst, { recursive: true });
+  }
+}
+
+function randomName() {
+  return "ag-" + Math.random().toString(36).slice(2, 10);
+}
+
+function loadCharacter(pubkey) {
+  const dir = getCharDir(pubkey);
+  const manifestPath = join(dir, "agent.json");
+  const skPath = join(dir, "sk.hex");
+  if (!existsSync(manifestPath) || !existsSync(skPath)) return null;
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+  const sk = Uint8Array.from(Buffer.from(readFileSync(skPath, "utf-8").trim(), "hex"));
+  return { pubkey, sk, ...manifest };
+}
+
+function saveCharacterManifest(pubkey, patch) {
+  const dir = getCharDir(pubkey);
+  const path = join(dir, "agent.json");
+  const existing = existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
+  const next = { ...existing, ...patch, updatedAt: Date.now() };
+  writeFileSync(path, JSON.stringify(next, null, 2), "utf-8");
+  return next;
+}
+
+function listCharacters() {
+  if (!existsSync(CHARACTERS_DIR)) return [];
+  const entries = readdirSync(CHARACTERS_DIR, { withFileTypes: true })
+    .filter((d) => d.isDirectory());
+  return entries
+    .map((d) => {
+      let pubkey;
+      if (/^npub1[a-z0-9]+$/.test(d.name)) {
+        try {
+          const decoded = nip19Decode(d.name);
+          if (decoded.type !== "npub") return null;
+          pubkey = decoded.data;
+        } catch { return null; }
+      } else if (/^[0-9a-f]{64}$/.test(d.name)) {
+        // Legacy hex dir — shouldn't exist after migration, but handle defensively.
+        pubkey = d.name;
+      } else {
+        return null;
+      }
+      const c = loadCharacter(pubkey);
+      if (!c) return null;
+      return {
+        pubkey: c.pubkey,
+        npub: npubEncode(c.pubkey),
+        name: c.name,
+        about: c.about ?? null,
+        avatarUrl: c.avatarUrl ?? null,
+        model: c.model ?? null,
+        profileSource: c.profileSource ?? null,
+        profileModel: c.profileModel ?? null,
+        createdAt: c.createdAt ?? null,
+        updatedAt: c.updatedAt ?? null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+}
+
+function createCharacter({ name } = {}) {
+  const sk = generateSecretKey();
+  const pubkey = getPublicKey(sk);
+  const dir = getCharDir(pubkey);
+  mkdirSync(join(dir, ".pi"), { recursive: true });
+  writeFileSync(join(dir, "sk.hex"), Buffer.from(sk).toString("hex"), { encoding: "utf-8", mode: 0o600 });
+  writeFileSync(join(dir, ".pi", "identity"), pubkey, "utf-8");
+  installSkills(dir);
+  const manifest = saveCharacterManifest(pubkey, {
+    name: (name && String(name).trim()) || randomName(),
+    createdAt: Date.now(),
+  });
+  console.log(`[char] created ${pubkey.slice(0, 12)}... name="${manifest.name}"`);
+  return loadCharacter(pubkey);
+}
+
+// ── AI profile generation ──
+//
+// Adapted from apoc-radio-v2 (apps/api/src/lib/agentGen.js). Simplified:
+//   - single non-streaming call
+//   - up to 3 retries across random lightweight models
+//   - no DNS-label sanitisation (our names don't need to be subdomains)
+// Returns { name, about, stylePrompt } or throws.
+
+// Five lightweight models that produce consistently-usable JSON personas.
+// Mirrors apoc-radio-v2's pool. Override via PI_PERSONA_MODELS (comma-separated).
+const PERSONA_MODELS = (process.env.PI_PERSONA_MODELS ?? [
+  "meta/llama-3.1-8b-instruct",
+  "qwen/qwen3-next-80b-a3b-instruct",
+  "qwen/qwen3.5-122b-a10b",
+  "mistralai/ministral-14b-instruct-2512",
+  "openai/gpt-oss-20b",
+].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
+
+const PERSONA_SYSTEM = [
+  "You generate short character profiles for a Scooby-Doo-style mystery cartoon —",
+  "a crew of teenagers who solve supernatural-seeming cases in small-town America.",
+  "Think Mystery Inc., Stranger Things kids, Gravity Falls — earnest teens, a",
+  "van or bike-club, a local legend per episode.",
+  "",
+  "These become NIP-01 kind:0 Nostr profiles — only name + about.",
+  "",
+  "Respond ONLY with valid JSON. Both fields are REQUIRED.",
+  "No markdown, no code fences, no trailing text.",
+  "{",
+  '  "name": "A realistic human name — a first name, or first + last, or a nickname a real teenager might go by. Examples: \'Mitsy Alvarado\', \'Ravi K.\', \'Buzz\', \'Jules Okafor\', \'Mei-Lin\'. Mix of cultures welcome. 2-40 characters. No emoji, no underscores, no digit-suffixes like x3 or 420.",',
+  '  "about": "REQUIRED. 2-4 sentences. Give the character a life: what they do, a distinctive habit or prop, something concrete about their week. Quote a line they might say. The character should feel specific, not a stock archetype."',
+  "}",
+  "",
+  "Surprise the reader. Do not reuse the same role type across generations —",
+  "the brain, the jock, the skeptic, the tinkerer are all valid, but so are",
+  "the delivery driver, the community-theater lead, the grandparent's helper,",
+  "the pirate-radio host, the quiet one with the garden. Let temperature do its job.",
+  "",
+  "Keep it grounded: school, part-time jobs, family cars, weekend plans.",
+  "The supernatural is just the backdrop, not the only register.",
+  'Avoid "mystery", "spooky", "clue", "haunted", "ghost" as the first adjective —',
+  "reach for concrete, specific nouns (band posters, dented lockers, a diner called",
+  "something like The Griddle, a Xerox-smelling yearbook, a folding-chair stakeout).",
+].join("\n");
+
+// Characters can now carry realistic human names (spaces, accents, hyphens,
+// apostrophes, periods). Kind:0 profiles are display names, not DNS labels.
+function sanitizeName(raw) {
+  const s = String(raw ?? "")
+    // Strip surrounding punctuation (LLMs occasionally wrap in quotes).
+    .replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/gu, "")
+    // Collapse internal whitespace.
+    .replace(/\s+/g, " ")
+    .trim();
+  if (s.length < 2 || s.length > 40) return "";
+  // Reject obvious LLM leakage.
+  if (/^(name|character|persona)\s*[:=]/i.test(s)) return "";
+  return s;
+}
+
+// Walk forward from each `{` until we find a bracket-balanced, string-aware
+// matching `}`. First successful parse wins. Handles trailing prose, multi-
+// object emissions, and embedded `}` characters inside string literals.
+function extractFirstJsonObject(raw) {
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] !== "{") continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < raw.length; j++) {
+      const ch = raw[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          const slice = raw.slice(i, j + 1);
+          try { return JSON.parse(slice); } catch { break; }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function parsePersonaJson(raw) {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fenced?.[1] ?? raw).trim();
+  const parsed = extractFirstJsonObject(candidate);
+  if (!parsed) throw new Error("model did not return a parseable JSON object");
+  const name = sanitizeName(parsed.name ?? parsed.callSign ?? "");
+  // Fold any lingering style_prompt / personality fields into `about` — the
+  // schema is name + about only, but older models sometimes split the bio.
+  const aboutParts = [
+    parsed.about, parsed.personality, parsed.bio,
+    parsed.stylePrompt, parsed.style_prompt,
+  ]
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter(Boolean);
+  const about = aboutParts.join("\n\n").slice(0, 1000);
+  if (!about) throw new Error("model did not return an about");
+  return { name: name || null, about };
+}
+
+async function nimChatJson({ model, systemPrompt, userPrompt }) {
+  if (!NVIDIA_NIM_API_KEY) throw new Error("NVIDIA_NIM_API_KEY not configured");
+  const res = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${NVIDIA_NIM_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 1.0,
+      top_p: 0.95,
+      max_tokens: 600,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`NIM ${model} ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content ?? "";
+}
+
+async function generatePersona({ seed } = {}) {
+  const userPrompt = seed?.trim()
+    ? `Seed from the user: ${seed.trim()}\n\nInvent a persona that fits. Return JSON only.`
+    : "Invent a fresh, surprising persona. Return JSON only.";
+
+  const tried = new Set();
+  let lastErr;
+  for (let i = 0; i < 3; i++) {
+    const candidates = PERSONA_MODELS.filter((m) => !tried.has(m));
+    if (candidates.length === 0) break;
+    const model = candidates[Math.floor(Math.random() * candidates.length)];
+    tried.add(model);
+    try {
+      const raw = await nimChatJson({ model, systemPrompt: PERSONA_SYSTEM, userPrompt });
+      const persona = parsePersonaJson(raw);
+      console.log(`[persona] generated via ${model}`);
+      return { ...persona, _model: model };
+    } catch (err) {
+      lastErr = err;
+      console.log(`[persona] ${model} failed: ${err.message}`);
+    }
+  }
+  throw lastErr ?? new Error("persona generation failed");
+}
+
+// ── AI avatar generation (FLUX via NIM) ──
+
+const NIM_IMAGE_URL = process.env.NIM_IMAGE_URL
+  ?? "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell";
+
+function sniffMime(b64) {
+  const head = b64.slice(0, 16);
+  if (head.startsWith("/9j/")) return "image/jpeg";
+  if (head.startsWith("iVBORw")) return "image/png";
+  if (head.startsWith("R0lGOD")) return "image/gif";
+  if (head.startsWith("UklGR")) return "image/webp";
+  return "image/jpeg";
+}
+
+// FLUX.1-schnell returns near-uniform black JPEGs (~6-8KB) when the safety
+// filter trips or the seed lands in a bad spot. Real 1024x1024 portraits
+// come back at 30KB+. We retry with a fresh seed under this threshold.
+const MIN_AVATAR_BYTES = 15_000;
+
+async function fluxOnce(prompt) {
+  const res = await fetch(NIM_IMAGE_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${NVIDIA_NIM_API_KEY}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      prompt,
+      cfg_scale: 0,
+      width: 1024,
+      height: 1024,
+      seed: Math.floor(Math.random() * 2_147_483_647),
+      steps: 4,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`NIM image ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const b64 = data.image ?? data.artifacts?.[0]?.base64;
+  if (!b64) throw new Error("NIM returned no image");
+  return b64;
+}
+
+async function generateAvatar({ pubkey, name, about, promptOverride }) {
+  if (!NVIDIA_NIM_API_KEY) throw new Error("NVIDIA_NIM_API_KEY not configured");
+  const override = (promptOverride ?? "").trim().slice(0, 1800);
+  const bio = (about ?? "").trim().slice(0, 600);
+  let prompt;
+  if (override) {
+    prompt = override;
+  } else {
+    const subject = bio ? `${name} — ${bio}` : name;
+    prompt = [
+      `Stylized portrait illustration of: ${subject}.`,
+      "Use the description as thematic inspiration for mood, role, and atmosphere rather than copying specific nouns into the image.",
+      "Composition: square 1:1, centered, strong silhouette, clear subject, clean negative space around the figure.",
+      "No text, no watermark, no signatures, no UI chrome, no logos.",
+    ].join(" ");
+  }
+
+  // Retry under the MIN_AVATAR_BYTES threshold — that's the signature of a
+  // safety-blocked / black-frame response from FLUX.
+  let b64;
+  let bytes = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    b64 = await fluxOnce(prompt);
+    bytes = Math.floor((b64.length * 3) / 4);
+    if (bytes >= MIN_AVATAR_BYTES) break;
+    console.warn(`[avatar] attempt ${attempt + 1}: ${bytes}B — likely blank/safety-blocked, retrying`);
+  }
+  if (bytes < MIN_AVATAR_BYTES) {
+    throw new Error(`avatar kept coming back tiny (${bytes}B) — safety-blocked prompt?`);
+  }
+
+  const mime = sniffMime(b64);
+  const ext = mime.split("/")[1] || "jpg";
+
+  const dir = getCharDir(pubkey);
+  mkdirSync(dir, { recursive: true });
+  const filename = `avatar.${ext}`;
+  writeFileSync(join(dir, filename), Buffer.from(b64, "base64"));
+  const avatarUrl = `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/avatar?t=${Date.now()}`;
+  return { avatarUrl, prompt, filename };
+}
+
+function deleteCharacter(pubkey) {
+  const dir = getCharDir(pubkey);
+  if (!existsSync(dir)) return false;
+  rmSync(dir, { recursive: true, force: true });
+  console.log(`[char] deleted ${pubkey.slice(0, 12)}...`);
+  return true;
+}
+
+// ── Agent runtime lifecycle ──
 
 function makeAgentId() {
   return "ag_" + Math.random().toString(36).slice(2, 10);
-}
-
-function getAgentDir(agentId) {
-  return join(WORKSPACE, agentId);
-}
-
-function installSkills(agentDir) {
-  mkdirSync(join(agentDir, ".pi", "skills"), { recursive: true });
-  for (const skill of DEFAULT_SKILLS) {
-    const src = join(SKILL_TEMPLATES_DIR, skill);
-    const dst = join(agentDir, ".pi", "skills", skill);
-    if (!existsSync(dst) && existsSync(src)) cpSync(src, dst, { recursive: true });
-  }
 }
 
 // ── Per-agent event ring buffer ──
@@ -248,27 +642,48 @@ function newEventBuffer() {
   return { buf, emitter, push };
 }
 
-// agentId -> { sk, pubkey, name, process, roomName, events: { buf, emitter, push } }
+// agentId -> { pubkey, name, model, process, roomName, events, exitedAt?, exitCode? }
+// Note: `sk` is loaded from disk at spawn time; we keep the character ref.
 const agents = new Map();
 
-async function createAgent({ name, seedMessage, roomName, model }) {
-  const agentId = makeAgentId();
-  const sk = generateSecretKey();
-  const pubkey = getPublicKey(sk);
-  const agentDir = getAgentDir(agentId);
+function runtimeForCharacter(pubkey) {
+  for (const [id, rec] of agents.entries()) {
+    if (rec.pubkey === pubkey && rec.process) return { id, rec };
+  }
+  return null;
+}
 
-  mkdirSync(join(agentDir, ".pi"), { recursive: true });
-  writeFileSync(join(agentDir, ".pi", "identity"), pubkey, "utf-8");
-  installSkills(agentDir);
+async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
+  // Resolve character: either provided by pubkey, or auto-create (back-compat).
+  let character;
+  if (pubkey) {
+    character = loadCharacter(pubkey);
+    if (!character) throw new Error(`unknown character ${pubkey}`);
+    if (runtimeForCharacter(pubkey)) {
+      const err = new Error("character already has a running runtime");
+      err.code = 409;
+      throw err;
+    }
+  } else {
+    character = createCharacter({ name });
+  }
+  const agentId = makeAgentId();
+  const charDir = getCharDir(character.pubkey);
+  const resolvedName = character.name;
+
+  // Make sure skills + identity are in place (idempotent).
+  mkdirSync(join(charDir, ".pi"), { recursive: true });
+  writeFileSync(join(charDir, ".pi", "identity"), character.pubkey, "utf-8");
+  installSkills(charDir);
 
   const systemPrompt = buildSystemPrompt({
-    name,
-    npub: pubkey,
+    name: resolvedName,
+    npub: character.pubkey,
     roomName: roomName || "sandbox",
     seedMessage,
   });
 
-  await joinRoom(agentId, { name, npub: pubkey, roomName: roomName || "sandbox" });
+  await joinRoom(agentId, { name: resolvedName, npub: character.pubkey, roomName: roomName || "sandbox" });
 
   const validIds = new Set(availableModels().map((m) => m.id));
   const chosenModel = model && validIds.has(model) ? model : DEFAULT_MODEL_ID;
@@ -284,7 +699,7 @@ async function createAgent({ name, seedMessage, roomName, model }) {
   args.push(seedMessage || "Introduce yourself to the room by posting a short greeting.");
 
   const child = spawn(PI_BIN, args, {
-    cwd: agentDir,
+    cwd: charDir,
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
@@ -295,15 +710,23 @@ async function createAgent({ name, seedMessage, roomName, model }) {
 
   const events = newEventBuffer();
   agents.set(agentId, {
-    sk, pubkey, name, process: child, roomName: roomName || "sandbox",
-    model: chosenModel, events,
+    sk: character.sk,
+    pubkey: character.pubkey,
+    name: resolvedName,
+    process: child,
+    roomName: roomName || "sandbox",
+    model: chosenModel,
+    events,
   });
+
+  // Remember the last model used on the character.
+  saveCharacterManifest(character.pubkey, { model: chosenModel });
 
   // Admin welcome — fire-and-forget. Gives the relay feed something visible
   // before pi finishes its first turn (cold NIM can be 30-60s).
   publishAdminWelcome({
-    agentPubkey: pubkey,
-    agentName: name,
+    agentPubkey: character.pubkey,
+    agentName: resolvedName,
     roomName: roomName || "sandbox",
   }).catch(() => {});
 
@@ -331,10 +754,18 @@ async function createAgent({ name, seedMessage, roomName, model }) {
     console.log(`[pi:${agentId}] exited code=${code}`);
     events.push({ kind: "exit", code });
     const rec = agents.get(agentId);
-    if (rec) rec.process = null;
+    if (!rec) return;
+    rec.process = null;
+    rec.exitedAt = Date.now();
+    rec.exitCode = code;
+    // Release the Colyseus seat immediately — the agent is no longer
+    // present. The record itself stays around so the inspector drawer
+    // remains readable; the sweeper (below) purges it after a grace
+    // period.
+    leaveRoom(agentId).catch(() => {});
   });
-  console.log(`[agent] spawned ${agentId} name="${name}" model=${chosenModel} npub=${pubkey.slice(0, 12)}...`);
-  return { agentId, npub: pubkey, model: chosenModel };
+  console.log(`[agent] spawned ${agentId} name="${resolvedName}" model=${chosenModel} npub=${character.pubkey.slice(0, 12)}...`);
+  return { agentId, npub: character.pubkey, pubkey: character.pubkey, model: chosenModel, name: resolvedName };
 }
 
 async function stopAgent(agentId) {
@@ -342,10 +773,24 @@ async function stopAgent(agentId) {
   if (!rec) return false;
   try { rec.process?.kill(); } catch {}
   await leaveRoom(agentId);
-  try { rmSync(getAgentDir(agentId), { recursive: true, force: true }); } catch {}
+  // Character dir persists — only the runtime record is removed.
   agents.delete(agentId);
   return true;
 }
+
+// Reap records whose pi process has been gone for > REAP_AFTER_MS.
+// We keep them around briefly so the inspector stays readable after exit.
+const REAP_AFTER_MS = 120_000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, rec] of agents.entries()) {
+    if (rec.exitedAt && now - rec.exitedAt > REAP_AFTER_MS) {
+      // Character workspace persists; only the runtime record is purged.
+      agents.delete(id);
+      console.log(`[agent] reaped runtime ${id} after ${Math.round((now - rec.exitedAt) / 1000)}s`);
+    }
+  }
+}, 30_000).unref();
 
 // ── Relay publishing ──
 
@@ -412,14 +857,323 @@ app.get("/admin", (_req, res) => {
 
 app.post("/agents", async (req, res) => {
   try {
-    const { name, seedMessage, roomName, model } = req.body || {};
-    if (!name) return res.status(400).json({ error: "name required" });
-    const result = await createAgent({ name, seedMessage, roomName, model });
+    const { pubkey, name, seedMessage, roomName, model } = req.body || {};
+    if (!pubkey && !name) return res.status(400).json({ error: "pubkey or name required" });
+    const result = await createAgent({ pubkey, name, seedMessage, roomName, model });
     res.json(result);
   } catch (err) {
-    console.error("[agents:create]", err);
+    const status = err.code === 409 ? 409 : 500;
+    if (status !== 409) console.error("[agents:create]", err);
+    res.status(status).json({ error: err.message });
+  }
+});
+
+// ── Characters (persistent identities) ──
+
+app.get("/characters", (_req, res) => {
+  const list = listCharacters().map((c) => {
+    const runtime = runtimeForCharacter(c.pubkey);
+    return { ...c, runtime: runtime ? { agentId: runtime.id } : null };
+  });
+  res.json({ characters: list });
+});
+
+app.post("/characters", (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const c = createCharacter({ name });
+    res.json({
+      pubkey: c.pubkey,
+      npub: npubEncode(c.pubkey),
+      name: c.name,
+      createdAt: c.createdAt,
+    });
+  } catch (err) {
+    console.error("[char:create]", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get("/characters/:pubkey", (req, res) => {
+  const c = loadCharacter(req.params.pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  const runtime = runtimeForCharacter(c.pubkey);
+  res.json({
+    pubkey: c.pubkey,
+    npub: npubEncode(c.pubkey),
+    name: c.name,
+    about: c.about ?? null,
+    avatarUrl: c.avatarUrl ?? null,
+    model: c.model ?? null,
+    profileSource: c.profileSource ?? null,
+    profileModel: c.profileModel ?? null,
+    createdAt: c.createdAt ?? null,
+    updatedAt: c.updatedAt ?? null,
+    runtime: runtime ? { agentId: runtime.id } : null,
+  });
+});
+
+app.get("/characters/:pubkey/avatar", (req, res) => {
+  const pubkey = req.params.pubkey;
+  const dir = getCharDir(pubkey);
+  // Check in priority order for the extension that might be on disk.
+  for (const ext of ["jpeg", "jpg", "png", "webp", "gif"]) {
+    const path = join(dir, `avatar.${ext}`);
+    if (existsSync(path)) {
+      const mime =
+        ext === "jpg" ? "image/jpeg"
+        : ext === "webp" ? "image/webp"
+        : ext === "png" ? "image/png"
+        : ext === "gif" ? "image/gif"
+        : "image/jpeg";
+      res.setHeader("Content-Type", mime);
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return createReadStream(path).pipe(res);
+    }
+  }
+  res.status(404).json({ error: "no avatar" });
+});
+
+app.post("/characters/:pubkey/generate-avatar", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  try {
+    const { promptOverride } = req.body || {};
+    const { avatarUrl, prompt } = await generateAvatar({
+      pubkey,
+      name: c.name,
+      about: c.about,
+      promptOverride,
+    });
+    saveCharacterManifest(pubkey, { avatarUrl });
+    publishCharacterProfile(pubkey).catch(() => {});
+    res.json({ avatarUrl, prompt });
+  } catch (err) {
+    console.error("[char:avatar]", err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// SSE streaming variant of persona generation. Emits events:
+//   event: model   data: {model}
+//   event: delta   data: {content}
+//   event: done    data: {name, about, _generator: {model}}
+//   event: error   data: {error}
+app.post("/characters/:pubkey/generate-profile/stream", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+
+  const send = (event, data) => {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
+  };
+
+  try {
+    const { seed, overwriteName, model: pinnedModel } = req.body || {};
+    const model = (pinnedModel && PERSONA_MODELS.includes(pinnedModel))
+      ? pinnedModel
+      : PERSONA_MODELS[Math.floor(Math.random() * PERSONA_MODELS.length)];
+    send("model", { model });
+
+    const userPrompt = seed?.trim()
+      ? `Seed from the user: ${seed.trim()}\n\nInvent a persona that fits. Return JSON only.`
+      : "Invent a fresh, surprising persona. Return JSON only.";
+
+    const nimRes = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${NVIDIA_NIM_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: PERSONA_SYSTEM },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 1.0,
+        top_p: 0.95,
+        max_tokens: 600,
+        stream: true,
+      }),
+    });
+    if (!nimRes.ok) {
+      const body = await nimRes.text().catch(() => "");
+      throw new Error(`NIM ${model} ${nimRes.status}: ${body.slice(0, 200)}`);
+    }
+
+    const reader = nimRes.body.getReader();
+    const decoder = new TextDecoder();
+    let raw = "";
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(payload);
+          const delta = parsed?.choices?.[0]?.delta?.content;
+          if (typeof delta === "string" && delta.length > 0) {
+            raw += delta;
+            send("delta", { content: delta });
+          }
+        } catch {}
+      }
+    }
+
+    // Parse + persist persona.
+    const persona = parsePersonaJson(raw);
+    const patch = {
+      about: persona.about ?? c.about ?? null,
+      profileSource: "ai",
+      profileModel: model,
+    };
+    if (overwriteName && persona.name) patch.name = persona.name;
+    saveCharacterManifest(pubkey, patch);
+    publishCharacterProfile(pubkey).catch(() => {});
+    let after = loadCharacter(pubkey);
+    send("persona-done", {
+      name: after.name,
+      about: after.about ?? null,
+      profileModel: after.profileModel ?? null,
+    });
+
+    // Chain avatar generation so the portrait appears in the same flow.
+    // Skipping silently on NIM image failure — persona is still saved.
+    try {
+      send("avatar-start", {});
+      const { avatarUrl } = await generateAvatar({
+        pubkey,
+        name: after.name,
+        about: after.about,
+      });
+      saveCharacterManifest(pubkey, { avatarUrl });
+      publishCharacterProfile(pubkey).catch(() => {});
+      after = loadCharacter(pubkey);
+      send("avatar-done", { avatarUrl });
+    } catch (err) {
+      console.warn("[char:generate-stream] avatar skipped:", err.message);
+      send("avatar-error", { error: err.message });
+    }
+
+    send("done", {
+      pubkey: after.pubkey,
+      npub: npubEncode(after.pubkey),
+      name: after.name,
+      about: after.about ?? null,
+      avatarUrl: after.avatarUrl ?? null,
+      profileSource: after.profileSource ?? null,
+      profileModel: after.profileModel ?? null,
+      _generator: { model },
+    });
+  } catch (err) {
+    console.error("[char:generate-stream]", err.message);
+    send("error", { error: err.message });
+  } finally {
+    res.end();
+  }
+});
+
+app.post("/characters/:pubkey/generate-profile", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  try {
+    const { seed, overwriteName } = req.body || {};
+    const persona = await generatePersona({ seed });
+    const patch = {
+      about: persona.about ?? c.about ?? null,
+      profileSource: "ai",
+      profileModel: persona._model,
+    };
+    // Only overwrite the name when explicitly asked — avoids surprising renames.
+    if (overwriteName && persona.name) patch.name = persona.name;
+    saveCharacterManifest(pubkey, patch);
+    const next = loadCharacter(pubkey);
+    res.json({
+      pubkey: next.pubkey,
+      npub: npubEncode(next.pubkey),
+      name: next.name,
+      about: next.about ?? null,
+      avatarUrl: next.avatarUrl ?? null,
+      model: next.model ?? null,
+      profileSource: next.profileSource ?? null,
+      profileModel: next.profileModel ?? null,
+      _generator: { model: persona._model },
+    });
+  } catch (err) {
+    console.error("[char:generate]", err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.patch("/characters/:pubkey", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  const { name, about, avatarUrl, model } = req.body || {};
+  const patch = {};
+  if (name !== undefined) patch.name = String(name).trim() || c.name;
+  if (about !== undefined) patch.about = about ? String(about) : null;
+  if (avatarUrl !== undefined) patch.avatarUrl = avatarUrl ? String(avatarUrl) : null;
+  if (model !== undefined) {
+    const validIds = new Set(availableModels().map((m) => m.id));
+    if (model && !validIds.has(model)) return res.status(400).json({ error: "unknown model" });
+    patch.model = model || null;
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  saveCharacterManifest(pubkey, patch);
+  // Re-publish kind:0 so external clients (Jumble etc) see the new name/about/picture.
+  // Awaited so the caller can see whether the relay actually received it.
+  let relayPublished = false;
+  let relayError = null;
+  try {
+    const ev = await publishCharacterProfile(pubkey);
+    relayPublished = !!ev;
+  } catch (err) {
+    relayError = err.message || String(err);
+  }
+  const next = loadCharacter(pubkey);
+  res.json({
+    pubkey: next.pubkey,
+    npub: npubEncode(next.pubkey),
+    name: next.name,
+    about: next.about ?? null,
+    avatarUrl: next.avatarUrl ?? null,
+    model: next.model ?? null,
+    profileSource: next.profileSource ?? null,
+    profileModel: next.profileModel ?? null,
+    createdAt: next.createdAt ?? null,
+    updatedAt: next.updatedAt ?? null,
+    relayPublished,
+    relayError,
+  });
+});
+
+app.delete("/characters/:pubkey", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  if (!loadCharacter(pubkey)) return res.status(404).json({ error: "not found" });
+  // Stop any running runtime first.
+  const runtime = runtimeForCharacter(pubkey);
+  if (runtime) await stopAgent(runtime.id);
+  deleteCharacter(pubkey);
+  res.json({ ok: true });
 });
 
 app.get("/agents", (_req, res) => {
@@ -430,6 +1184,8 @@ app.get("/agents", (_req, res) => {
     roomName: rec.roomName,
     model: rec.model,
     running: !!rec.process,
+    exitedAt: rec.exitedAt ?? null,
+    exitCode: rec.exitCode ?? null,
   }));
   res.json({ agents: list });
 });

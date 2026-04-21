@@ -1,5 +1,49 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAgentEvents } from './hooks/useAgentEvents.js'
+
+// Walk pi events and pull the latest usage snapshot + counts of deltas.
+// pi emits `usage: {input, output, totalTokens, cacheRead, cacheWrite}` on
+// every message payload; streaming is signalled by `message_update` events.
+function computeActivity(events) {
+  let input = 0, output = 0, total = 0, cacheRead = 0, cacheWrite = 0
+  let deltas = 0
+  let toolCalls = 0
+  let lastActivityTs = null
+  for (const e of events) {
+    if (e.kind !== 'pi' || !e.data) continue
+    if (e.data.type === 'message_update') {
+      deltas++
+      lastActivityTs = e.ts
+    }
+    if (e.data.type === 'tool_execution_start') toolCalls++
+    // Find usage on either the envelope's message or the update's partial.
+    const msg = e.data.message || e.data.assistantMessageEvent?.partial
+    const u = msg?.usage
+    if (u) {
+      if ((u.input ?? 0) > input) input = u.input
+      if ((u.output ?? 0) > output) output = u.output
+      if ((u.totalTokens ?? 0) > total) total = u.totalTokens
+      if ((u.cacheRead ?? 0) > cacheRead) cacheRead = u.cacheRead
+      if ((u.cacheWrite ?? 0) > cacheWrite) cacheWrite = u.cacheWrite
+    }
+  }
+  return { input, output, total, cacheRead, cacheWrite, deltas, toolCalls, lastActivityTs }
+}
+
+// Flash briefly when a number goes up.
+function useFlashOnChange(value) {
+  const prev = useRef(value)
+  const [flash, setFlash] = useState(false)
+  useEffect(() => {
+    if (value !== prev.current) {
+      prev.current = value
+      setFlash(true)
+      const t = setTimeout(() => setFlash(false), 400)
+      return () => clearTimeout(t)
+    }
+  }, [value])
+  return flash
+}
 
 // Render a single pi event into a compact "thought / action / result" row.
 // Handles the event types pi --mode json emits:
@@ -100,6 +144,11 @@ export default function AgentInspector({ bridgeUrl, agent, onClose }) {
     return events.map((ev, i) => <EventRow key={ev.seq ?? i} ev={ev} />).filter(Boolean)
   }, [events])
 
+  const activity = useMemo(() => computeActivity(events), [events])
+  const flashTotal = useFlashOnChange(activity.total)
+  const flashDeltas = useFlashOnChange(activity.deltas)
+  const isLive = agent?.running && (Date.now() - (activity.lastActivityTs ?? 0) < 3000)
+
   if (!agent) return null
 
   return (
@@ -122,6 +171,22 @@ export default function AgentInspector({ bridgeUrl, agent, onClose }) {
           <button onClick={onClose}>close</button>
         </div>
       </header>
+      <div className="agent-inspector-activity">
+        <span className={`ai-stat${flashTotal ? ' flash' : ''}`} title={`input ${activity.input} · output ${activity.output}`}>
+          <span className="ai-stat-label">tokens</span>
+          <strong>{activity.total.toLocaleString()}</strong>
+          <span className="muted">↑{activity.output.toLocaleString()} ↓{activity.input.toLocaleString()}</span>
+        </span>
+        <span className={`ai-stat${flashDeltas ? ' flash' : ''}`}>
+          <span className="ai-stat-label">deltas</span>
+          <strong>{activity.deltas}</strong>
+        </span>
+        <span className="ai-stat">
+          <span className="ai-stat-label">tools</span>
+          <strong>{activity.toolCalls}</strong>
+        </span>
+        {isLive && <span className="ai-pulse" title="streaming…">●</span>}
+      </div>
       <div className="agent-inspector-body">
         {events.length === 0 && <p className="muted">Waiting for events…</p>}
         {showRaw

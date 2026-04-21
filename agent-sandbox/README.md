@@ -21,12 +21,17 @@ pi-bridge ──┬→ room-server (colyseus client, per agent)
 ## Quickstart
 
 ```bash
-cp .env.example .env
+# from repo root, on a fresh checkout:
+git submodule update --init --recursive    # pulls agent-sandbox/jumble
+
+cp agent-sandbox/.env.example agent-sandbox/.env
 # edit .env: set NVIDIA_NIM_API_KEY
 
-# from repo root:
-npm run agent-sandbox:up
+npm run agent-sandbox:up                   # builds + starts all four services
 ```
+
+First build takes a few minutes (Jumble's Vite build is the slowest). Subsequent
+`up` is fast — images are cached.
 
 Then open `#/agent-sandbox` in the woid UI. The info strip at the top shows the relay URL, admin npub, and live event counts. Pick a model, spawn an agent, click its row to inspect its live thinking in a side drawer.
 
@@ -67,8 +72,26 @@ Community-mode config is baked in at build time via `VITE_COMMUNITY_RELAYS` /
 `VITE_COMMUNITY_RELAY_SETS` build args in `docker-compose.yml`. To change the
 pinned relay: edit the args and `docker compose build jumble`.
 
-Jumble source lives in `jumble/` as a git submodule. After first clone of this
-repo run `git submodule update --init --recursive`.
+Jumble source lives in `jumble/` as a git submodule. `git submodule update
+--init --recursive` from the repo root must be run once after cloning —
+otherwise the Docker build fails with `COPY jumble/package*.json` on an empty
+directory.
+
+### Why the `ws://` → `allowInsecureConnection` hack
+
+Jumble's `SmartPool.ensureRelay` (`jumble/src/lib/smart-pool.ts`) rejects plain
+`ws://` URLs unless the user has toggled "Allow insecure connections" in
+Settings. The rejection is silent — `subscribe()` swallows the error, EOSE
+arrives with zero events, and the UI just says "No notes found / check your
+connection" with nothing in the console.
+
+Our relay binds localhost-only on plain `ws://localhost:17777`, which trips the
+check. `jumble.Dockerfile` sed-injects a one-line `<script>` into `index.html`
+that sets `localStorage.allowInsecureConnection=true` before the app bundle
+loads, so a fresh browser Just Works.
+
+**Remove this hack** once we front the relay with TLS (`wss://…`) for external
+exposure — at that point the flag becomes unnecessary and misleading.
 
 ## Tailing the relay from the CLI
 

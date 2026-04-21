@@ -29,6 +29,18 @@ export default function Sidebar({
               </a>
             </li>
           </ul>
+
+          <h2>Nostr Relay</h2>
+          <ul>
+            <li>
+              <a
+                href="#/relay-feed"
+                className={linkClass(route.view === 'relay-feed')}
+              >
+                Feed
+              </a>
+            </li>
+          </ul>
         </>
       )}
 

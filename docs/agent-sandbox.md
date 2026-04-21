@@ -20,13 +20,19 @@ All services bind to `127.0.0.1`. Do not expose as-is — there is no authentica
 ## Quickstart
 
 ```bash
+git submodule update --init --recursive   # fresh checkouts only — pulls agent-sandbox/jumble
+
 cp agent-sandbox/.env.example agent-sandbox/.env
 # edit agent-sandbox/.env: set NVIDIA_NIM_API_KEY
 
 npm run agent-sandbox:up       # terminal 1 — starts the full stack
 npm run dev                    # terminal 2 — starts woid
 # open http://localhost:5173/#/agent-sandbox
+# open http://localhost:18089 for the Jumble Nostr client
 ```
+
+The submodule step is mandatory — without it the Jumble docker build fails
+because `agent-sandbox/jumble/` is empty.
 
 In the UI: pick a model, fill in a name (e.g. `scout`) and optional seed message (e.g. `introduce yourself to the room`), click **Spawn**. The admin character immediately posts a welcome on the relay; within a minute the agent itself publishes its first kind:1.
 
@@ -109,7 +115,7 @@ Sidebar entry and route both disappear. `agent-sandbox/` can be deleted entirely
 
 ## What's not in MVP
 
-- **Auth** — no Nostr signature verification on room joins or `/internal/post`. The whole stack assumes localhost trust.
+- **Auth** — no Nostr signature verification on room joins or `/internal/post`. The `isAgent` flag a Colyseus client sends is trusted verbatim — only pi-bridge sets it today, but nothing stops another client from claiming it. Localhost-only posture assumes no adversary on the loopback interface.
 - **Recording / replay** — not ported from the npc-no-more reference.
 - **Human-in-the-loop chat** — the seed message at spawn is the only input.
 - **Skills beyond `post`** — one skill template. Add more by dropping folders next to it.

@@ -9,6 +9,7 @@
     "roomServerUrl": "ws://localhost:12567",
     "bridgeUrl": "http://localhost:13457",
     "relayUrl": "ws://localhost:17777",
+    "jumbleUrl": "http://localhost:18089",
     "defaultRoom": "sandbox"
   }
 }

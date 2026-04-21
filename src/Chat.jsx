@@ -98,7 +98,7 @@ export default function Chat() {
   return (
     <>
       <button className="chat-fab" onClick={() => setOpen((o) => !o)} title="Chat with Claude">
-        {open ? '×' : '💬'}
+        {open ? '×' : 'TX'}
       </button>
       {open && (
         <div className="chat-panel">

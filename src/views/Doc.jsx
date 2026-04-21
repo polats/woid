@@ -1,10 +1,11 @@
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 export default function Doc({ content }) {
   if (!content) return <p style={{ padding: 32 }}>No document selected.</p>
   return (
     <div className="doc-content">
-      <ReactMarkdown>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   )
 }
