@@ -1,9 +1,6 @@
 export default function Sidebar({
   config,
   route,
-  user,
-  onLogin,
-  onLogout,
   docs,
   diagrams,
   references,
@@ -19,22 +16,33 @@ export default function Sidebar({
         {config.description && <p>{config.description}</p>}
       </div>
 
-      <div className="github-status">
-        {user ? (
-          <div className="user-chip">
-            {user.avatar_url && <img src={user.avatar_url} alt="" />}
-            <span>{user.login}</span>
-            <button onClick={onLogout} title="Log out">×</button>
-          </div>
-        ) : (
-          <button className="login-btn" onClick={onLogin}>Login with GitHub</button>
-        )}
-      </div>
+      {config.features?.agentSandbox && (
+        <>
+          <h2>Sandbox</h2>
+          <ul>
+            <li>
+              <a
+                href="#/agent-sandbox"
+                className={linkClass(route.view === 'agent-sandbox')}
+              >
+                Agent Sandbox
+              </a>
+            </li>
+          </ul>
+        </>
+      )}
 
       <h2>Sprint</h2>
       <ul>
         <li>
           <a href="#/tasks" className={linkClass(route.view === 'tasks')}>Tasks</a>
+        </li>
+      </ul>
+
+      <h2>Testing</h2>
+      <ul>
+        <li>
+          <a href="#/testing" className={linkClass(route.view === 'testing')}>Sessions</a>
         </li>
       </ul>
 
@@ -84,7 +92,7 @@ export default function Sidebar({
               href={`#/docs/${encodeURIComponent(d.name)}`}
               className={linkClass(route.view === 'doc' && route.name === d.name)}
             >
-              {d.name}
+              {d.name.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
             </a>
           </li>
         ))}

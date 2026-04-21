@@ -1,0 +1,15 @@
+{
+  "name": "woid-agent-sandbox-room-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@colyseus/ws-transport": "^0.16.0",
+    "colyseus": "^0.16.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0"
+  }
+}

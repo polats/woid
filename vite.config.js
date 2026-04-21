@@ -5,7 +5,8 @@ import { diagramsApi } from './server/diagrams.js'
 import { githubApi } from './server/github.js'
 import { referencesApi } from './server/references.js'
 import { chatApi } from './server/chat.js'
+import { testingApi } from './server/testing.js'
 
 export default defineConfig({
-  plugins: [react(), tasksApi(), diagramsApi(), githubApi(), referencesApi(), chatApi()],
+  plugins: [react(), tasksApi(), diagramsApi(), githubApi(), referencesApi(), chatApi(), testingApi()],
 })

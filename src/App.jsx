@@ -6,8 +6,9 @@ import Board from './Board.jsx'
 import Diagram from './Diagram.jsx'
 import Reference from './Reference.jsx'
 import Chat from './Chat.jsx'
+import Sandbox from './Sandbox.jsx'
+import Testing from './Testing.jsx'
 import Doc from './views/Doc.jsx'
-import LoginModal from './layout/LoginModal.jsx'
 
 const modules = import.meta.glob('../docs/*.md', { query: '?raw', import: 'default', eager: true })
 
@@ -20,6 +21,9 @@ const homeDoc = docs.find((d) => d.name === config.home) ?? docs[0] ?? null
 function parseHash() {
   const h = window.location.hash.replace(/^#\/?/, '')
   if (h === 'tasks') return { view: 'tasks' }
+  if (h === 'agent-sandbox') return { view: 'agent-sandbox' }
+  if (h === 'testing') return { view: 'testing' }
+  if (h.startsWith('testing/')) return { view: 'testing', sessionName: decodeURIComponent(h.slice(8)) }
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
   if (h.startsWith('references/')) return { view: 'reference', id: decodeURIComponent(h.slice(11)) }
   if (h.startsWith('docs/')) return { view: 'doc', name: decodeURIComponent(h.slice(5)) }
@@ -30,8 +34,6 @@ export default function App() {
   const route = useHashRoute(parseHash)
   const [diagrams, setDiagrams] = useState([])
   const [references, setReferences] = useState([])
-  const [user, setUser] = useState(null)
-  const [showLogin, setShowLogin] = useState(false)
 
   const refreshDiagrams = useCallback(
     () => fetch('/api/diagrams').then((r) => r.json()).then(setDiagrams),
@@ -41,16 +43,11 @@ export default function App() {
     () => fetch('/api/references/').then((r) => r.json()).then(setReferences),
     [],
   )
-  const refreshUser = useCallback(
-    () => fetch('/api/github/me').then((r) => r.json()).then(setUser),
-    [],
-  )
 
   useEffect(() => {
     refreshDiagrams()
     refreshReferences()
-    refreshUser()
-  }, [refreshDiagrams, refreshReferences, refreshUser])
+  }, [refreshDiagrams, refreshReferences])
 
   async function newDiagram() {
     const title = prompt('Diagram title?')
@@ -81,11 +78,6 @@ export default function App() {
     window.location.hash = `#/references/${encodeURIComponent(id)}`
   }
 
-  async function logout() {
-    await fetch('/api/github/token', { method: 'DELETE' })
-    setUser(null)
-  }
-
   const currentDoc = route.view === 'doc' ? docs.find((d) => d.name === route.name) : null
 
   return (
@@ -93,9 +85,6 @@ export default function App() {
       <Sidebar
         config={config}
         route={route}
-        user={user}
-        onLogin={() => setShowLogin(true)}
-        onLogout={logout}
         docs={docs}
         diagrams={diagrams}
         references={references}
@@ -104,20 +93,13 @@ export default function App() {
       />
       <main className="content-area">
         {route.view === 'tasks' && <Board />}
+        {route.view === 'agent-sandbox' && config.features?.agentSandbox && <Sandbox />}
+        {route.view === 'testing' && <Testing initialSession={route.sessionName} />}
         {route.view === 'diagram' && <Diagram key={route.id} id={route.id} />}
         {route.view === 'reference' && <Reference key={route.id} id={route.id} />}
         {route.view === 'doc' && <Doc content={currentDoc?.content} />}
       </main>
       <Chat />
-      {showLogin && (
-        <LoginModal
-          onClose={() => setShowLogin(false)}
-          onSuccess={(u) => {
-            setUser(u)
-            setShowLogin(false)
-          }}
-        />
-      )}
     </div>
   )
 }
