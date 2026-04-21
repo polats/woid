@@ -179,6 +179,7 @@ export default function Sandbox() {
               // `runtime` is now an object or null, delivered inline by
               // /characters — no cross-lookup needed.
               const runtime = c.runtime?.running ? c.runtime : null
+              const thinking = !!runtime?.thinking
               const initial = (c.name || '?').trim().charAt(0).toUpperCase()
               return (
                 <li
@@ -197,11 +198,19 @@ export default function Sandbox() {
                       <div className="sandbox2-card-portrait-fallback">{initial}</div>
                     )}
                     {runtime && (
-                      <span className="sandbox2-card-runtime-dot" title="running" />
+                      <span
+                        className={`sandbox2-card-runtime-dot${thinking ? ' thinking' : ''}`}
+                        title={thinking ? `thinking (turn ${runtime.turns})` : `listening (${runtime.turns} turns so far)`}
+                      />
                     )}
                   </div>
                   <div className="sandbox2-card-body">
                     <div className="sandbox2-card-name">{c.name}</div>
+                    {runtime && (
+                      <div className="sandbox2-card-status">
+                        {thinking ? 'thinking…' : 'listening'} · {runtime.turns} turn{runtime.turns === 1 ? '' : 's'}
+                      </div>
+                    )}
                     {c.about && <p className="sandbox2-card-about">{c.about}</p>}
                     <div className="sandbox2-card-footer">
                       {c.model && (

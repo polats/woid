@@ -1738,3 +1738,19 @@ body {
 .sandbox2-chat button:hover:not(:disabled) { transform: translate(1px,1px); box-shadow: 2px 2px 0 var(--transmit); }
 .sandbox2-chat button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 .sandbox2-chat-error { font-size: 11px; color: var(--transmit); font-family: var(--font-mono); }
+
+.sandbox2-card-status {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--ok-ink); letter-spacing: .1em; text-transform: uppercase;
+}
+.sandbox2-card-runtime-dot.thinking {
+  background: var(--amber);
+  box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px rgba(232,167,42,0.4);
+}
+@keyframes sandbox2-pulse-amber {
+  0%, 100% { box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px rgba(232,167,42,0.4); }
+  50%      { box-shadow: 0 0 0 2px var(--paper), 0 0 0 7px rgba(232,167,42,0);    }
+}
+.sandbox2-card-runtime-dot.thinking {
+  animation: sandbox2-pulse-amber 0.9s ease-in-out infinite;
+}

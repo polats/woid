@@ -58,6 +58,40 @@ export async function joinRoom(agentId, { name, npub, roomName }) {
   return { roomId: room.id, snapshot: snapshotState(room) };
 }
 
+// Subscribe to new messages in an already-joined room. Returns an unsubscribe
+// fn. Uses state-change diffing instead of onAdd callbacks so it works
+// regardless of the exact colyseus.js schema-callback API version.
+export function onNewMessage(agentId, handler) {
+  const conn = connections.get(agentId);
+  if (!conn) return () => {};
+  let seen = 0;
+  if (conn.room?.state?.messages) {
+    seen = conn.room.state.messages.length;
+  }
+  const cb = () => {
+    const arr = conn.room?.state?.messages;
+    if (!arr) return;
+    if (arr.length > seen) {
+      for (let i = seen; i < arr.length; i++) {
+        const m = arr[i] ?? (arr.at ? arr.at(i) : null);
+        if (m) handler({ ts: m.ts, from: m.from, fromNpub: m.fromNpub, text: m.text });
+      }
+      seen = arr.length;
+    }
+  };
+  try { conn.room.onStateChange(cb); } catch {}
+  return () => {
+    try { conn.room.onStateChange.remove?.(cb); } catch {}
+  };
+}
+
+// Read-only snapshot for an already-joined room (used by re-prompt builds).
+export function roomSnapshot(agentId) {
+  const conn = connections.get(agentId);
+  if (!conn) return { messages: [], agents: [], roomName: null };
+  return snapshotState(conn.room);
+}
+
 export async function leaveRoom(agentId) {
   const conn = connections.get(agentId);
   if (!conn) return;

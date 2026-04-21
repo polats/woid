@@ -16,7 +16,7 @@ import WebSocket from "ws";
 // nostr-tools SimplePool uses global WebSocket; Node doesn't expose one by default.
 useWebSocketImplementation(WebSocket);
 import { buildSystemPrompt } from "./prompt-builder.js";
-import { joinRoom, leaveRoom, sendSay, sayAs } from "./room-client.js";
+import { joinRoom, leaveRoom, sendSay, sayAs, onNewMessage, roomSnapshot } from "./room-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -697,7 +697,10 @@ function runtimeForCharacter(pubkey) {
 
 function activeRuntimeForCharacter(pubkey) {
   for (const [id, rec] of agents.entries()) {
-    if (rec.pubkey === pubkey && rec.process) return { id, rec };
+    // Driver-alive counts as "active" — blocks duplicate spawns even when
+    // the pi child is between turns. Runtimes that have been stopped (and
+    // are awaiting reap) are not considered active.
+    if (rec.pubkey === pubkey && rec.listening) return { id, rec };
   }
   return null;
 }
@@ -707,15 +710,89 @@ function activeRuntimeForCharacter(pubkey) {
 function runtimeSnapshot(pubkey) {
   const r = runtimeForCharacter(pubkey);
   if (!r) return null;
+  // Semantics:
+  //   running   — driver alive, owns a Colyseus seat, will react to new messages
+  //   thinking  — pi child process is active right now (a turn is in flight)
+  //   listening — alias for running; exposed for UI clarity
   return {
     agentId: r.id,
-    running: !!r.rec.process,
+    running: !!r.rec.listening,
+    listening: !!r.rec.listening,
+    thinking: !!r.rec.process,
+    turns: r.rec.turns ?? 0,
     model: r.rec.model ?? null,
     roomName: r.rec.roomName ?? null,
     exitedAt: r.rec.exitedAt ?? null,
     exitCode: r.rec.exitCode ?? null,
   };
 }
+
+// Spawn a single pi turn for an existing agent record. Non-blocking;
+// mutates rec.process and rec.events as stdout events arrive. Returns
+// the child immediately.
+function runPiTurn(rec, { seedMessage }) {
+  const charDir = getCharDir(rec.pubkey);
+  const character = loadCharacter(rec.pubkey);
+  const snapshot = roomSnapshot(rec.agentId);
+
+  const systemPrompt = buildSystemPrompt({
+    name: rec.name,
+    npub: rec.pubkey,
+    roomName: rec.roomName,
+    seedMessage,
+    about: character?.about,
+    roomSnapshot: snapshot,
+  });
+
+  const args = [
+    "--provider", "nvidia-nim",
+    "--model", rec.model,
+    "--mode", "json",
+    "--print",
+    "--no-session",
+    "--system-prompt", systemPrompt,
+  ];
+  args.push(seedMessage || "React to the recent chat if there's something worth responding to; otherwise stay quiet.");
+
+  const child = spawn(PI_BIN, args, {
+    cwd: charDir,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, NVIDIA_NIM_API_KEY, HOME: homedir() },
+  });
+  rec.process = child;
+  rec.turns = (rec.turns ?? 0) + 1;
+  rec.lastTriggerAt = Date.now();
+
+  const rl = createInterface({ input: child.stdout });
+  rl.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      const parsed = JSON.parse(trimmed);
+      rec.events.push({ kind: "pi", data: parsed });
+    } catch {
+      rec.events.push({ kind: "stdout", text: trimmed });
+    }
+  });
+  child.stderr.on("data", (d) => {
+    const text = d.toString().trimEnd();
+    if (!text) return;
+    console.error(`[pi:${rec.agentId}:err] ${text}`);
+    rec.events.push({ kind: "stderr", text });
+  });
+  child.on("exit", (code) => {
+    console.log(`[pi:${rec.agentId}] turn=${rec.turns} exited code=${code}`);
+    rec.events.push({ kind: "exit", code, turn: rec.turns });
+    if (agents.get(rec.agentId) === rec) rec.process = null;
+  });
+  return child;
+}
+
+// Per-agent caps for continuous listening. Tunable via env.
+const AGENT_MAX_TURNS = Number(process.env.AGENT_MAX_TURNS || 20);
+const AGENT_MIN_TRIGGER_GAP_MS = Number(process.env.AGENT_MIN_TRIGGER_GAP_MS || 15_000);
+const AGENT_DEBOUNCE_MS = Number(process.env.AGENT_DEBOUNCE_MS || 1_500);
+const AGENT_IDLE_TIMEOUT_MS = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 5 * 60_000);
 
 async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
   // Resolve character: either provided by pubkey, or auto-create (back-compat).
@@ -740,114 +817,103 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
   writeFileSync(join(charDir, ".pi", "identity"), character.pubkey, "utf-8");
   installSkills(charDir);
 
-  // Join the room first, then build the system prompt using the snapshot
-  // we got back. The agent's pi process sees the current roster + recent
-  // chat before it starts thinking.
-  const { snapshot } = await joinRoom(agentId, {
+  // Join the room and stay joined — the Colyseus seat persists across
+  // pi turns. Listener re-prompts pi when new messages arrive.
+  await joinRoom(agentId, {
     name: resolvedName,
     npub: character.pubkey,
     roomName: roomName || "sandbox",
-  });
-
-  const systemPrompt = buildSystemPrompt({
-    name: resolvedName,
-    npub: character.pubkey,
-    roomName: roomName || "sandbox",
-    seedMessage,
-    about: character.about,
-    roomSnapshot: snapshot,
   });
 
   const validIds = new Set(availableModels().map((m) => m.id));
   const chosenModel = model && validIds.has(model) ? model : DEFAULT_MODEL_ID;
-  const args = [
-    "--provider", "nvidia-nim",
-    "--model", chosenModel,
-    "--mode", "json",
-    "--print",
-    "--no-session",
-    "--system-prompt", systemPrompt,
-  ];
-  // Seed message becomes the initial user turn. Without one pi has nothing to do.
-  args.push(seedMessage || "Introduce yourself to the room by posting a short greeting.");
-
-  const child = spawn(PI_BIN, args, {
-    cwd: charDir,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      NVIDIA_NIM_API_KEY,
-      HOME: homedir(),
-    },
-  });
 
   const events = newEventBuffer();
-  agents.set(agentId, {
+  const rec = {
+    agentId,
     sk: character.sk,
     pubkey: character.pubkey,
     name: resolvedName,
-    process: child,
     roomName: roomName || "sandbox",
     model: chosenModel,
     events,
-  });
+    process: null,
+    turns: 0,
+    lastTriggerAt: 0,
+    lastMessageAt: Date.now(),
+    debounceTimer: null,
+    idleTimer: null,
+    listening: true,
+    unsubscribe: null,
+  };
+  agents.set(agentId, rec);
 
-  // Remember the last model used on the character.
   saveCharacterManifest(character.pubkey, { model: chosenModel });
 
-  // Admin welcome — fire-and-forget. Gives the relay feed something visible
-  // before pi finishes its first turn (cold NIM can be 30-60s).
   publishAdminWelcome({
     agentPubkey: character.pubkey,
     agentName: resolvedName,
     roomName: roomName || "sandbox",
   }).catch(() => {});
 
-  // Parse NDJSON on stdout. Lines that don't parse are still captured as raw log.
-  const rl = createInterface({ input: child.stdout });
-  rl.on("line", (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    try {
-      const parsed = JSON.parse(trimmed);
-      events.push({ kind: "pi", data: parsed });
-    } catch {
-      events.push({ kind: "stdout", text: trimmed });
+  // Subscribe to new room messages. Messages from this agent are skipped.
+  rec.unsubscribe = onNewMessage(agentId, (msg) => {
+    if (!rec.listening) return;
+    if (msg.fromNpub === rec.pubkey) return; // own echo
+    rec.lastMessageAt = Date.now();
+    if (rec.debounceTimer) clearTimeout(rec.debounceTimer);
+    rec.debounceTimer = setTimeout(() => tryListenTurn(rec), AGENT_DEBOUNCE_MS);
+  });
+
+  // Idle timeout — if nothing's happened for a while, the driver shuts
+  // down on its own so forgotten agents don't hold seats forever.
+  rec.idleTimer = setInterval(() => {
+    if (Date.now() - rec.lastMessageAt > AGENT_IDLE_TIMEOUT_MS) {
+      console.log(`[driver:${agentId}] idle too long, stopping`);
+      stopAgent(agentId).catch(() => {});
     }
-  });
+  }, 30_000);
+  rec.idleTimer.unref();
 
-  child.stderr.on("data", (d) => {
-    const text = d.toString().trimEnd();
-    if (!text) return;
-    console.error(`[pi:${agentId}:err] ${text}`);
-    events.push({ kind: "stderr", text });
-  });
+  // First turn — kicked off with the seed the caller provided (if any).
+  runPiTurn(rec, { seedMessage });
 
-  child.on("exit", (code) => {
-    console.log(`[pi:${agentId}] exited code=${code}`);
-    events.push({ kind: "exit", code });
-    const rec = agents.get(agentId);
-    if (!rec) return;
-    rec.process = null;
-    rec.exitedAt = Date.now();
-    rec.exitCode = code;
-    // Release the Colyseus seat immediately — the agent is no longer
-    // present. The record itself stays around so the inspector drawer
-    // remains readable; the sweeper (below) purges it after a grace
-    // period.
-    leaveRoom(agentId).catch(() => {});
-  });
   console.log(`[agent] spawned ${agentId} name="${resolvedName}" model=${chosenModel} npub=${character.pubkey.slice(0, 12)}...`);
   return { agentId, npub: character.pubkey, pubkey: character.pubkey, model: chosenModel, name: resolvedName };
+}
+
+// Called from the room-message listener (debounced). Runs a new pi turn if:
+//   - the driver is still listening
+//   - no pi currently running for this agent
+//   - we haven't triggered within AGENT_MIN_TRIGGER_GAP_MS
+//   - we're under AGENT_MAX_TURNS
+function tryListenTurn(rec) {
+  if (!rec.listening) return;
+  if (rec.process) return; // busy with a turn
+  if (rec.turns >= AGENT_MAX_TURNS) {
+    console.log(`[driver:${rec.agentId}] reached max turns (${AGENT_MAX_TURNS}), stopping`);
+    stopAgent(rec.agentId).catch(() => {});
+    return;
+  }
+  const sinceLast = Date.now() - rec.lastTriggerAt;
+  if (sinceLast < AGENT_MIN_TRIGGER_GAP_MS) return;
+  runPiTurn(rec, {});
 }
 
 async function stopAgent(agentId) {
   const rec = agents.get(agentId);
   if (!rec) return false;
+  rec.listening = false;
+  if (rec.debounceTimer) { clearTimeout(rec.debounceTimer); rec.debounceTimer = null; }
+  if (rec.idleTimer) { clearInterval(rec.idleTimer); rec.idleTimer = null; }
+  if (rec.unsubscribe) { try { rec.unsubscribe(); } catch {} }
   try { rec.process?.kill(); } catch {}
+  rec.process = null;
+  rec.exitedAt = Date.now();
+  rec.events.push({ kind: "exit", code: "stopped", turns: rec.turns });
   await leaveRoom(agentId);
-  // Character dir persists — only the runtime record is removed.
-  agents.delete(agentId);
+  // Record stays around briefly so the inspector drawer remains readable;
+  // reaper (below) purges after REAP_AFTER_MS.
   return true;
 }
 
