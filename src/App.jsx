@@ -5,7 +5,6 @@ import Sidebar from './layout/Sidebar.jsx'
 import Board from './Board.jsx'
 import Diagram from './Diagram.jsx'
 import Reference from './Reference.jsx'
-import Chat from './Chat.jsx'
 import Sandbox from './Sandbox.jsx'
 import RelayFeed from './RelayFeed.jsx'
 import Testing from './Testing.jsx'
@@ -102,7 +101,6 @@ export default function App() {
         {route.view === 'reference' && <Reference key={route.id} id={route.id} />}
         {route.view === 'doc' && <Doc content={currentDoc?.content} />}
       </main>
-      <Chat />
     </div>
   )
 }

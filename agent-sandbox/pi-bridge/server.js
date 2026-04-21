@@ -16,7 +16,7 @@ import WebSocket from "ws";
 // nostr-tools SimplePool uses global WebSocket; Node doesn't expose one by default.
 useWebSocketImplementation(WebSocket);
 import { buildSystemPrompt } from "./prompt-builder.js";
-import { joinRoom, leaveRoom, sendSay } from "./room-client.js";
+import { joinRoom, leaveRoom, sendSay, sayAs } from "./room-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -154,6 +154,30 @@ function loadOrCreateAdmin() {
 
 const admin = loadOrCreateAdmin();
 
+// ── Human identity ──
+// One persistent keypair used to sign human chat from the Room pane's
+// text input. Stored alongside the admin identity on the workspace volume.
+const HUMAN_FILE = join(WORKSPACE, ".human.json");
+const HUMAN_PROFILE = { name: "You", about: "A human observing the sandbox." };
+
+function loadOrCreateHuman() {
+  if (existsSync(HUMAN_FILE)) {
+    const raw = JSON.parse(readFileSync(HUMAN_FILE, "utf-8"));
+    return { sk: Uint8Array.from(Buffer.from(raw.sk, "hex")), pubkey: raw.pubkey };
+  }
+  const sk = generateSecretKey();
+  const pubkey = getPublicKey(sk);
+  writeFileSync(
+    HUMAN_FILE,
+    JSON.stringify({ sk: Buffer.from(sk).toString("hex"), pubkey }, null, 2),
+    "utf-8",
+  );
+  console.log(`[human] minted human identity pubkey=${pubkey.slice(0, 12)}...`);
+  return { sk, pubkey };
+}
+
+const human = loadOrCreateHuman();
+
 async function publishSignedEvent(event, label = "publish") {
   try {
     const results = await Promise.allSettled(
@@ -190,6 +214,20 @@ async function publishAdminProfile() {
     admin.sk,
   );
   return publishSignedEvent(event, "admin:profile");
+}
+
+async function publishKind1From({ sk, pubkey, content, tags = [] }) {
+  const event = finalizeEvent(
+    {
+      kind: 1,
+      created_at: Math.floor(Date.now() / 1000),
+      tags,
+      content: String(content),
+    },
+    sk,
+  );
+  await publishSignedEvent(event, `kind1:${pubkey.slice(0, 10)}`);
+  return event;
 }
 
 async function publishCharacterProfile(pubkey) {
@@ -702,15 +740,23 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
   writeFileSync(join(charDir, ".pi", "identity"), character.pubkey, "utf-8");
   installSkills(charDir);
 
+  // Join the room first, then build the system prompt using the snapshot
+  // we got back. The agent's pi process sees the current roster + recent
+  // chat before it starts thinking.
+  const { snapshot } = await joinRoom(agentId, {
+    name: resolvedName,
+    npub: character.pubkey,
+    roomName: roomName || "sandbox",
+  });
+
   const systemPrompt = buildSystemPrompt({
     name: resolvedName,
     npub: character.pubkey,
     roomName: roomName || "sandbox",
     seedMessage,
     about: character.about,
+    roomSnapshot: snapshot,
   });
-
-  await joinRoom(agentId, { name: resolvedName, npub: character.pubkey, roomName: roomName || "sandbox" });
 
   const validIds = new Set(availableModels().map((m) => m.id));
   const chosenModel = model && validIds.has(model) ? model : DEFAULT_MODEL_ID;
@@ -880,6 +926,52 @@ app.get("/admin", (_req, res) => {
     npub: npubEncode(admin.pubkey),
     profile: ADMIN_PROFILE,
   });
+});
+
+app.get("/human", (_req, res) => {
+  res.json({
+    pubkey: human.pubkey,
+    npub: npubEncode(human.pubkey),
+    profile: HUMAN_PROFILE,
+  });
+});
+
+app.post("/human/say", async (req, res) => {
+  try {
+    const { content, roomName } = req.body || {};
+    if (!content || !String(content).trim()) {
+      return res.status(400).json({ error: "content required" });
+    }
+    const text = String(content).slice(0, 1000);
+    // Send to the Colyseus room so agents see it in their snapshot + future
+    // spawns, and publish to the relay so external observers see it.
+    const roomResult = await sayAs({
+      identityKey: "human",
+      roomName: roomName || "sandbox",
+      name: HUMAN_PROFILE.name,
+      npub: human.pubkey,
+      text,
+    }).catch((err) => ({ ok: false, error: err.message }));
+    let relayEvent = null;
+    try {
+      relayEvent = await publishKind1From({
+        sk: human.sk,
+        pubkey: human.pubkey,
+        content: text,
+      });
+    } catch (err) {
+      console.error("[human:say] relay publish failed:", err.message);
+    }
+    res.json({
+      ok: true,
+      room: roomResult?.ok ?? false,
+      roomError: roomResult?.error ?? null,
+      eventId: relayEvent?.id ?? null,
+    });
+  } catch (err) {
+    console.error("[human:say]", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post("/agents", async (req, res) => {

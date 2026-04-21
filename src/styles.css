@@ -1716,3 +1716,25 @@ body {
 }
 .agent-profile-generate-model code { font-size: 11px; color: #3b3f9e; }
 .agent-profile-generate-spinner { width: 14px; height: 14px; border-width: 2px; flex-shrink: 0; }
+
+.sandbox2-chat {
+  display: flex; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4);
+  border-top: 2px solid var(--ink); background: var(--paper-2);
+  align-items: center;
+}
+.sandbox2-chat input {
+  flex: 1; padding: var(--sp-2) var(--sp-3);
+  border: 1.5px solid var(--ink); background: var(--card);
+  font-family: var(--font-sans); font-size: 13px; color: var(--ink); outline: none;
+}
+.sandbox2-chat input:focus { background: var(--paper); box-shadow: 2px 2px 0 var(--transmit); }
+.sandbox2-chat button {
+  padding: var(--sp-2) var(--sp-4);
+  border: 2px solid var(--ink); background: var(--ink); color: var(--paper);
+  font-family: var(--font-display); font-weight: 800; font-stretch: 75%;
+  font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+  cursor: pointer; box-shadow: 3px 3px 0 var(--transmit);
+}
+.sandbox2-chat button:hover:not(:disabled) { transform: translate(1px,1px); box-shadow: 2px 2px 0 var(--transmit); }
+.sandbox2-chat button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+.sandbox2-chat-error { font-size: 11px; color: var(--transmit); font-family: var(--font-mono); }

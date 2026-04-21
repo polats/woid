@@ -9,6 +9,9 @@ const cfg = config.agentSandbox || {}
 export default function Sandbox() {
   const [characters, setCharacters] = useState([])
   const [adminInfo, setAdminInfo] = useState(null)
+  const [chatDraft, setChatDraft] = useState('')
+  const [chatSending, setChatSending] = useState(false)
+  const [chatError, setChatError] = useState(null)
   const [profilePubkey, setProfilePubkey] = useState(null)
   const [inspectedId, setInspectedId] = useState(null)
   const [creating, setCreating] = useState(false)
@@ -90,6 +93,27 @@ export default function Sandbox() {
       await fetch(`${cfg.bridgeUrl}/agents/${agentId}`, { method: 'DELETE' })
       await refresh()
     } catch {}
+  }
+
+  async function sendChat(e) {
+    e?.preventDefault?.()
+    const text = chatDraft.trim()
+    if (!text || chatSending) return
+    setChatSending(true)
+    setChatError(null)
+    try {
+      const r = await fetch(`${cfg.bridgeUrl}/human/say`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: text, roomName: cfg.defaultRoom || 'sandbox' }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      setChatDraft('')
+    } catch (err) {
+      setChatError(err.message || String(err))
+    } finally {
+      setChatSending(false)
+    }
   }
 
   function copy(text) {
@@ -248,9 +272,24 @@ export default function Sandbox() {
             {roomState.messages.length === 0 && <li className="muted">—</li>}
           </ul>
           <p className="muted sandbox2-tip">
-            The live <a href="#/relay-feed">relay feed</a> is now in its own sidebar section.
+            The live <a href="#/relay-feed">relay feed</a> is in its own sidebar section.
           </p>
         </div>
+
+        <form className="sandbox2-chat" onSubmit={sendChat}>
+          <input
+            type="text"
+            value={chatDraft}
+            onChange={(e) => setChatDraft(e.target.value)}
+            placeholder="Say something to the room…"
+            disabled={chatSending}
+            maxLength={1000}
+          />
+          <button type="submit" disabled={chatSending || !chatDraft.trim()}>
+            {chatSending ? 'Sending…' : 'Send'}
+          </button>
+          {chatError && <span className="sandbox2-chat-error">{chatError}</span>}
+        </form>
       </section>
 
       {inspectedAgent && (
