@@ -1,5 +1,14 @@
 {
   "name": "Woid",
-  "description": "Plan code and scratchpad diagrams to understand reference projects.",
-  "home": "welcome"
+  "description": "Plan, diagram, and run live LLM-agent experiments against reference projects.",
+  "home": "welcome",
+  "features": {
+    "agentSandbox": true
+  },
+  "agentSandbox": {
+    "roomServerUrl": "ws://localhost:12567",
+    "bridgeUrl": "http://localhost:13457",
+    "relayUrl": "ws://localhost:17777",
+    "defaultRoom": "sandbox"
+  }
 }

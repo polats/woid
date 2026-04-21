@@ -1,0 +1,25 @@
+FROM node:20-slim
+
+RUN apt-get update && apt-get install -y git jq curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install pi coding agent globally
+RUN npm install -g @mariozechner/pi-coding-agent
+
+# Bridge dependencies
+COPY package.json package-lock.json* /app/bridge/
+RUN cd /app/bridge && npm install --production
+
+COPY server.js prompt-builder.js room-client.js nim-catalog.json /app/bridge/
+COPY skill-templates/ /app/bridge/skill-templates/
+
+RUN mkdir -p /workspace
+
+ENV PORT=3457
+ENV WORKSPACE=/workspace
+ENV PI_BIN=pi
+
+EXPOSE 3457
+WORKDIR /app/bridge
+CMD ["node", "server.js"]

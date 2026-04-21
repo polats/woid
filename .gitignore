@@ -4,6 +4,12 @@ dist
 *.log
 .github-token
 
+# Claude Code per-session state
+.claude/
+
+# Agent sandbox — local env holds NVIDIA_NIM_API_KEY
+agent-sandbox/.env
+
 # Playwright
 /test-results/
 /playwright-report/

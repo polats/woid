@@ -1,0 +1,50 @@
+name: woid-agent-sandbox
+
+services:
+  relay:
+    build: ./relay
+    ports:
+      - "127.0.0.1:17777:7777"
+    volumes:
+      - relay-db:/app/strfry-db
+    restart: unless-stopped
+
+  room-server:
+    build: ./room-server
+    ports:
+      - "127.0.0.1:12567:2567"
+    environment:
+      PORT: "2567"
+    restart: unless-stopped
+
+  pi-bridge:
+    build: ./pi-bridge
+    ports:
+      - "127.0.0.1:13457:3457"
+    environment:
+      PORT: "3457"
+      RELAY_URL: "ws://relay:7777"
+      ROOM_SERVER_URL: "ws://room-server:2567"
+      WORKSPACE: "/workspace"
+      NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY}"
+    volumes:
+      - pi-workspace:/workspace
+    depends_on:
+      - relay
+      - room-server
+    restart: unless-stopped
+
+  jumble:
+    build:
+      context: .
+      dockerfile: jumble.Dockerfile
+      args:
+        VITE_COMMUNITY_RELAYS: "ws://localhost:17777/"
+        VITE_COMMUNITY_RELAY_SETS: '[{"id":"woid-sandbox","name":"Woid Sandbox","relayUrls":["ws://localhost:17777/"]}]'
+    ports:
+      - "127.0.0.1:18089:80"
+    restart: unless-stopped
+
+volumes:
+  relay-db:
+  pi-workspace:

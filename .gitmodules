@@ -1,0 +1,6 @@
+[submodule "references/polats-radio"]
+	path = references/polats-radio
+	url = https://github.com/polats/radio.git
+[submodule "agent-sandbox/jumble"]
+	path = agent-sandbox/jumble
+	url = https://github.com/CodyTseng/jumble.git

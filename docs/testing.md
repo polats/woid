@@ -1,6 +1,6 @@
 # Testing
 
-Woid ships with an opinionated Playwright harness for end-to-end tests. It's lightweight — three files plus a `testing/` folder — and designed to give you **video evidence of every run** without wiring up a CI dashboard.
+Woid ships with an opinionated Playwright harness for end-to-end tests. It's lightweight — three files plus a `testing/` folder — and designed to give you **video evidence of every run** without wiring up a CI dashboard. Past runs are browsable inside the woid UI itself at `#/testing`.
 
 ## Quick start
 
@@ -16,8 +16,8 @@ npm run dev
 npm run smoke
 npm run test:e2e
 
-# 4. browse past runs
-npm run test:view     # opens testing/viewer.html
+# 4. browse past runs — in the woid sidebar under "Testing",
+#    or at http://localhost:5173/#/testing
 ```
 
 ## What's in the box
@@ -33,8 +33,13 @@ Custom Playwright reporter. After each run it:
 3. Writes `session.md` (human-readable table) and `session.json` (machine-readable data).
 4. Updates `testing/sessions/manifest.json` — a rolling list of the last 50 sessions.
 
-### `testing/viewer.html`
-Static single-page viewer. Reads `manifest.json`, lets you click a session in the sidebar, and plays the recorded videos inline alongside any error output. No build step, no server — serve the `testing/` folder with anything (`npx serve testing -l 3333`).
+### In-app Testing view (`#/testing`)
+Served by `server/testing.js` — a Vite middleware plugin that exposes `/api/testing/sessions` (the manifest) and `/api/testing/sessions/<name>/<file>` (session.json + the `.webm` videos, with proper `Accept-Ranges` headers so the `<video>` element can seek).
+
+The `Testing` React view lists every session in the left rail, highlights pass/fail, and plays each test's video inline when you click through. URL-syncs: `#/testing/<session-name>` deep-links to a specific run.
+
+### `testing/viewer.html` (legacy)
+The old standalone viewer is still present and works if you run `npx serve testing -l 3333`, but the in-app view is the preferred path — no extra server to start.
 
 ### `scripts/smoke.mjs`
 Pre-flight health check. Hits a handful of dev-server URLs and validates the responses are well-formed (valid JSON, HTML contains `#root`, JS doesn't have embedded `SyntaxError` messages from a broken Vite pre-bundle). Fails fast so you don't waste ten minutes watching Playwright time out when the real problem is that your bundler crashed.
@@ -60,3 +65,4 @@ Playwright's report is great for a single run but forgets the moment you run aga
 - **Different dev-server port?** Edit `baseURL` in `playwright.config.ts`, or set `E2E_BASE_URL`.
 - **No API routes?** Remove the `/api/*` checks from `scripts/smoke.mjs` — it'll still guard the web bundle.
 - **Want CI?** The reporter writes plain files. Upload `testing/sessions/` as a build artifact and you've got a browsable archive with no additional tooling.
+- **Agent-sandbox tests** are in `e2e/agent-sandbox.spec.ts` and skip cleanly when the sandbox stack isn't up (see `beforeAll` probe). Run `npm run agent-sandbox:up` first if you want full coverage.
