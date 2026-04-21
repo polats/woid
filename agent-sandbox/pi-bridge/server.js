@@ -875,8 +875,14 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
   }, 30_000);
   rec.idleTimer.unref();
 
-  // First turn — kicked off with the seed the caller provided (if any).
-  runPiTurn(rec, { seedMessage });
+  // First turn. If the caller didn't supply a seed, prompt an intro —
+  // we want something visible on spawn, not a silent listener. Later
+  // listener-triggered turns fall back to the "react or stay quiet"
+  // prompt baked into runPiTurn.
+  const firstSeed =
+    seedMessage
+    || "Introduce yourself briefly to the room by posting a short greeting.";
+  runPiTurn(rec, { seedMessage: firstSeed });
 
   console.log(`[agent] spawned ${agentId} name="${resolvedName}" model=${chosenModel} npub=${character.pubkey.slice(0, 12)}...`);
   return { agentId, npub: character.pubkey, pubkey: character.pubkey, model: chosenModel, name: resolvedName };

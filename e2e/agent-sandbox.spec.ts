@@ -243,82 +243,91 @@ test.describe('agent-sandbox', () => {
   test('card spawn flow: card turns running, relay gets agent kind:1, inspector shows events', async ({ page }) => {
     const name = `flow-${Date.now().toString().slice(-6)}`
     const c = await createCharacter(name)
+    try {
+      await page.goto('/#/agent-sandbox')
+      const card = page.locator('.sandbox2-card', { hasText: name })
+      await expect(card).toBeVisible({ timeout: 10_000 })
 
-    await page.goto('/#/agent-sandbox')
-    const card = page.locator('.sandbox2-card', { hasText: name })
-    await expect(card).toBeVisible({ timeout: 10_000 })
+      await card.getByRole('button', { name: 'spawn' }).click()
+      await expect(card).toHaveClass(/running/, { timeout: 15_000 })
 
-    // Spawn via the card's spawn button.
-    await card.getByRole('button', { name: 'spawn' }).click()
-    await expect(card).toHaveClass(/running/, { timeout: 15_000 })
+      const drawer = page.locator('.agent-inspector')
+      await expect(drawer).toBeVisible({ timeout: 5_000 })
 
-    // Inspector drawer opens for the new runtime (spawn() sets inspectedId).
-    const drawer = page.locator('.agent-inspector')
-    await expect(drawer).toBeVisible({ timeout: 5_000 })
+      // Poll the relay directly for a kind:1 authored by this character.
+      // With continuous listening the driver's first turn runs the default
+      // "introduce yourself" seed, which should post within ~30-60s of spawn.
+      const relayWs = RELAY.replace(/^http/, 'ws')
+      const deadline = Date.now() + 120_000
+      let found: { content: string } | null = null
+      while (Date.now() < deadline && !found) {
+        found = await page.evaluate(
+          async ({ url, author }) => {
+            return await new Promise<{ content: string } | null>((resolve) => {
+              const ws = new WebSocket(url)
+              const subId = 'e2e-' + Math.random().toString(36).slice(2)
+              const t = setTimeout(() => { try { ws.close() } catch {}; resolve(null) }, 4000)
+              ws.onopen = () => ws.send(JSON.stringify(['REQ', subId, { kinds: [1], authors: [author], limit: 5 }]))
+              ws.onmessage = (ev) => {
+                const m = JSON.parse(ev.data as string)
+                if (m[0] === 'EVENT' && m[1] === subId) { clearTimeout(t); try { ws.close() } catch {}; resolve({ content: m[2].content }) }
+                if (m[0] === 'EOSE')                  { clearTimeout(t); try { ws.close() } catch {}; resolve(null) }
+              }
+              ws.onerror = () => { clearTimeout(t); resolve(null) }
+            })
+          },
+          { url: relayWs, author: c.pubkey },
+        )
+        if (!found) await page.waitForTimeout(2000)
+      }
+      expect(found, `expected a kind:1 event from ${c.pubkey} on the relay`).not.toBeNull()
 
-    // Poll the relay directly for a kind:1 authored by this character.
-    const relayWs = RELAY.replace(/^http/, 'ws')
-    const deadline = Date.now() + 120_000
-    let found: { content: string } | null = null
-    while (Date.now() < deadline && !found) {
-      found = await page.evaluate(
-        async ({ url, author }) => {
-          return await new Promise<{ content: string } | null>((resolve) => {
-            const ws = new WebSocket(url)
-            const subId = 'e2e-' + Math.random().toString(36).slice(2)
-            const t = setTimeout(() => { try { ws.close() } catch {}; resolve(null) }, 4000)
-            ws.onopen = () => ws.send(JSON.stringify(['REQ', subId, { kinds: [1], authors: [author], limit: 5 }]))
-            ws.onmessage = (ev) => {
-              const m = JSON.parse(ev.data as string)
-              if (m[0] === 'EVENT' && m[1] === subId) { clearTimeout(t); try { ws.close() } catch {}; resolve({ content: m[2].content }) }
-              if (m[0] === 'EOSE')                  { clearTimeout(t); try { ws.close() } catch {}; resolve(null) }
-            }
-            ws.onerror = () => { clearTimeout(t); resolve(null) }
-          })
-        },
-        { url: relayWs, author: c.pubkey },
-      )
-      if (!found) await page.waitForTimeout(2000)
+      await expect(drawer.locator('.ai-row-assistant, .ai-row-tool-call').first()).toBeVisible({ timeout: 10_000 })
+
+      await card.getByRole('button', { name: 'stop' }).click()
+      await expect(card).not.toHaveClass(/running/, { timeout: 10_000 })
+    } finally {
+      await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' }).catch(() => {})
     }
-    expect(found, `expected a kind:1 event from ${c.pubkey} on the relay`).not.toBeNull()
-
-    // Inspector populates assistant/tool rows from the NDJSON stream.
-    await expect(drawer.locator('.ai-row-assistant, .ai-row-tool-call').first()).toBeVisible({ timeout: 10_000 })
-
-    // Stop the runtime from the card, then remove the character.
-    await card.getByRole('button', { name: 'stop' }).click()
-    await expect(card).not.toHaveClass(/running/, { timeout: 10_000 })
-    await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
   })
 
-  test('pi exit releases the Colyseus seat (no ghost presence)', async ({ page }) => {
+  test('explicit stop releases the Colyseus seat (no ghost presence)', async ({ page }) => {
+    // With continuous listening, a driver intentionally keeps the seat
+    // across pi exits so it can react to new messages. The invariant
+    // we test here is that an *explicit* stop tears everything down:
+    // runtime record drops, room presence clears, card goes idle.
     const c = await createCharacter(`ghost-${Date.now().toString().slice(-6)}`)
-    const result = await spawn(c.pubkey, { seedMessage: 'Just reply with the word done and stop.' })
+    try {
+      const result = await spawn(c.pubkey, { seedMessage: 'Just reply with the word done.' })
+      await page.goto('/#/agent-sandbox')
 
-    await page.goto('/#/agent-sandbox')
+      // Wait until the driver is listening — it shows up as a presence row.
+      await expect
+        .poll(async () => {
+          const rows = page.locator('.sandbox2-room-body .agent-sandbox-list li', { hasText: c.name })
+          return await rows.count()
+        }, { timeout: 30_000 })
+        .toBeGreaterThan(0)
 
-    // Wait for the bridge to mark the agent exited.
-    const deadline = Date.now() + 90_000
-    let exited = false
-    while (Date.now() < deadline && !exited) {
-      const list = await (await fetch(`${BRIDGE}/agents`)).json()
-      const rec = list.agents.find((a: { agentId: string }) => a.agentId === result.agentId)
-      if (rec?.exitedAt) { exited = true; break }
-      await page.waitForTimeout(2000)
+      // Stop the runtime explicitly.
+      const stopRes = await fetch(`${BRIDGE}/agents/${result.agentId}`, { method: 'DELETE' })
+      expect(stopRes.ok).toBe(true)
+
+      // Presence clears within a few state-change cycles.
+      await expect
+        .poll(async () => {
+          const rows = page.locator('.sandbox2-room-body .agent-sandbox-list li', { hasText: c.name })
+          return await rows.count()
+        }, { timeout: 10_000 })
+        .toBe(0)
+
+      // Card's portrait dot is gone (runtime null after the 2min reap, but
+      // running class should drop immediately since `listening` went false).
+      const card = page.locator('.sandbox2-card', { hasText: c.name })
+      await expect(card).not.toHaveClass(/running/, { timeout: 10_000 })
+    } finally {
+      await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' }).catch(() => {})
     }
-    expect(exited).toBe(true)
-
-    // Presence in the room pane no longer lists this character's name.
-    await expect.poll(async () => {
-      const rows = page.locator('.sandbox2-room-body .agent-sandbox-list li', { hasText: c.name })
-      return await rows.count()
-    }, { timeout: 10_000 }).toBe(0)
-
-    // The card transitions back to idle (no 'running' class).
-    const card = page.locator('.sandbox2-card', { hasText: c.name })
-    await expect(card).not.toHaveClass(/running/, { timeout: 10_000 })
-
-    await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
   })
 
   test('human identity + POST /human/say lands in room + relay', async ({ page }) => {
