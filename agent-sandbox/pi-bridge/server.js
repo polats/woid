@@ -646,11 +646,37 @@ function newEventBuffer() {
 // Note: `sk` is loaded from disk at spawn time; we keep the character ref.
 const agents = new Map();
 
+// Canonical lookup used to build the nested `runtime` object on a character.
+// Returns whichever runtime is associated with this character — running or
+// exited-but-not-yet-reaped. The 409-on-duplicate-spawn check uses a
+// separate activeRuntimeForCharacter() below.
 function runtimeForCharacter(pubkey) {
+  for (const [id, rec] of agents.entries()) {
+    if (rec.pubkey === pubkey) return { id, rec };
+  }
+  return null;
+}
+
+function activeRuntimeForCharacter(pubkey) {
   for (const [id, rec] of agents.entries()) {
     if (rec.pubkey === pubkey && rec.process) return { id, rec };
   }
   return null;
+}
+
+// Serialise the runtime record for an API response — both the list and the
+// single-character endpoints use this so the shape is uniform.
+function runtimeSnapshot(pubkey) {
+  const r = runtimeForCharacter(pubkey);
+  if (!r) return null;
+  return {
+    agentId: r.id,
+    running: !!r.rec.process,
+    model: r.rec.model ?? null,
+    roomName: r.rec.roomName ?? null,
+    exitedAt: r.rec.exitedAt ?? null,
+    exitCode: r.rec.exitCode ?? null,
+  };
 }
 
 async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
@@ -659,7 +685,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
   if (pubkey) {
     character = loadCharacter(pubkey);
     if (!character) throw new Error(`unknown character ${pubkey}`);
-    if (runtimeForCharacter(pubkey)) {
+    if (activeRuntimeForCharacter(pubkey)) {
       const err = new Error("character already has a running runtime");
       err.code = 409;
       throw err;
@@ -681,6 +707,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
     npub: character.pubkey,
     roomName: roomName || "sandbox",
     seedMessage,
+    about: character.about,
   });
 
   await joinRoom(agentId, { name: resolvedName, npub: character.pubkey, roomName: roomName || "sandbox" });
@@ -871,10 +898,10 @@ app.post("/agents", async (req, res) => {
 // ── Characters (persistent identities) ──
 
 app.get("/characters", (_req, res) => {
-  const list = listCharacters().map((c) => {
-    const runtime = runtimeForCharacter(c.pubkey);
-    return { ...c, runtime: runtime ? { agentId: runtime.id } : null };
-  });
+  const list = listCharacters().map((c) => ({
+    ...c,
+    runtime: runtimeSnapshot(c.pubkey),
+  }));
   res.json({ characters: list });
 });
 
@@ -897,7 +924,6 @@ app.post("/characters", (req, res) => {
 app.get("/characters/:pubkey", (req, res) => {
   const c = loadCharacter(req.params.pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
-  const runtime = runtimeForCharacter(c.pubkey);
   res.json({
     pubkey: c.pubkey,
     npub: npubEncode(c.pubkey),
@@ -909,7 +935,7 @@ app.get("/characters/:pubkey", (req, res) => {
     profileModel: c.profileModel ?? null,
     createdAt: c.createdAt ?? null,
     updatedAt: c.updatedAt ?? null,
-    runtime: runtime ? { agentId: runtime.id } : null,
+    runtime: runtimeSnapshot(c.pubkey),
   });
 });
 
@@ -1169,8 +1195,8 @@ app.patch("/characters/:pubkey", async (req, res) => {
 app.delete("/characters/:pubkey", async (req, res) => {
   const pubkey = req.params.pubkey;
   if (!loadCharacter(pubkey)) return res.status(404).json({ error: "not found" });
-  // Stop any running runtime first.
-  const runtime = runtimeForCharacter(pubkey);
+  // Stop any running runtime first; exited records get purged with the dir.
+  const runtime = activeRuntimeForCharacter(pubkey);
   if (runtime) await stopAgent(runtime.id);
   deleteCharacter(pubkey);
   res.json({ ok: true });

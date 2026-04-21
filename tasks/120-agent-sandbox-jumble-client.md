@@ -1,3 +1,11 @@
+---
+name: Jumble web Nostr client
+description: Self-hosted Jumble pinned to the local relay, running at :18089 as a fourth sandbox service
+status: done
+order: 120
+epic: agent-sandbox
+---
+
 # 120 — Agent Sandbox: Jumble Nostr client
 
 Self-hosted, full-featured web Nostr client running alongside the sandbox stack

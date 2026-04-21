@@ -10,6 +10,10 @@ dist
 # Agent sandbox — local env holds NVIDIA_NIM_API_KEY
 agent-sandbox/.env
 
+# Ad-hoc reference dumps dropped into references/ — track via submodule or
+# curate before checking in.
+references/Woid Design System-handoff/
+
 # Playwright
 /test-results/
 /playwright-report/

@@ -8,7 +8,6 @@ const cfg = config.agentSandbox || {}
 
 export default function Sandbox() {
   const [characters, setCharacters] = useState([])
-  const [agents, setAgents] = useState([])
   const [adminInfo, setAdminInfo] = useState(null)
   const [profilePubkey, setProfilePubkey] = useState(null)
   const [inspectedId, setInspectedId] = useState(null)
@@ -23,14 +22,13 @@ export default function Sandbox() {
   const refresh = useCallback(async () => {
     if (!cfg.bridgeUrl) return
     try {
-      const [ch, ag] = await Promise.all([
-        fetch(`${cfg.bridgeUrl}/characters`).then((r) => r.json()),
-        fetch(`${cfg.bridgeUrl}/agents`).then((r) => r.json()),
-      ])
-      setCharacters(ch.characters || [])
-      setAgents(ag.agents || [])
+      const j = await fetch(`${cfg.bridgeUrl}/characters`).then((r) => r.json())
+      // /characters is the single source of truth — each entry nests
+      // `runtime: { agentId, running, model, roomName, exitedAt, exitCode }`
+      // when a runtime exists (running or within the reap grace period).
+      setCharacters(j.characters || [])
     } catch {
-      // silent — transient fetch errors are common while containers restart
+      // transient fetch errors (e.g. containers restarting) are fine
     }
   }, [])
 
@@ -98,8 +96,18 @@ export default function Sandbox() {
     try { navigator.clipboard?.writeText(text) } catch {}
   }
 
-  // Merge characters with their running runtime metadata for the inspector.
-  const inspectedAgent = agents.find((a) => a.agentId === inspectedId)
+  // Resolve the character whose runtime matches the inspected id — the
+  // inspector drawer reads the character's fields for the header.
+  const inspectedCharacter = characters.find((c) => c.runtime?.agentId === inspectedId)
+  const inspectedAgent = inspectedCharacter
+    ? {
+        agentId: inspectedCharacter.runtime.agentId,
+        name: inspectedCharacter.name,
+        npub: inspectedCharacter.pubkey,
+        model: inspectedCharacter.runtime.model ?? inspectedCharacter.model,
+        running: inspectedCharacter.runtime.running,
+      }
+    : null
 
   return (
     <div className="sandbox2">
@@ -144,9 +152,9 @@ export default function Sandbox() {
         ) : (
           <ul className="sandbox2-card-list">
             {characters.map((c) => {
-              const runtime = c.runtime
-                ? agents.find((a) => a.agentId === c.runtime.agentId)
-                : null
+              // `runtime` is now an object or null, delivered inline by
+              // /characters — no cross-lookup needed.
+              const runtime = c.runtime?.running ? c.runtime : null
               const initial = (c.name || '?').trim().charAt(0).toUpperCase()
               return (
                 <li
