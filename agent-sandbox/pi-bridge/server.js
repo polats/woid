@@ -27,6 +27,11 @@ const WORKSPACE = process.env.WORKSPACE || join(tmpdir(), "woid-agent-sandbox");
 const RELAY_URL = process.env.RELAY_URL || "ws://localhost:7777";
 const NVIDIA_NIM_API_KEY = process.env.NVIDIA_NIM_API_KEY || "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+// When set, pi-bridge exposes an OpenAI-compat llama.cpp (or vLLM/Ollama)
+// server as a third provider called `local`. No auth — the served model is
+// whatever the operator has loaded at the URL. See agent-sandbox/llama-cpp/
+// for a self-contained llama.cpp stack that pairs with this.
+const LOCAL_LLM_BASE_URL = process.env.LOCAL_LLM_BASE_URL || "";
 // URL browsers/Nostr clients use to fetch resources served by this bridge.
 // Inside docker-compose the bridge is reachable at http://pi-bridge:3457,
 // but kind:0 profiles need a URL external tools can resolve — default to
@@ -49,6 +54,9 @@ const NIM_CATALOG = JSON.parse(
 );
 const GEMINI_CATALOG = JSON.parse(
   readFileSync(join(__dirname, "gemini-catalog.json"), "utf-8"),
+);
+const LOCAL_CATALOG = JSON.parse(
+  readFileSync(join(__dirname, "local-catalog.json"), "utf-8"),
 );
 
 function nimAvailableModels() {
@@ -93,11 +101,36 @@ function geminiAvailableModels() {
   }));
 }
 
+function localAvailableModels() {
+  // Only show local models when the operator has pointed us at a server.
+  // The catalog is a superset — any one of these might be what's actually
+  // loaded in llama.cpp right now. We don't probe; the spawn call just
+  // uses whatever id the client picks (must match what llama-server serves).
+  return LOCAL_CATALOG.map((m) => ({
+    id: m.id,
+    name: m.name,
+    provider: "local",
+    family: m.family,
+    totalParamsB: m.total_params_b,
+    activeParamsB: m.active_params_b,
+    contextWindow: m.context_window ?? 131072,
+    notes: m.notes,
+  }));
+}
+
 function availableModels() {
   const list = [];
   if (NVIDIA_NIM_API_KEY) list.push(...nimAvailableModels());
   if (GEMINI_API_KEY) list.push(...geminiAvailableModels());
+  if (LOCAL_LLM_BASE_URL) list.push(...localAvailableModels());
   return list;
+}
+
+function providerForModelId(modelId) {
+  if (!modelId) return PI_DEFAULT_PROVIDER;
+  if (LOCAL_CATALOG.some((m) => m.id === modelId)) return "local";
+  if (GEMINI_CATALOG.some((m) => m.id === modelId)) return "google";
+  return "nvidia-nim";
 }
 
 // Default provider + model. Flip PI_DEFAULT_PROVIDER to switch the whole
@@ -106,6 +139,7 @@ const PI_DEFAULT_PROVIDER = process.env.PI_DEFAULT_PROVIDER || "nvidia-nim";
 const DEFAULT_MODEL_BY_PROVIDER = {
   "nvidia-nim": "moonshotai/kimi-k2.5",
   "google": "gemini-2.5-flash-lite",
+  "local": "gemma-4-E4B-it-Q4_K_M",
 };
 const DEFAULT_MODEL_ID =
   process.env.PI_MODEL ||
@@ -138,8 +172,10 @@ function buildPiModelsConfig() {
     // Pi has a built-in `google` provider with these models already; we
     // merge our curated subset so the ids we advertise in /models stay
     // in sync with what pi can actually call. Built-ins are kept — ours
-    // upsert by id.
+    // upsert by id. Since pi 0.63, `baseUrl` is required on any provider
+    // entry that also defines `models` — even for built-in overrides.
     providers["google"] = {
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       api: "google-generative-ai",
       apiKey: GEMINI_API_KEY,
       models: GEMINI_CATALOG.map((m) => ({
@@ -150,6 +186,31 @@ function buildPiModelsConfig() {
         contextWindow: m.contextWindow,
         maxTokens: m.maxTokens,
         cost: m.cost,
+      })),
+    };
+  }
+  if (LOCAL_LLM_BASE_URL) {
+    // Custom provider pointing at an OpenAI-compat local server
+    // (llama.cpp, vLLM, Ollama). Pi's resolution-order docs say custom
+    // providers resolve after built-ins; use a distinct name to avoid
+    // colliding with Ollama's built-in provider.
+    providers["local"] = {
+      baseUrl: LOCAL_LLM_BASE_URL,
+      api: "openai-completions",
+      // llama-server ignores auth but pi always sends one.
+      apiKey: "no-key",
+      compat: {
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+        supportsUsageInStreaming: false,
+        maxTokensField: "max_tokens",
+      },
+      models: LOCAL_CATALOG.map((m) => ({
+        id: m.id,
+        name: m.name,
+        contextWindow: m.context_window ?? 131072,
+        maxTokens: 8192,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       })),
     };
   }
@@ -168,7 +229,7 @@ function setupPiConfig() {
   console.log(`[pi-bridge] wrote pi models.json with ${availableModels().length} models`);
 }
 
-if (NVIDIA_NIM_API_KEY || GEMINI_API_KEY) setupPiConfig();
+if (NVIDIA_NIM_API_KEY || GEMINI_API_KEY || LOCAL_LLM_BASE_URL) setupPiConfig();
 
 // Single relay pool shared by admin + per-agent publishing.
 const pool = new SimplePool();
@@ -846,8 +907,10 @@ function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {
   // rebuilds, and host reboots. Each pi invocation appends to it.
   // buildUserTurn carries only the delta since lastSeenMessageTs.
   const sessionPath = join(getCharDir(rec.pubkey), "session.jsonl");
-  // Route to the right provider by model id — gemini-* → google, else NIM.
-  const provider = rec.model?.startsWith("gemini-") ? "google" : "nvidia-nim";
+  // Route to the right provider by model id. Explicit provider override
+  // wins (set on the runtime record at spawn time); otherwise infer from
+  // the model id against our catalogs.
+  const provider = rec.provider || providerForModelId(rec.model);
   const args = [
     "--provider", provider,
     "--model", rec.model,
@@ -861,7 +924,7 @@ function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {
   const child = spawn(PI_BIN, args, {
     cwd: charDir,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NVIDIA_NIM_API_KEY, GEMINI_API_KEY, HOME: homedir() },
+    env: { ...process.env, NVIDIA_NIM_API_KEY, GEMINI_API_KEY, LOCAL_LLM_BASE_URL, HOME: homedir() },
   });
   rec.process = child;
   rec.turns = (rec.turns ?? 0) + 1;
@@ -904,7 +967,7 @@ const AGENT_MIN_TRIGGER_GAP_MS = Number(process.env.AGENT_MIN_TRIGGER_GAP_MS || 
 const AGENT_DEBOUNCE_MS = Number(process.env.AGENT_DEBOUNCE_MS || 1_500);
 const AGENT_IDLE_TIMEOUT_MS = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 5 * 60_000);
 
-async function createAgent({ pubkey, name, seedMessage, roomName, model, x, y }) {
+async function createAgent({ pubkey, name, seedMessage, roomName, model, provider, x, y }) {
   // Resolve character: either provided by pubkey, or auto-create (back-compat).
   let character;
   if (pubkey) {
@@ -949,6 +1012,10 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, x, y })
     name: resolvedName,
     roomName: roomName || "sandbox",
     model: chosenModel,
+    // Provider is resolved once at spawn time so pi is invoked with the
+    // right --provider flag on every subsequent turn. Explicit wins over
+    // catalog inference (which only checks id prefixes).
+    provider: provider || providerForModelId(chosenModel),
     events,
     process: null,
     turns: 0,
@@ -1201,9 +1268,9 @@ app.post("/human/say", async (req, res) => {
 
 app.post("/agents", async (req, res) => {
   try {
-    const { pubkey, name, seedMessage, roomName, model, x, y } = req.body || {};
+    const { pubkey, name, seedMessage, roomName, model, provider, x, y } = req.body || {};
     if (!pubkey && !name) return res.status(400).json({ error: "pubkey or name required" });
-    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, x, y });
+    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, provider, x, y });
     res.json(result);
   } catch (err) {
     const status = err.code === 409 ? 409 : 500;

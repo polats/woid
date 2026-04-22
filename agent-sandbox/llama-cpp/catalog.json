@@ -1,0 +1,50 @@
+[
+  {
+    "id": "gemma-4-E2B-it-Q4_K_M",
+    "hf_repo": "unsloth/gemma-4-E2B-it-GGUF",
+    "quant": "Q4_K_M",
+    "tier": "edge",
+    "context_window": 131072,
+    "notes": "Smallest Gemma 4, ~2 GB. CPU-only friendly."
+  },
+  {
+    "id": "gemma-4-E4B-it-Q4_K_M",
+    "hf_repo": "unsloth/gemma-4-E4B-it-GGUF",
+    "quant": "Q4_K_M",
+    "tier": "edge",
+    "context_window": 131072,
+    "notes": "Gemma 4 E4B, ~5 GB. Interleaved thinking during tool calls. Recommended default."
+  },
+  {
+    "id": "qwen3.5-9b-Q4_K_M",
+    "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
+    "quant": "Q4_K_M",
+    "tier": "8-12gb-vram",
+    "context_window": 131072,
+    "notes": "Dense 9B. Strong HumanEval, mature tool calling."
+  },
+  {
+    "id": "gemma-4-26B-A4B-it-Q4_K_M",
+    "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+    "quant": "Q4_K_M",
+    "tier": "16gb-vram",
+    "context_window": 131072,
+    "notes": "Gemma 4 MoE: ~15 GB VRAM, 4 B active params → fast inference."
+  },
+  {
+    "id": "gemma-4-31B-it-Q4_K_M",
+    "hf_repo": "unsloth/gemma-4-31B-it-GGUF",
+    "quant": "Q4_K_M",
+    "tier": "24gb-vram",
+    "context_window": 131072,
+    "notes": "Gemma 4 dense, #3 Arena open. ~18 GB VRAM."
+  },
+  {
+    "id": "qwen3.6-35B-A3B-Q4_K_M",
+    "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+    "quant": "Q4_K_M",
+    "tier": "24gb-vram",
+    "context_window": 131072,
+    "notes": "Qwen 3.6 MoE, MCPMark tool-call leader. ~22 GB VRAM, 3.6 B active."
+  }
+]

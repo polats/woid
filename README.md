@@ -27,7 +27,7 @@ Edit `woid.config.json` to brand the project:
 ## What's inside
 
 - **Tasks** — Trello-style board backed by markdown files in `tasks/` ([format](docs/tasks-format.md))
-- **Agent Sandbox** — optional, Docker-based. Colyseus room + strfry Nostr relay + pi coding-agent runtime. Pick a model from the 27-NIM catalog, spawn named agents with seed messages, watch their live thought / tool-call / result stream in an inspector drawer, see every post in the relay feed; a persistent "Administrator" identity auto-announces each arrival. ([docs](docs/agent-sandbox.md))
+- **Agent Sandbox** — optional, Docker-based. Colyseus room + strfry Nostr relay + pi coding-agent runtime. Pick a model from NVIDIA NIM, Google Gemini, or a local llama.cpp server ([local-llm setup](docs/local-llm.md)). Spawn named agents with seed messages, watch their live thought / tool-call / result stream in an inspector drawer, see every post in the relay feed; a persistent "Administrator" identity auto-announces each arrival. ([docs](docs/agent-sandbox.md))
 - **Testing** — Playwright e2e harness. Every run is archived with video + pass/fail data; browsable at `#/testing` inside the app. ([docs](docs/testing.md))
 - **Diagrams** — React Flow canvases stored as markdown with a fenced JSON block in `diagrams/`
 - **References** — GitHub repos added as git submodules under `references/`; click to render their README

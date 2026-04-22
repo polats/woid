@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import config from '../woid.config.json'
 import { useSandboxRoom } from './hooks/useSandboxRoom.js'
+import { useSandboxSettings } from './hooks/useSandboxSettings.js'
 import AgentInspector from './AgentInspector.jsx'
 import AgentProfile from './AgentProfile.jsx'
 import RoomMap from './RoomMap.jsx'
+import SandboxSettings from './SandboxSettings.jsx'
 
 const cfg = config.agentSandbox || {}
 
@@ -20,6 +22,7 @@ export default function Sandbox() {
   const [humanInfo, setHumanInfo] = useState(null)
   const [dropToast, setDropToast] = useState(null)
   const chatlogRef = useRef(null)
+  const { settings, update: updateSettings } = useSandboxSettings()
 
   const { status: roomStatus, state: roomState, error: roomError } = useSandboxRoom({
     url: cfg.roomServerUrl,
@@ -71,6 +74,18 @@ export default function Sandbox() {
     }
   }
 
+  // Per-character model (from profile) wins over the sidebar Settings
+  // default; both win over the pi-bridge PI_MODEL env fallback.
+  function spawnBody(c, extra = {}) {
+    return {
+      pubkey: c.pubkey,
+      roomName: cfg.defaultRoom || 'sandbox',
+      model: c.model || settings.model || undefined,
+      provider: c.model ? undefined : settings.provider || undefined,
+      ...extra,
+    }
+  }
+
   async function spawn(c) {
     if (c.runtime) { setInspectedId(c.runtime.agentId); return }
     setCreating(true)
@@ -79,11 +94,7 @@ export default function Sandbox() {
       const r = await fetch(`${cfg.bridgeUrl}/agents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pubkey: c.pubkey,
-          roomName: cfg.defaultRoom || 'sandbox',
-          model: c.model || undefined,
-        }),
+        body: JSON.stringify(spawnBody(c)),
       })
       if (!r.ok) throw new Error(await r.text())
       const result = await r.json()
@@ -145,12 +156,7 @@ export default function Sandbox() {
           const r = await fetch(`${cfg.bridgeUrl}/agents`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              pubkey,
-              x, y,
-              roomName: cfg.defaultRoom || 'sandbox',
-              model: c.model || undefined,
-            }),
+            body: JSON.stringify(spawnBody(c, { x, y })),
           })
           if (!r.ok) throw new Error(await r.text())
           const result = await r.json()
@@ -189,6 +195,11 @@ export default function Sandbox() {
   return (
     <div className="sandbox3">
       <aside className="sandbox3-cards">
+        <SandboxSettings
+          bridgeUrl={cfg.bridgeUrl}
+          settings={settings}
+          onChange={updateSettings}
+        />
         <header>
           <h2>Agents</h2>
           <button onClick={newCharacter} title="Create a new character with a random name + keypair">

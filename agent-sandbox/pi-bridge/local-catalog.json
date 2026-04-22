@@ -1,0 +1,56 @@
+[
+  {
+    "id": "gemma-4-E2B-it-Q4_K_M",
+    "name": "Gemma 4 E2B (local)",
+    "family": "gemma-4",
+    "total_params_b": 2,
+    "active_params_b": 2,
+    "context_window": 131072,
+    "notes": "Smallest Gemma 4, ~2GB Q4_K_M. Runs CPU-only."
+  },
+  {
+    "id": "gemma-4-E4B-it-Q4_K_M",
+    "name": "Gemma 4 E4B (local)",
+    "family": "gemma-4",
+    "total_params_b": 4,
+    "active_params_b": 4,
+    "context_window": 131072,
+    "notes": "Gemma 4 E4B, ~5GB Q4_K_M, interleaved thinking during tool calls."
+  },
+  {
+    "id": "qwen3.5-9b-Q4_K_M",
+    "name": "Qwen 3.5 9B (local)",
+    "family": "qwen-3.5",
+    "total_params_b": 9,
+    "active_params_b": 9,
+    "context_window": 131072,
+    "notes": "Dense 9B, mature tool calling, ~6GB Q4_K_M."
+  },
+  {
+    "id": "gemma-4-26B-A4B-it-Q4_K_M",
+    "name": "Gemma 4 26B-A4B (local)",
+    "family": "gemma-4",
+    "total_params_b": 26,
+    "active_params_b": 4,
+    "context_window": 131072,
+    "notes": "Gemma 4 MoE, fast inference (4B active), ~15GB Q4_K_M."
+  },
+  {
+    "id": "gemma-4-31B-it-Q4_K_M",
+    "name": "Gemma 4 31B (local)",
+    "family": "gemma-4",
+    "total_params_b": 31,
+    "active_params_b": 31,
+    "context_window": 131072,
+    "notes": "Gemma 4 dense, #3 Arena open, ~18GB Q4_K_M."
+  },
+  {
+    "id": "qwen3.6-35B-A3B-Q4_K_M",
+    "name": "Qwen 3.6 35B-A3B (local)",
+    "family": "qwen-3.6",
+    "total_params_b": 35,
+    "active_params_b": 3.6,
+    "context_window": 131072,
+    "notes": "Qwen 3.6 MoE, MCPMark tool-call leader, ~22GB Q4_K_M."
+  }
+]

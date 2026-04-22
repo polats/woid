@@ -28,8 +28,18 @@ services:
       WORKSPACE: "/workspace"
       NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY}"
       GEMINI_API_KEY: "${GEMINI_API_KEY}"
+      # Optional. Point at an OpenAI-compat llama.cpp/vLLM/Ollama server
+      # to expose a `local` provider in the sandbox. See
+      # agent-sandbox/llama-cpp/ for a turnkey llama.cpp stack.
+      # From inside docker-compose, host.docker.internal resolves to the
+      # host; from the host, use http://localhost:18080/v1.
+      LOCAL_LLM_BASE_URL: "${LOCAL_LLM_BASE_URL:-}"
     volumes:
       - pi-workspace:/workspace
+    # Let the bridge reach a llama.cpp server running on the host via
+    # host.docker.internal:18080 (set LOCAL_LLM_BASE_URL accordingly).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - relay
       - room-server
