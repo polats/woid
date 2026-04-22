@@ -27,6 +27,7 @@ services:
       ROOM_SERVER_URL: "ws://room-server:2567"
       WORKSPACE: "/workspace"
       NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY}"
     volumes:
       - pi-workspace:/workspace
     depends_on:

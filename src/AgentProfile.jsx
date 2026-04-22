@@ -340,10 +340,20 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
               disabled={saving || models.length === 0}
             >
               <option value="">— use spawn-time default —</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.id}{m.activeParamsB ? ` (${m.activeParamsB}B)` : ''}
-                </option>
+              {Object.entries(
+                models.reduce((acc, m) => {
+                  (acc[m.provider || 'other'] ??= []).push(m)
+                  return acc
+                }, {})
+              ).map(([prov, list]) => (
+                <optgroup key={prov} label={prov}>
+                  {list.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.id}{m.activeParamsB ? ` (${m.activeParamsB}B)` : ''}
+                      {m.cost?.input ? ` — $${m.cost.input}/M in` : ''}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </label>

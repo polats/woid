@@ -26,6 +26,7 @@ const PI_BIN = process.env.PI_BIN || "pi";
 const WORKSPACE = process.env.WORKSPACE || join(tmpdir(), "woid-agent-sandbox");
 const RELAY_URL = process.env.RELAY_URL || "ws://localhost:7777";
 const NVIDIA_NIM_API_KEY = process.env.NVIDIA_NIM_API_KEY || "";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 // URL browsers/Nostr clients use to fetch resources served by this bridge.
 // Inside docker-compose the bridge is reachable at http://pi-bridge:3457,
 // but kind:0 profiles need a URL external tools can resolve — default to
@@ -46,11 +47,13 @@ mkdirSync(WORKSPACE, { recursive: true });
 const NIM_CATALOG = JSON.parse(
   readFileSync(join(__dirname, "nim-catalog.json"), "utf-8"),
 );
+const GEMINI_CATALOG = JSON.parse(
+  readFileSync(join(__dirname, "gemini-catalog.json"), "utf-8"),
+);
 
-function availableModels() {
+function nimAvailableModels() {
   // Tool calling is required — the agent needs bash tools to run post.sh.
   const entries = NIM_CATALOG.filter((m) => m.nim_tool_calling !== false);
-  // Dedupe by id, sort by (active params asc, id asc) for a stable list.
   const seen = new Map();
   for (const m of entries) {
     if (!seen.has(m.id)) seen.set(m.id, m);
@@ -64,7 +67,7 @@ function availableModels() {
       return {
         id: m.id,
         name: shortName,
-        provider: m.provider,
+        provider: "nvidia-nim",
         architecture: m.architecture,
         totalParamsB: m.total_params_b,
         activeParamsB: m.active_params_b,
@@ -79,32 +82,78 @@ function availableModels() {
     });
 }
 
-const DEFAULT_MODEL_ID = process.env.PI_MODEL || "moonshotai/kimi-k2.5";
-
-function buildPiModelsConfig() {
-  const list = availableModels();
-  const models = list.map((m) => ({
+function geminiAvailableModels() {
+  return GEMINI_CATALOG.map((m) => ({
     id: m.id,
     name: m.name,
-    contextWindow: 131072,
-    maxTokens: 8192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    provider: "google",
+    contextWindow: m.contextWindow ?? 1048576,
+    reasoning: m.reasoning ?? false,
+    cost: m.cost,
   }));
-  // Default model first so pi picks it when --model isn't passed.
-  const ordered = [
-    ...models.filter((m) => m.id === DEFAULT_MODEL_ID),
-    ...models.filter((m) => m.id !== DEFAULT_MODEL_ID),
-  ];
-  return {
-    providers: {
-      "nvidia-nim": {
-        baseUrl: "https://integrate.api.nvidia.com/v1",
-        apiKey: NVIDIA_NIM_API_KEY,
-        api: "openai-completions",
-        models: ordered,
-      },
-    },
-  };
+}
+
+function availableModels() {
+  const list = [];
+  if (NVIDIA_NIM_API_KEY) list.push(...nimAvailableModels());
+  if (GEMINI_API_KEY) list.push(...geminiAvailableModels());
+  return list;
+}
+
+// Default provider + model. Flip PI_DEFAULT_PROVIDER to switch the whole
+// sandbox to Gemini without touching code. Explicit PI_MODEL wins.
+const PI_DEFAULT_PROVIDER = process.env.PI_DEFAULT_PROVIDER || "nvidia-nim";
+const DEFAULT_MODEL_BY_PROVIDER = {
+  "nvidia-nim": "moonshotai/kimi-k2.5",
+  "google": "gemini-2.5-flash-lite",
+};
+const DEFAULT_MODEL_ID =
+  process.env.PI_MODEL ||
+  DEFAULT_MODEL_BY_PROVIDER[PI_DEFAULT_PROVIDER] ||
+  "moonshotai/kimi-k2.5";
+
+function buildPiModelsConfig() {
+  const providers = {};
+  if (NVIDIA_NIM_API_KEY) {
+    const nim = nimAvailableModels().map((m) => ({
+      id: m.id,
+      name: m.name,
+      contextWindow: 131072,
+      maxTokens: 8192,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }));
+    // Default model first so pi picks it when --model isn't passed.
+    const ordered = [
+      ...nim.filter((m) => m.id === DEFAULT_MODEL_ID),
+      ...nim.filter((m) => m.id !== DEFAULT_MODEL_ID),
+    ];
+    providers["nvidia-nim"] = {
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      apiKey: NVIDIA_NIM_API_KEY,
+      api: "openai-completions",
+      models: ordered,
+    };
+  }
+  if (GEMINI_API_KEY) {
+    // Pi has a built-in `google` provider with these models already; we
+    // merge our curated subset so the ids we advertise in /models stay
+    // in sync with what pi can actually call. Built-ins are kept — ours
+    // upsert by id.
+    providers["google"] = {
+      api: "google-generative-ai",
+      apiKey: GEMINI_API_KEY,
+      models: GEMINI_CATALOG.map((m) => ({
+        id: m.id,
+        name: m.name,
+        reasoning: m.reasoning ?? false,
+        input: ["text", "image"],
+        contextWindow: m.contextWindow,
+        maxTokens: m.maxTokens,
+        cost: m.cost,
+      })),
+    };
+  }
+  return { providers };
 }
 
 // ── Pre-configure pi with NIM models on first boot ──
@@ -119,7 +168,7 @@ function setupPiConfig() {
   console.log(`[pi-bridge] wrote pi models.json with ${availableModels().length} models`);
 }
 
-if (NVIDIA_NIM_API_KEY) setupPiConfig();
+if (NVIDIA_NIM_API_KEY || GEMINI_API_KEY) setupPiConfig();
 
 // Single relay pool shared by admin + per-agent publishing.
 const pool = new SimplePool();
@@ -797,8 +846,10 @@ function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {
   // rebuilds, and host reboots. Each pi invocation appends to it.
   // buildUserTurn carries only the delta since lastSeenMessageTs.
   const sessionPath = join(getCharDir(rec.pubkey), "session.jsonl");
+  // Route to the right provider by model id — gemini-* → google, else NIM.
+  const provider = rec.model?.startsWith("gemini-") ? "google" : "nvidia-nim";
   const args = [
-    "--provider", "nvidia-nim",
+    "--provider", provider,
     "--model", rec.model,
     "--mode", "json",
     "--print",
@@ -810,7 +861,7 @@ function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {
   const child = spawn(PI_BIN, args, {
     cwd: charDir,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NVIDIA_NIM_API_KEY, HOME: homedir() },
+    env: { ...process.env, NVIDIA_NIM_API_KEY, GEMINI_API_KEY, HOME: homedir() },
   });
   rec.process = child;
   rec.turns = (rec.turns ?? 0) + 1;
@@ -1519,7 +1570,11 @@ app.get("/agents", (_req, res) => {
 });
 
 app.get("/models", (_req, res) => {
-  res.json({ default: DEFAULT_MODEL_ID, models: availableModels() });
+  res.json({
+    default: DEFAULT_MODEL_ID,
+    defaultProvider: PI_DEFAULT_PROVIDER,
+    models: availableModels(),
+  });
 });
 
 app.delete("/agents/:id", async (req, res) => {
