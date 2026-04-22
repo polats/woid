@@ -244,6 +244,12 @@ export default function Sandbox() {
                       </div>
                     )}
                     {c.about && <p className="sandbox3-card-about">{c.about}</p>}
+                    {c.state && (
+                      <p className="sandbox3-card-state" title={c.state}>
+                        <span className="sandbox3-card-state-label">state</span>
+                        {c.state}
+                      </p>
+                    )}
                     <div className="sandbox3-card-actions">
                       <button
                         onClick={(e) => { e.stopPropagation(); setProfilePubkey(c.pubkey) }}
