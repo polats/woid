@@ -127,7 +127,7 @@ function TokenBudgetBar({ sections, totalTokens, contextWindow }) {
   )
 }
 
-function Waterfall({ turn, model, contextWindow }) {
+function Waterfall({ turn, fallbackModel, contextWindow }) {
   if (turn.isCompaction) {
     return (
       <div className="wf-empty">
@@ -184,7 +184,7 @@ function Waterfall({ turn, model, contextWindow }) {
             <code>{turn.usage.totalTokens?.toLocaleString()} tokens</code>
             <span className="muted">↑{turn.usage.output ?? 0} ↓{turn.usage.input ?? 0}</span>
             <small>Model</small>
-            <code>{model || turn.model || '?'}</code>
+            <code>{turn.model || fallbackModel || '?'}</code>
           </div>
         )}
       </div>
@@ -215,7 +215,10 @@ function Waterfall({ turn, model, contextWindow }) {
   )
 }
 
-export default function AgentWaterfall({ bridgeUrl, pubkey, model }) {
+// `currentModel` is the runtime's live model id (accurate right now);
+// `model` is the legacy fallback. `meta.model` from the session JSONL is
+// frozen at the first model_change event and can be stale.
+export default function AgentWaterfall({ bridgeUrl, pubkey, model, currentModel }) {
   const { turns, meta, status } = useAgentTurns({ bridgeUrl, pubkey })
   const [selectedId, setSelectedId] = useState(null)
   const selected = useMemo(() => {
@@ -264,7 +267,13 @@ export default function AgentWaterfall({ bridgeUrl, pubkey, model }) {
         </ul>
       </aside>
       <div className="wf-main">
-        {selected && <Waterfall turn={selected} model={meta.model || model} contextWindow={contextWindow} />}
+        {selected && (
+          <Waterfall
+            turn={selected}
+            fallbackModel={currentModel || model || meta.model}
+            contextWindow={contextWindow}
+          />
+        )}
       </div>
     </div>
   )

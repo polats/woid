@@ -1081,8 +1081,29 @@ body {
   padding: 10px 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 14px;
 }
+.agent-inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.agent-inspector-section > .agent-inspector-section-head {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding: 4px 0;
+  border-bottom: 1.5px solid var(--ink);
+  position: sticky;
+  top: -10px;
+  background: var(--paper);
+  z-index: 1;
+}
+/* Turns section lays out as grid internally; give it bounded height
+   so the Live section below stays visible without fighting for space. */
+.agent-inspector-section .wf-layout { min-height: 320px; max-height: 60vh; }
 .agent-inspector-activity {
   display: flex;
   gap: 14px;
