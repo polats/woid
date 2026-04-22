@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import config from '../woid.config.json'
 import { useSandboxRoom } from './hooks/useSandboxRoom.js'
 import { useSandboxSettings } from './hooks/useSandboxSettings.js'
+import { useBridgeModels } from './hooks/useBridgeModels.js'
 import AgentInspector from './AgentInspector.jsx'
 import AgentProfile from './AgentProfile.jsx'
 import RoomMap from './RoomMap.jsx'
@@ -23,6 +24,7 @@ export default function Sandbox() {
   const [dropToast, setDropToast] = useState(null)
   const chatlogRef = useRef(null)
   const { settings, update: updateSettings } = useSandboxSettings()
+  const { models } = useBridgeModels(cfg.bridgeUrl)
 
   const { status: roomStatus, state: roomState, error: roomError } = useSandboxRoom({
     url: cfg.roomServerUrl,
@@ -74,14 +76,30 @@ export default function Sandbox() {
     }
   }
 
-  // Per-character model (from profile) wins over the sidebar Settings
-  // default; both win over the pi-bridge PI_MODEL env fallback.
+  // Pick a coherent (provider, model) pair for a spawn. Priority:
+  //   1. Sidebar Settings — if user has selected a provider, that wins.
+  //      This is the *recent explicit* expression of intent; per-character
+  //      model in AgentProfile is the fallback, not the override.
+  //   2. Per-character c.model — used only if Settings has no provider
+  //      selected (i.e. user hasn't touched Settings yet).
+  //   3. Nothing — let pi-bridge use PI_MODEL / PI_DEFAULT_PROVIDER.
   function spawnBody(c, extra = {}) {
+    let model, provider
+    if (settings.provider) {
+      const forProvider = models.filter((m) => m.provider === settings.provider)
+      const hit = forProvider.find((m) => m.id === settings.model) ?? forProvider[0]
+      if (hit) { model = hit.id; provider = hit.provider }
+    }
+    if (!model && c.model) {
+      const hit = models.find((m) => m.id === c.model)
+      if (hit) { model = hit.id; provider = hit.provider }
+      else { model = c.model } // unknown id — let server fall through
+    }
     return {
       pubkey: c.pubkey,
       roomName: cfg.defaultRoom || 'sandbox',
-      model: c.model || settings.model || undefined,
-      provider: c.model ? undefined : settings.provider || undefined,
+      ...(model ? { model } : {}),
+      ...(provider ? { provider } : {}),
       ...extra,
     }
   }

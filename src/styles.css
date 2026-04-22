@@ -2094,6 +2094,20 @@ body {
   font-size: 10px;
   color: var(--ink);
 }
+.sandbox3-settings-reset {
+  margin: 0 4px;
+  padding: 1px 6px;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  cursor: pointer;
+  color: var(--ink);
+}
+.sandbox3-settings-reset:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
+.sandbox3-settings-reset:disabled { color: var(--ink-faint); cursor: not-allowed; }
 
 .sandbox3-card-list {
   list-style: none; margin: 0; padding: 2px;

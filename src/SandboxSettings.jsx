@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useBridgeModels } from './hooks/useBridgeModels.js'
 
 /**
  * Settings panel mounted in the sandbox sidebar. Picks the default
@@ -7,23 +8,13 @@ import { useEffect, useMemo, useState } from 'react'
  * useSandboxSettings; this component is pure UI.
  */
 export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
-  const [models, setModels] = useState([])
-  const [serverDefault, setServerDefault] = useState(null)
-  const [serverProviders, setServerProviders] = useState([])
+  const { models, defaultModel: serverDefault } = useBridgeModels(bridgeUrl)
   const [open, setOpen] = useState(false)
 
-  useEffect(() => {
-    if (!bridgeUrl) return
-    fetch(`${bridgeUrl}/models`)
-      .then((r) => r.json())
-      .then((j) => {
-        setModels(j.models || [])
-        setServerDefault(j.default ?? null)
-        const provs = Array.from(new Set((j.models || []).map((m) => m.provider))).filter(Boolean)
-        setServerProviders(provs)
-      })
-      .catch(() => {})
-  }, [bridgeUrl])
+  const serverProviders = useMemo(
+    () => Array.from(new Set(models.map((m) => m.provider))).filter(Boolean),
+    [models],
+  )
 
   // Which provider is active — user selection wins, else server default.
   const activeProvider = settings.provider || serverProviders[0] || 'nvidia-nim'
@@ -31,13 +22,20 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
     () => models.filter((m) => m.provider === activeProvider),
     [models, activeProvider],
   )
-  // Validate the saved model still exists for this provider; clear if not.
+  // If the user has a provider selected, keep settings.model consistent
+  // with it — snap to the provider's first model if the saved id isn't
+  // valid anymore. We deliberately *don't* write settings on mount when
+  // `settings.provider` is unset: that's the "use per-character model"
+  // state, and spawning before the user clicks a provider should leave
+  // per-character + server defaults in charge.
   useEffect(() => {
-    if (!settings.model) return
-    if (!providerModels.some((m) => m.id === settings.model)) {
-      onChange({ model: null })
+    if (!settings.provider) return
+    if (providerModels.length === 0) return
+    const stillValid = settings.model && providerModels.some((m) => m.id === settings.model)
+    if (!stillValid) {
+      onChange({ model: providerModels[0].id })
     }
-  }, [providerModels, settings.model, onChange])
+  }, [providerModels, settings.model, settings.provider, onChange])
 
   const activeModel = settings.model || providerModels[0]?.id || ''
 
@@ -52,7 +50,9 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
       <summary>
         <span className="sandbox3-settings-title">Settings</span>
         <span className="sandbox3-settings-current">
-          {PROVIDER_LABELS[activeProvider] || activeProvider} · {activeModel ? activeModel.split('/').pop() : '—'}
+          {settings.provider
+            ? `${PROVIDER_LABELS[activeProvider] || activeProvider} · ${activeModel ? activeModel.split('/').pop() : '—'}`
+            : 'per-character'}
         </span>
       </summary>
       <div className="sandbox3-settings-body">
@@ -91,8 +91,14 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
           </select>
         </label>
         <p className="sandbox3-settings-hint">
-          Used when spawning characters that don't override model in their profile.
-          {serverDefault && <> Pi-bridge default: <code>{serverDefault}</code>.</>}
+          Wins over per-character model in AgentProfile. Click
+          <button
+            type="button"
+            className="sandbox3-settings-reset"
+            onClick={() => onChange({ provider: null, model: null })}
+            disabled={!settings.provider}
+          >reset</button>
+          to fall back to each character's own model (or pi-bridge default{serverDefault ? <>: <code>{serverDefault}</code></> : null}).
         </p>
       </div>
     </details>
