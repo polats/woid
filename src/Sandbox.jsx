@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import config from '../woid.config.json'
 import { useSandboxRoom } from './hooks/useSandboxRoom.js'
 import AgentInspector from './AgentInspector.jsx'
 import AgentProfile from './AgentProfile.jsx'
+import RoomMap from './RoomMap.jsx'
 
 const cfg = config.agentSandbox || {}
 
@@ -16,6 +17,9 @@ export default function Sandbox() {
   const [inspectedId, setInspectedId] = useState(null)
   const [creating, setCreating] = useState(false)
   const [spawnError, setSpawnError] = useState(null)
+  const [humanInfo, setHumanInfo] = useState(null)
+  const [dropToast, setDropToast] = useState(null)
+  const chatlogRef = useRef(null)
 
   const { status: roomStatus, state: roomState, error: roomError } = useSandboxRoom({
     url: cfg.roomServerUrl,
@@ -26,12 +30,9 @@ export default function Sandbox() {
     if (!cfg.bridgeUrl) return
     try {
       const j = await fetch(`${cfg.bridgeUrl}/characters`).then((r) => r.json())
-      // /characters is the single source of truth — each entry nests
-      // `runtime: { agentId, running, model, roomName, exitedAt, exitCode }`
-      // when a runtime exists (running or within the reap grace period).
       setCharacters(j.characters || [])
     } catch {
-      // transient fetch errors (e.g. containers restarting) are fine
+      /* transient fetch errors are fine */
     }
   }, [])
 
@@ -44,7 +45,14 @@ export default function Sandbox() {
   useEffect(() => {
     if (!cfg.bridgeUrl) return
     fetch(`${cfg.bridgeUrl}/admin`).then((r) => r.json()).then(setAdminInfo).catch(() => {})
+    fetch(`${cfg.bridgeUrl}/human`).then((r) => r.json()).then(setHumanInfo).catch(() => {})
   }, [])
+
+  // Keep the chat log scrolled to the newest message.
+  useEffect(() => {
+    const el = chatlogRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [roomState.messages.length])
 
   async function newCharacter() {
     setSpawnError(null)
@@ -116,12 +124,57 @@ export default function Sandbox() {
     }
   }
 
-  function copy(text) {
-    try { navigator.clipboard?.writeText(text) } catch {}
+  // Drop a card onto a tile: spawn at coord if no runtime, otherwise
+  // move the existing runtime to the target tile.
+  async function onDropCharacter(pubkey, x, y) {
+    const c = characters.find((ch) => ch.pubkey === pubkey)
+    if (!c) return
+    setSpawnError(null)
+    try {
+      if (c.runtime?.running) {
+        const r = await fetch(`${cfg.bridgeUrl}/agents/${c.runtime.agentId}/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x, y }),
+        })
+        if (!r.ok) throw new Error(await r.text())
+        setDropToast({ text: `${c.name} → (${x}, ${y})`, at: Date.now() })
+      } else {
+        setCreating(true)
+        try {
+          const r = await fetch(`${cfg.bridgeUrl}/agents`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pubkey,
+              x, y,
+              roomName: cfg.defaultRoom || 'sandbox',
+              model: c.model || undefined,
+            }),
+          })
+          if (!r.ok) throw new Error(await r.text())
+          const result = await r.json()
+          setInspectedId(result.agentId)
+          setDropToast({ text: `spawned ${c.name} at (${x}, ${y})`, at: Date.now() })
+        } finally { setCreating(false) }
+      }
+      await refresh()
+    } catch (err) {
+      setSpawnError(err.message || String(err))
+    }
+    setTimeout(() => setDropToast((t) => (t && Date.now() - t.at >= 2500 ? null : t)), 2700)
   }
 
-  // Resolve the character whose runtime matches the inspected id — the
-  // inspector drawer reads the character's fields for the header.
+  async function onMoveSelf(x, y) {
+    try {
+      await fetch(`${cfg.bridgeUrl}/human/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x, y, roomName: cfg.defaultRoom || 'sandbox' }),
+      })
+    } catch {}
+  }
+
   const inspectedCharacter = characters.find((c) => c.runtime?.agentId === inspectedId)
   const inspectedAgent = inspectedCharacter
     ? {
@@ -134,36 +187,8 @@ export default function Sandbox() {
     : null
 
   return (
-    <div className="sandbox2">
-      <div className="sandbox2-info">
-        <div className="agent-sandbox-info-cell">
-          <span className="agent-sandbox-info-label">Relay</span>
-          <div className="agent-sandbox-info-val">
-            <code>{cfg.relayUrl}</code>
-          </div>
-        </div>
-        <div className="agent-sandbox-info-cell">
-          <span className="agent-sandbox-info-label">Admin</span>
-          <div className="agent-sandbox-info-val">
-            {adminInfo ? (
-              <>
-                <strong>{adminInfo.profile?.name || 'Administrator'}</strong>
-                <code title={adminInfo.pubkey}>{adminInfo.npub?.slice(0, 16)}…</code>
-                <button className="agent-sandbox-info-copy" onClick={() => copy(adminInfo.npub)}>copy</button>
-              </>
-            ) : <span className="muted">loading…</span>}
-          </div>
-        </div>
-        <div className="agent-sandbox-info-cell">
-          <span className="agent-sandbox-info-label">Characters</span>
-          <div className="agent-sandbox-info-val">
-            <strong>{characters.length}</strong>
-            <span className="muted">· {characters.filter((c) => c.runtime).length} running</span>
-          </div>
-        </div>
-      </div>
-
-      <aside className="sandbox2-cards">
+    <div className="sandbox3">
+      <aside className="sandbox3-cards">
         <header>
           <h2>Agents</h2>
           <button onClick={newCharacter} title="Create a new character with a random name + keypair">
@@ -174,75 +199,68 @@ export default function Sandbox() {
         {characters.length === 0 ? (
           <p className="muted">No agents yet. Click + New to mint one.</p>
         ) : (
-          <ul className="sandbox2-card-list">
+          <ul className="sandbox3-card-list">
             {characters.map((c) => {
-              // `runtime` is now an object or null, delivered inline by
-              // /characters — no cross-lookup needed.
               const runtime = c.runtime?.running ? c.runtime : null
               const thinking = !!runtime?.thinking
               const initial = (c.name || '?').trim().charAt(0).toUpperCase()
               return (
                 <li
                   key={c.pubkey}
-                  className={`sandbox2-card${runtime ? ' running' : ''}`}
-                  onClick={() => setProfilePubkey(c.pubkey)}
+                  className={`sandbox3-card${runtime ? ' running' : ''}${thinking ? ' thinking' : ''}`}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('application/x-character-pubkey', c.pubkey)
+                    e.dataTransfer.effectAllowed = 'copyMove'
+                    // Use the portrait as the drag preview — the full card is
+                    // too wide and hides the drop target.
+                    const portrait = e.currentTarget.querySelector('.sandbox3-card-portrait')
+                    if (portrait) {
+                      try { e.dataTransfer.setDragImage(portrait, 28, 28) } catch {}
+                    }
+                  }}
+                  onClick={() => runtime && setInspectedId(runtime.agentId)}
                   role="button"
                   tabIndex={0}
-                  draggable
-                  title="Click to edit profile. Drag (once the 2D map lands) to place."
+                  title={
+                    runtime
+                      ? "Click to inspect. Drag to move on the map. Use Profile to edit."
+                      : "Drag onto the map to spawn. Use Profile to edit."
+                  }
                 >
-                  <div className="sandbox2-card-portrait">
+                  <div className="sandbox3-card-portrait">
                     {c.avatarUrl ? (
                       <img src={c.avatarUrl} alt={c.name} draggable={false} />
                     ) : (
-                      <div className="sandbox2-card-portrait-fallback">{initial}</div>
+                      <div className="sandbox3-card-portrait-fallback">{initial}</div>
                     )}
-                    {runtime && (
-                      <span
-                        className={`sandbox2-card-runtime-dot${thinking ? ' thinking' : ''}`}
-                        title={thinking ? `thinking (turn ${runtime.turns})` : `listening (${runtime.turns} turns so far)`}
-                      />
-                    )}
+                    {runtime && <span className="sandbox3-card-dot" title={thinking ? 'thinking' : 'listening'} />}
                   </div>
-                  <div className="sandbox2-card-body">
-                    <div className="sandbox2-card-name">{c.name}</div>
+                  <div className="sandbox3-card-body">
+                    <div className="sandbox3-card-name">{c.name}</div>
                     {runtime && (
-                      <div className="sandbox2-card-status">
+                      <div className="sandbox3-card-status">
                         {thinking ? 'thinking…' : 'listening'} · {runtime.turns} turn{runtime.turns === 1 ? '' : 's'}
                       </div>
                     )}
-                    {c.about && <p className="sandbox2-card-about">{c.about}</p>}
-                    <div className="sandbox2-card-footer">
-                      {c.model && (
-                        <span className="agent-model-badge" title={c.model}>
-                          {c.model.split('/').pop()}
-                        </span>
+                    {c.about && <p className="sandbox3-card-about">{c.about}</p>}
+                    <div className="sandbox3-card-actions">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setProfilePubkey(c.pubkey) }}
+                      >
+                        profile
+                      </button>
+                      {runtime && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); stopRuntime(runtime.agentId) }}
+                          className="danger"
+                        >
+                          stop
+                        </button>
                       )}
-                      <span className="sandbox2-card-actions">
-                        {runtime ? (
-                          <>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setInspectedId(runtime.agentId) }}
-                            >
-                              inspect
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); stopRuntime(runtime.agentId) }}
-                              className="danger"
-                            >
-                              stop
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); spawn(c) }}
-                            disabled={creating}
-                            className="primary"
-                          >
-                            spawn
-                          </button>
-                        )}
-                      </span>
+                      {!runtime && (
+                        <span className="sandbox3-card-hint">drag to map →</span>
+                      )}
                     </div>
                   </div>
                 </li>
@@ -252,37 +270,37 @@ export default function Sandbox() {
         )}
       </aside>
 
-      <section className="sandbox2-room">
+      <section className="sandbox3-stage">
         <header>
-          <h2>Room <small className={`status status-${roomStatus}`}>{roomStatus}</small></h2>
+          <h2>
+            Room <small className={`status status-${roomStatus}`}>{roomStatus}</small>
+          </h2>
           {roomError && <p className="agent-sandbox-error">{roomError}</p>}
         </header>
-        <div className="sandbox2-room-body">
-          <h3>Presence ({roomState.agents.length})</h3>
-          {roomState.agents.length === 0 ? (
-            <p className="muted">No agents in the room. Spawn one from the cards on the left.</p>
-          ) : (
-            <ul className="agent-sandbox-list">
-              {roomState.agents.map((a) => (
-                <li key={a.sessionId}>
-                  <strong>{a.name}</strong>
-                  {a.isAgent && <span className="muted">agent</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-          <h3>Recent chat ({roomState.messages.length})</h3>
+
+        <div className="sandbox3-map-frame">
+          <RoomMap
+            width={roomState.width}
+            height={roomState.height}
+            characters={characters}
+            roomAgents={roomState.agents}
+            adminPubkey={adminInfo?.pubkey}
+            humanPubkey={humanInfo?.pubkey}
+            onDropCharacter={onDropCharacter}
+            onMoveSelf={onMoveSelf}
+          />
+          {dropToast && <div className="sandbox3-toast">{dropToast.text}</div>}
+        </div>
+
+        <div className="sandbox3-chatlog" ref={chatlogRef}>
           <ul className="agent-sandbox-messages">
-            {roomState.messages.slice().reverse().map((m, i) => (
+            {roomState.messages.slice(-8).map((m, i) => (
               <li key={m.ts + i}>
                 <strong>{m.from}:</strong> {m.text}
               </li>
             ))}
-            {roomState.messages.length === 0 && <li className="muted">—</li>}
+            {roomState.messages.length === 0 && <li className="muted">— no room chat yet —</li>}
           </ul>
-          <p className="muted sandbox2-tip">
-            The live <a href="#/relay-feed">relay feed</a> is in its own sidebar section.
-          </p>
         </div>
 
         <form className="sandbox2-chat" onSubmit={sendChat}>

@@ -3,6 +3,12 @@ const { SandboxState, AgentPresence, Message } = require("../schema/SandboxState
 
 const MAX_MESSAGES = 50;
 
+function clamp(n, lo, hi) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return lo;
+  return Math.max(lo, Math.min(hi, v));
+}
+
 class SandboxRoom extends Room {
   onCreate(options) {
     this.setState(new SandboxState());
@@ -10,6 +16,8 @@ class SandboxRoom extends Room {
     this.autoDispose = true;
     this.state.roomName = options.roomName || "sandbox";
     this.state.createdAt = Date.now();
+    if (options?.width)  this.state.width  = clamp(options.width,  2, 64);
+    if (options?.height) this.state.height = clamp(options.height, 2, 64);
 
     this.onMessage("say", (client, data) => {
       const presence = this.state.agents.get(client.sessionId);
@@ -25,7 +33,17 @@ class SandboxRoom extends Room {
       }
     });
 
-    console.log(`[room] Created ${this.state.roomName} (${this.roomId})`);
+    // Tile-level movement. Client supplies target coordinates; we clamp
+    // them into the grid and update the presence. No A* / pathing — the
+    // client is trusted to send a sensible destination.
+    this.onMessage("move", (client, data) => {
+      const presence = this.state.agents.get(client.sessionId);
+      if (!presence) return;
+      presence.x = clamp(data?.x, 0, this.state.width - 1);
+      presence.y = clamp(data?.y, 0, this.state.height - 1);
+    });
+
+    console.log(`[room] Created ${this.state.roomName} (${this.roomId}) [${this.state.width}x${this.state.height}]`);
   }
 
   onJoin(client, options) {
@@ -44,8 +62,16 @@ class SandboxRoom extends Room {
     presence.npub = options?.npub || "";
     presence.isAgent = true;
     presence.joinedAt = Date.now();
+    // Position — clamp if supplied, else pick a free-ish random tile.
+    if (options?.x !== undefined || options?.y !== undefined) {
+      presence.x = clamp(options?.x, 0, this.state.width - 1);
+      presence.y = clamp(options?.y, 0, this.state.height - 1);
+    } else {
+      presence.x = Math.floor(Math.random() * this.state.width);
+      presence.y = Math.floor(Math.random() * this.state.height);
+    }
     this.state.agents.set(client.sessionId, presence);
-    console.log(`[room] ${presence.name} joined ${this.state.roomName}`);
+    console.log(`[room] ${presence.name} joined ${this.state.roomName} at (${presence.x},${presence.y})`);
   }
 
   onLeave(client) {

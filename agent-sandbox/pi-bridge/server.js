@@ -15,8 +15,8 @@ import WebSocket from "ws";
 
 // nostr-tools SimplePool uses global WebSocket; Node doesn't expose one by default.
 useWebSocketImplementation(WebSocket);
-import { buildSystemPrompt } from "./prompt-builder.js";
-import { joinRoom, leaveRoom, sendSay, sayAs, onNewMessage, roomSnapshot } from "./room-client.js";
+import { buildSystemPrompt, buildUserTurn } from "./buildContext.js";
+import { joinRoom, leaveRoom, sendSay, sayAs, moveAs, moveAgent, onNewMessage, roomSnapshot } from "./room-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -379,6 +379,32 @@ function listCharacters() {
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
 }
 
+// Short runbook pi auto-loads from the workspace. Gives the agent
+// per-character guidance without bloating every turn's system prompt.
+// Adopts npc-no-more's convention.
+function writeClaudeMd(dir, pubkey) {
+  const path = join(dir, "CLAUDE.md");
+  if (existsSync(path)) return;
+  const content = [
+    `# Agent runbook`,
+    ``,
+    `This is your personal workspace. Your pubkey is in \`.pi/identity\`.`,
+    ``,
+    `## What you can do`,
+    `- Post to the shared room: \`bash .pi/skills/post/scripts/post.sh "your message"\``,
+    ``,
+    `## Behaviour`,
+    `- Stay in character. Your persona (name, about, state) is in the system prompt.`,
+    `- Don't repeat yourself or parrot what others just said.`,
+    `- Keep posts short and in your voice.`,
+    `- Respond to what's happening — if the room's quiet, stay quiet too.`,
+    ``,
+    `## Room`,
+    `The room is a 2D grid. You have (x, y) coordinates. Other agents and the human also have positions. The trigger line of each turn tells you what just happened.`,
+  ].join("\n");
+  writeFileSync(path, content, "utf-8");
+}
+
 function createCharacter({ name } = {}) {
   const sk = generateSecretKey();
   const pubkey = getPublicKey(sk);
@@ -387,6 +413,7 @@ function createCharacter({ name } = {}) {
   writeFileSync(join(dir, "sk.hex"), Buffer.from(sk).toString("hex"), { encoding: "utf-8", mode: 0o600 });
   writeFileSync(join(dir, ".pi", "identity"), pubkey, "utf-8");
   installSkills(dir);
+  writeClaudeMd(dir, pubkey);
   const manifest = saveCharacterManifest(pubkey, {
     name: (name && String(name).trim()) || randomName(),
     createdAt: Date.now(),
@@ -730,29 +757,47 @@ function runtimeSnapshot(pubkey) {
 // Spawn a single pi turn for an existing agent record. Non-blocking;
 // mutates rec.process and rec.events as stdout events arrive. Returns
 // the child immediately.
-function runPiTurn(rec, { seedMessage }) {
+function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {} }) {
   const charDir = getCharDir(rec.pubkey);
   const character = loadCharacter(rec.pubkey);
   const snapshot = roomSnapshot(rec.agentId);
 
+  // Resolve the current presence for this character so the user turn can
+  // mention the agent's own (x, y). Snapshot is authoritative.
+  const myPresence = (snapshot.agents ?? []).find((a) => a.npub === rec.pubkey) || {};
+
   const systemPrompt = buildSystemPrompt({
     name: rec.name,
     npub: rec.pubkey,
-    roomName: rec.roomName,
-    seedMessage,
     about: character?.about,
-    roomSnapshot: snapshot,
+    state: character?.state,
+    roomWidth: snapshot.width,
+    roomHeight: snapshot.height,
   });
 
+  const userTurn = buildUserTurn({
+    character: { pubkey: rec.pubkey, x: myPresence.x ?? 0, y: myPresence.y ?? 0 },
+    trigger,
+    triggerContext,
+    roomSnapshot: snapshot,
+    lastSeenMessageTs: rec.lastSeenMessageTs,
+    seedMessage,
+  });
+
+  // Pi owns the conversation history per character. The session JSONL
+  // lives next to agent.json so it survives bridge restarts, container
+  // rebuilds, and host reboots. Each pi invocation appends to it.
+  // buildUserTurn carries only the delta since lastSeenMessageTs.
+  const sessionPath = join(getCharDir(rec.pubkey), "session.jsonl");
   const args = [
     "--provider", "nvidia-nim",
     "--model", rec.model,
     "--mode", "json",
     "--print",
-    "--no-session",
+    "--session", sessionPath,
     "--system-prompt", systemPrompt,
   ];
-  args.push(seedMessage || "React to the recent chat if there's something worth responding to; otherwise stay quiet.");
+  args.push(userTurn);
 
   const child = spawn(PI_BIN, args, {
     cwd: charDir,
@@ -784,6 +829,12 @@ function runPiTurn(rec, { seedMessage }) {
     console.log(`[pi:${rec.agentId}] turn=${rec.turns} exited code=${code}`);
     rec.events.push({ kind: "exit", code, turn: rec.turns });
     if (agents.get(rec.agentId) === rec) rec.process = null;
+    // Bump the high-water mark so the next turn's user message only
+    // carries messages newer than this turn's snapshot.
+    const latest = snapshot.messages?.length
+      ? Math.max(...snapshot.messages.map((m) => m.ts ?? 0))
+      : rec.lastSeenMessageTs ?? 0;
+    rec.lastSeenMessageTs = latest;
   });
   return child;
 }
@@ -794,7 +845,7 @@ const AGENT_MIN_TRIGGER_GAP_MS = Number(process.env.AGENT_MIN_TRIGGER_GAP_MS || 
 const AGENT_DEBOUNCE_MS = Number(process.env.AGENT_DEBOUNCE_MS || 1_500);
 const AGENT_IDLE_TIMEOUT_MS = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 5 * 60_000);
 
-async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
+async function createAgent({ pubkey, name, seedMessage, roomName, model, x, y }) {
   // Resolve character: either provided by pubkey, or auto-create (back-compat).
   let character;
   if (pubkey) {
@@ -818,11 +869,14 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
   installSkills(charDir);
 
   // Join the room and stay joined — the Colyseus seat persists across
-  // pi turns. Listener re-prompts pi when new messages arrive.
+  // pi turns. Listener re-prompts pi when new messages arrive. If x/y
+  // are supplied (drop-to-spawn UX), the server clamps and uses them;
+  // otherwise the server picks a random starting tile.
   await joinRoom(agentId, {
     name: resolvedName,
     npub: character.pubkey,
     roomName: roomName || "sandbox",
+    x, y,
   });
 
   const validIds = new Set(availableModels().map((m) => m.id));
@@ -861,6 +915,12 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
     if (!rec.listening) return;
     if (msg.fromNpub === rec.pubkey) return; // own echo
     rec.lastMessageAt = Date.now();
+    // Remember the most recent non-self message so the listener can
+    // label its next turn with `message_received` + {fromName}.
+    rec.pendingTrigger = {
+      trigger: "message_received",
+      triggerContext: { fromPubkey: msg.fromNpub, fromName: msg.from },
+    };
     if (rec.debounceTimer) clearTimeout(rec.debounceTimer);
     rec.debounceTimer = setTimeout(() => tryListenTurn(rec), AGENT_DEBOUNCE_MS);
   });
@@ -875,14 +935,13 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model }) {
   }, 30_000);
   rec.idleTimer.unref();
 
-  // First turn. If the caller didn't supply a seed, prompt an intro —
-  // we want something visible on spawn, not a silent listener. Later
-  // listener-triggered turns fall back to the "react or stay quiet"
-  // prompt baked into runPiTurn.
+  // First turn — typed trigger "spawn". If no explicit seed, the intro
+  // nudge encourages the agent to say hello. Listener-triggered turns
+  // later carry "message_received" / "arrival" with a triggerContext.
   const firstSeed =
     seedMessage
     || "Introduce yourself briefly to the room by posting a short greeting.";
-  runPiTurn(rec, { seedMessage: firstSeed });
+  runPiTurn(rec, { seedMessage: firstSeed, trigger: "spawn", triggerContext: {} });
 
   console.log(`[agent] spawned ${agentId} name="${resolvedName}" model=${chosenModel} npub=${character.pubkey.slice(0, 12)}...`);
   return { agentId, npub: character.pubkey, pubkey: character.pubkey, model: chosenModel, name: resolvedName };
@@ -903,7 +962,9 @@ function tryListenTurn(rec) {
   }
   const sinceLast = Date.now() - rec.lastTriggerAt;
   if (sinceLast < AGENT_MIN_TRIGGER_GAP_MS) return;
-  runPiTurn(rec, {});
+  const pending = rec.pendingTrigger ?? { trigger: "heartbeat", triggerContext: {} };
+  rec.pendingTrigger = null;
+  runPiTurn(rec, pending);
 }
 
 async function stopAgent(agentId) {
@@ -1008,9 +1069,26 @@ app.get("/human", (_req, res) => {
   });
 });
 
+app.post("/human/move", async (req, res) => {
+  try {
+    const { x, y, roomName } = req.body || {};
+    const result = await moveAs({
+      identityKey: "human",
+      roomName: roomName || "sandbox",
+      name: HUMAN_PROFILE.name,
+      npub: human.pubkey,
+      x, y,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("[human:move]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/human/say", async (req, res) => {
   try {
-    const { content, roomName } = req.body || {};
+    const { content, roomName, x, y } = req.body || {};
     if (!content || !String(content).trim()) {
       return res.status(400).json({ error: "content required" });
     }
@@ -1023,6 +1101,7 @@ app.post("/human/say", async (req, res) => {
       name: HUMAN_PROFILE.name,
       npub: human.pubkey,
       text,
+      x, y,
     }).catch((err) => ({ ok: false, error: err.message }));
     let relayEvent = null;
     try {
@@ -1048,15 +1127,23 @@ app.post("/human/say", async (req, res) => {
 
 app.post("/agents", async (req, res) => {
   try {
-    const { pubkey, name, seedMessage, roomName, model } = req.body || {};
+    const { pubkey, name, seedMessage, roomName, model, x, y } = req.body || {};
     if (!pubkey && !name) return res.status(400).json({ error: "pubkey or name required" });
-    const result = await createAgent({ pubkey, name, seedMessage, roomName, model });
+    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, x, y });
     res.json(result);
   } catch (err) {
     const status = err.code === 409 ? 409 : 500;
     if (status !== 409) console.error("[agents:create]", err);
     res.status(status).json({ error: err.message });
   }
+});
+
+app.post("/agents/:id/move", (req, res) => {
+  const agentId = req.params.id;
+  const { x, y } = req.body || {};
+  const ok = moveAgent(agentId, x, y);
+  if (!ok) return res.status(404).json({ error: "not found" });
+  res.json({ ok: true });
 });
 
 // ── Characters (persistent identities) ──

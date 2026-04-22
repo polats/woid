@@ -8,6 +8,8 @@ class AgentPresence extends Schema {
     this.npub = "";
     this.isAgent = false;
     this.joinedAt = 0;
+    this.x = 0;
+    this.y = 0;
   }
 }
 defineTypes(AgentPresence, {
@@ -16,6 +18,8 @@ defineTypes(AgentPresence, {
   npub: "string",
   isAgent: "boolean",
   joinedAt: "number",
+  x: "uint8",
+  y: "uint8",
 });
 
 class Message extends Schema {
@@ -41,6 +45,8 @@ class SandboxState extends Schema {
     this.messages = new ArraySchema();
     this.roomName = "sandbox";
     this.createdAt = 0;
+    this.width = 16;
+    this.height = 12;
   }
 }
 defineTypes(SandboxState, {
@@ -48,6 +54,8 @@ defineTypes(SandboxState, {
   messages: [Message],
   roomName: "string",
   createdAt: "number",
+  width: "uint8",
+  height: "uint8",
 });
 
 module.exports = { AgentPresence, Message, SandboxState };

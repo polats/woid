@@ -18,10 +18,22 @@ function snapshotState(room) {
   }
   if (room?.state?.agents?.forEach) {
     room.state.agents.forEach((a) => {
-      agents.push({ name: a.name, npub: a.npub, isAgent: !!a.isAgent });
+      agents.push({
+        name: a.name,
+        npub: a.npub,
+        isAgent: !!a.isAgent,
+        x: a.x ?? 0,
+        y: a.y ?? 0,
+      });
     });
   }
-  return { messages, agents, roomName: room?.state?.roomName ?? null };
+  return {
+    messages,
+    agents,
+    roomName: room?.state?.roomName ?? null,
+    width: room?.state?.width ?? 16,
+    height: room?.state?.height ?? 12,
+  };
 }
 
 // Wait briefly for the initial state to arrive after join. Colyseus pushes
@@ -43,7 +55,7 @@ function waitForState(room, timeoutMs = 600) {
   });
 }
 
-export async function joinRoom(agentId, { name, npub, roomName }) {
+export async function joinRoom(agentId, { name, npub, roomName, x, y }) {
   await leaveRoom(agentId);
   const client = await getClient();
   const room = await client.joinOrCreate("sandbox", {
@@ -51,6 +63,7 @@ export async function joinRoom(agentId, { name, npub, roomName }) {
     name,
     npub,
     isAgent: true,
+    x, y,
   });
   connections.set(agentId, { room, client });
   await waitForState(room);
@@ -106,6 +119,13 @@ export function sendSay(agentId, text) {
   return true;
 }
 
+export function moveAgent(agentId, x, y) {
+  const conn = connections.get(agentId);
+  if (!conn) return false;
+  conn.room.send("move", { x, y });
+  return true;
+}
+
 // Keep a single persistent Colyseus client per (roomName + identity kind)
 // so we don't bounce joins on every POST. Reuses on repeat calls; reconnects
 // transparently if the previous room dropped.
@@ -125,15 +145,30 @@ async function ensurePersistent(key, opts) {
 
 // Posts a `say` in the named room on behalf of a named identity. Used for
 // the human text box in the Room pane, but could drive any "observer
-// identity" pattern.
-export async function sayAs({ identityKey, roomName, name, npub, text }) {
+// identity" pattern. Initial position can be seeded via `{x, y}`.
+export async function sayAs({ identityKey, roomName, name, npub, text, x, y }) {
   const key = `${identityKey}::${roomName || "sandbox"}`;
   const entry = await ensurePersistent(key, {
     roomName: roomName || "sandbox",
     name,
     npub,
-    isAgent: true, // join as a presence so other clients see the roster
+    isAgent: true,
+    x, y,
   });
   entry.room.send("say", { text });
   return { ok: true, roomId: entry.room.id };
+}
+
+// Move an identity's persistent room client to (x, y).
+export async function moveAs({ identityKey, roomName, name, npub, x, y }) {
+  const key = `${identityKey}::${roomName || "sandbox"}`;
+  const entry = await ensurePersistent(key, {
+    roomName: roomName || "sandbox",
+    name,
+    npub,
+    isAgent: true,
+    x, y,
+  });
+  entry.room.send("move", { x, y });
+  return { ok: true };
 }

@@ -26,6 +26,14 @@ export default function RelayFeed() {
   for (const c of characters) if (c.pubkey) npubToName.set(c.pubkey, c.name)
   if (adminInfo?.pubkey) npubToName.set(adminInfo.pubkey, adminInfo.profile?.name || 'Administrator')
 
+  const adminEventCount = adminInfo?.pubkey
+    ? events.filter((e) => e.pubkey === adminInfo.pubkey).length
+    : 0
+
+  function copy(text) {
+    try { navigator.clipboard?.writeText(text) } catch {}
+  }
+
   return (
     <div className="relay-feed-view">
       <header>
@@ -36,6 +44,37 @@ export default function RelayFeed() {
           <span className="muted">{events.length} events</span>
         </div>
       </header>
+
+      <div className="relay-feed-info">
+        <div className="agent-sandbox-info-cell">
+          <span className="agent-sandbox-info-label">Admin</span>
+          <div className="agent-sandbox-info-val">
+            {adminInfo ? (
+              <>
+                <strong>{adminInfo.profile?.name || 'Administrator'}</strong>
+                <code title={adminInfo.pubkey}>{adminInfo.npub?.slice(0, 16)}…</code>
+                <button className="agent-sandbox-info-copy" onClick={() => copy(adminInfo.npub)}>
+                  copy
+                </button>
+              </>
+            ) : <span className="muted">loading…</span>}
+          </div>
+        </div>
+        <div className="agent-sandbox-info-cell">
+          <span className="agent-sandbox-info-label">Characters</span>
+          <div className="agent-sandbox-info-val">
+            <strong>{characters.length}</strong>
+            <span className="muted">· {characters.filter((c) => c.runtime?.running).length} running</span>
+          </div>
+        </div>
+        <div className="agent-sandbox-info-cell">
+          <span className="agent-sandbox-info-label">Events</span>
+          <div className="agent-sandbox-info-val">
+            <strong>{events.length}</strong>
+            <span className="muted">· {adminEventCount} from admin</span>
+          </div>
+        </div>
+      </div>
 
       {events.length === 0 ? (
         <p className="muted">Waiting for events…</p>

@@ -1754,3 +1754,282 @@ body {
 .sandbox2-card-runtime-dot.thinking {
   animation: sandbox2-pulse-amber 0.9s ease-in-out infinite;
 }
+
+/* ==========================================================================
+   Sandbox v3 — map-first layout
+   ========================================================================== */
+
+.sandbox3 {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  height: 100%;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.sandbox3-cards {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  min-height: 0; padding: var(--sp-3);
+  background: var(--card);
+  border: 2px solid var(--ink);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.sandbox3-cards header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding-bottom: var(--sp-2); border-bottom: 1.5px solid var(--ink);
+}
+.sandbox3-cards h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: 75%; font-weight: 800; font-size: 18px;
+  letter-spacing: -.02em; text-transform: lowercase;
+  color: var(--ink);
+}
+.sandbox3-cards header button {
+  padding: 4px 12px;
+  border: 2px solid var(--ink); background: var(--ink); color: var(--paper);
+  font-family: var(--font-display); font-weight: 800; font-stretch: 75%;
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  cursor: pointer; box-shadow: 2px 2px 0 var(--transmit);
+}
+.sandbox3-cards header button:hover { transform: translate(1px,1px); box-shadow: 1px 1px 0 var(--transmit); }
+
+.sandbox3-card-list {
+  list-style: none; margin: 0; padding: 2px;
+  overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-2);
+}
+.sandbox3-card {
+  display: flex; gap: var(--sp-2);
+  background: var(--paper); border: 1.5px solid var(--ink);
+  padding: var(--sp-2); cursor: grab; user-select: none;
+  box-shadow: 2px 2px 0 var(--ink);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.sandbox3-card:hover { transform: translate(-1px,-1px); box-shadow: 3px 3px 0 var(--transmit); }
+.sandbox3-card:active { cursor: grabbing; transform: translate(1px,1px); box-shadow: 1px 1px 0 var(--ink); }
+.sandbox3-card.running { background: var(--ok-bg); }
+.sandbox3-card.thinking { animation: card-pulse 1.2s ease-in-out infinite; }
+@keyframes card-pulse {
+  0%, 100% { box-shadow: 2px 2px 0 var(--ink); }
+  50%      { box-shadow: 2px 2px 0 var(--amber); }
+}
+
+.sandbox3-card-portrait {
+  position: relative;
+  flex: 0 0 56px; width: 56px; height: 56px;
+  background: var(--paper-3); border: 1.5px solid var(--ink);
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.sandbox3-card-portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sandbox3-card-portrait-fallback {
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 900;
+  font-size: 28px; color: var(--prussian);
+}
+.sandbox3-card-dot {
+  position: absolute; top: 4px; right: 4px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--lime); border: 1.5px solid var(--ink);
+}
+.sandbox3-card.thinking .sandbox3-card-dot { background: var(--amber); }
+
+.sandbox3-card-body {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+}
+.sandbox3-card-name {
+  font-family: var(--font-display); font-weight: 700; font-stretch: 85%;
+  font-size: 15px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sandbox3-card-status {
+  font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ok-ink);
+}
+.sandbox3-card-about {
+  margin: 0; font-size: 11px; color: var(--ink-2); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sandbox3-card-actions { margin-top: 2px; display: flex; gap: 4px; }
+.sandbox3-card-actions button {
+  padding: 2px 8px; border: 1.5px solid var(--ink); background: var(--paper);
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
+  text-transform: uppercase; cursor: pointer;
+}
+.sandbox3-card-actions button:hover { background: var(--ink); color: var(--paper); }
+.sandbox3-card-actions button.primary { background: var(--ink); color: var(--paper); }
+.sandbox3-card-actions button.primary:hover { background: var(--transmit); border-color: var(--transmit); }
+.sandbox3-card-actions button.danger { color: var(--bad-ink); border-color: var(--bad-ink); }
+.sandbox3-card-actions button.danger:hover { background: var(--bad-ink); color: var(--paper); }
+
+/* ── Stage (map + chat + input) ── */
+.sandbox3-stage {
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  gap: var(--sp-2); min-height: 0;
+  background: var(--card);
+  border: 2px solid var(--ink);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-3);
+  overflow: hidden;
+}
+.sandbox3-stage header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  border-bottom: 1.5px solid var(--ink); padding-bottom: var(--sp-2);
+}
+.sandbox3-stage header h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: 75%; font-weight: 800; font-size: 22px;
+  letter-spacing: -.02em; text-transform: lowercase;
+  color: var(--ink);
+  display: flex; align-items: baseline; gap: var(--sp-2);
+}
+
+.sandbox3-map-frame {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 0; overflow: hidden;
+  background:
+    repeating-linear-gradient(45deg, var(--paper-3) 0 2px, transparent 2px 6px),
+    var(--paper-2);
+  border: 1.5px solid var(--ink);
+}
+.sandbox3-toast {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  padding: 6px 12px;
+  background: var(--ink); color: var(--paper);
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: .05em; border: 1.5px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--transmit);
+}
+
+.sandbox3-chatlog {
+  max-height: 120px; overflow-y: auto;
+  background: var(--paper); border: 1.5px solid var(--ink);
+  padding: var(--sp-2);
+}
+.sandbox3-chatlog ul { list-style: none; padding: 0; margin: 0; }
+.sandbox3-chatlog li {
+  padding: 2px 0; font-size: 12px; line-height: 1.4;
+  border-bottom: 1px dotted var(--ink-faint);
+}
+.sandbox3-chatlog li:last-child { border-bottom: none; }
+.sandbox3-chatlog strong {
+  color: var(--transmit); font-family: var(--font-mono);
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+}
+
+/* ── Room map (the grid) ── */
+.room-map-wrap {
+  width: 100%; max-width: 880px;
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-2);
+}
+.room-map {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  gap: 1px;
+  background: var(--ink);
+  border: 2px solid var(--ink);
+}
+.room-tile {
+  background: var(--card);
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  transition: background 0.1s;
+  cursor: pointer;
+}
+.room-tile:hover { background: var(--paper-2); }
+.room-tile.occupied { cursor: default; }
+.room-tile.drag-over {
+  background: var(--lime);
+  box-shadow: inset 0 0 0 2px var(--transmit);
+}
+
+.room-tile-avatar {
+  width: 82%; height: 82%;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1.5px solid var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  background: var(--paper-3);
+  box-shadow: 1px 1px 0 var(--ink);
+}
+.room-tile-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.room-tile-avatar span {
+  font-family: var(--font-display); font-weight: 800; font-stretch: 75%;
+  font-size: 14px; color: var(--prussian);
+}
+.room-tile-avatar.running { border-color: var(--ok-ink); }
+.room-tile-avatar.thinking { border-color: var(--amber); animation: card-pulse 1.2s ease-in-out infinite; }
+.room-tile-avatar.kind-human { background: var(--transmit); color: var(--paper); }
+.room-tile-avatar.kind-human span { color: var(--paper); }
+.room-tile-avatar.kind-admin { background: var(--prussian); }
+.room-tile-avatar.kind-admin span { color: var(--paper); }
+
+.room-tile-badge {
+  position: absolute; bottom: 1px; right: 1px;
+  background: var(--ink); color: var(--paper);
+  font-family: var(--font-mono); font-size: 8px;
+  padding: 0 3px; letter-spacing: .05em;
+}
+.room-tile-hint {
+  position: absolute; top: -28px; left: 50%; transform: translateX(-50%);
+  padding: 2px 8px;
+  background: var(--ink); color: var(--paper);
+  font-family: var(--font-mono); font-size: 10px;
+  white-space: nowrap; z-index: 5;
+  box-shadow: 2px 2px 0 var(--transmit);
+}
+.room-map-caption {
+  margin: 0;
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--ink-muted); letter-spacing: .1em; text-transform: uppercase;
+}
+
+/* ── Relay Feed: info strip at top (moved from Sandbox) ── */
+.relay-feed-info {
+  display: flex; gap: var(--sp-5);
+  margin-bottom: var(--sp-3); padding: var(--sp-2) var(--sp-3);
+  background: var(--card);
+  border: 1.5px solid var(--ink);
+  box-shadow: 2px 2px 0 var(--ink);
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+/* ── Sidebar collapse toggle ── */
+.sidebar-title-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-2);
+}
+.sidebar-collapse {
+  flex: 0 0 24px;
+  width: 24px; height: 24px;
+  margin-top: 2px;
+  border: 1.5px solid var(--ink); background: var(--paper);
+  color: var(--ink); font-family: var(--font-mono); font-size: 14px; font-weight: 700;
+  line-height: 1; cursor: pointer; padding: 0;
+  box-shadow: 1px 1px 0 var(--ink);
+}
+.sidebar-collapse:hover { background: var(--ink); color: var(--paper); }
+
+.app.sidebar-collapsed .sidebar {
+  width: 0; padding: 0; overflow: hidden; border-right: 0;
+  transition: width 0.18s ease;
+}
+.app .sidebar { transition: width 0.18s ease; }
+
+.sidebar-reopen {
+  position: fixed; top: 14px; left: 0; z-index: 30;
+  width: 22px; height: 44px;
+  border: 1.5px solid var(--ink); border-left: 0;
+  background: var(--paper); color: var(--ink);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  line-height: 1; cursor: pointer; padding: 0;
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.sidebar-reopen:hover { background: var(--ink); color: var(--paper); }

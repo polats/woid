@@ -6,13 +6,28 @@ export default function Sidebar({
   references,
   onNewDiagram,
   onAddReference,
+  onToggle,
+  collapsed,
 }) {
   const linkClass = (active) => `sidebar-link${active ? ' active' : ''}`
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" aria-hidden={collapsed ? 'true' : 'false'}>
       <div className="sidebar-title">
-        <strong>{config.name}</strong>
+        <div className="sidebar-title-row">
+          <strong>{config.name}</strong>
+          {onToggle && (
+            <button
+              type="button"
+              className="sidebar-collapse"
+              onClick={onToggle}
+              title="Hide sidebar"
+              aria-label="Hide sidebar"
+            >
+              ‹
+            </button>
+          )}
+        </div>
         {config.description && <p>{config.description}</p>}
       </div>
 

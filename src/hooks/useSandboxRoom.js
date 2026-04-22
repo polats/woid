@@ -3,7 +3,7 @@ import { Client } from 'colyseus.js'
 
 export function useSandboxRoom({ url, roomName }) {
   const [status, setStatus] = useState('idle')
-  const [state, setState] = useState({ agents: [], messages: [] })
+  const [state, setState] = useState({ agents: [], messages: [], width: 16, height: 12 })
   const [error, setError] = useState(null)
   const roomRef = useRef(null)
 
@@ -31,6 +31,8 @@ export function useSandboxRoom({ url, roomName }) {
                 npub: p?.npub ?? '',
                 isAgent: !!p?.isAgent,
                 joinedAt: p?.joinedAt ?? 0,
+                x: p?.x ?? 0,
+                y: p?.y ?? 0,
               })
             })
           }
@@ -38,7 +40,12 @@ export function useSandboxRoom({ url, roomName }) {
           const messages = (m && typeof m.map === 'function')
             ? m.map((x) => ({ ts: x.ts, from: x.from, fromNpub: x.fromNpub, text: x.text }))
             : []
-          setState({ agents, messages })
+          setState({
+            agents,
+            messages,
+            width: room.state?.width ?? 16,
+            height: room.state?.height ?? 12,
+          })
         }
         room.onStateChange(sync)
         sync()

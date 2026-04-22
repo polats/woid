@@ -197,27 +197,34 @@ test.describe('agent-sandbox', () => {
     await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' })
   })
 
-  test('sandbox view: info strip + cards column + room pane', async ({ page }) => {
+  test('sandbox view: cards column + map stage + chat input', async ({ page }) => {
     const consoleErrors: string[] = []
     page.on('pageerror', (err) => consoleErrors.push(err.message))
     page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()) })
 
     await page.goto('/#/agent-sandbox')
-    await expect(page.locator('.sandbox2-info')).toBeVisible()
-    await expect(page.locator('.sandbox2-info').getByText('Administrator')).toBeVisible({ timeout: 10_000 })
     await expect(page.getByRole('heading', { name: 'Agents' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Room' })).toBeVisible()
-    // Colyseus connects — observer shows 'connected'
+    // Map tiles render
+    await expect(page.locator('.room-tile').first()).toBeVisible()
+    // Chat input lives at the bottom of the stage
+    await expect(page.locator('.sandbox2-chat input')).toBeVisible()
+    // Observer reaches 'connected'
     await expect(page.locator('.status-connected').first()).toBeVisible({ timeout: 10_000 })
 
     const real = consoleErrors.filter((e) => !e.includes('/api/github/me'))
     expect(real, `console errors:\n${real.join('\n')}`).toHaveLength(0)
   })
 
+  test('info strip lives on the relay-feed page (moved from sandbox)', async ({ page }) => {
+    await page.goto('/#/relay-feed')
+    await expect(page.locator('.relay-feed-info').getByText('Administrator')).toBeVisible({ timeout: 10_000 })
+  })
+
   test('+ New mints a character, shows a card, opens the profile modal', async ({ page }) => {
     await page.goto('/#/agent-sandbox')
     const before = await (await fetch(`${BRIDGE}/characters`)).json()
-    await page.locator('.sandbox2-cards header').getByRole('button', { name: '+ New' }).click()
+    await page.locator('.sandbox3-cards header').getByRole('button', { name: '+ New' }).click()
     // A new card appears in the list.
     await expect.poll(async () => {
       const r = await fetch(`${BRIDGE}/characters`)
@@ -240,23 +247,21 @@ test.describe('agent-sandbox', () => {
     }
   })
 
-  test('card spawn flow: card turns running, relay gets agent kind:1, inspector shows events', async ({ page }) => {
+  test('spawn flow (via API): card turns running, relay gets kind:1, clicking card opens inspector', async ({ page }) => {
     const name = `flow-${Date.now().toString().slice(-6)}`
     const c = await createCharacter(name)
     try {
-      await page.goto('/#/agent-sandbox')
-      const card = page.locator('.sandbox2-card', { hasText: name })
-      await expect(card).toBeVisible({ timeout: 10_000 })
+      // Drag-and-drop in Playwright is brittle for HTML5 DnD; drive the
+      // same endpoint the drop handler would call, then verify the UI
+      // reflects the spawned state.
+      await spawn(c.pubkey, { x: 4, y: 4 })
 
-      await card.getByRole('button', { name: 'spawn' }).click()
+      await page.goto('/#/agent-sandbox')
+      const card = page.locator('.sandbox3-card', { hasText: name })
+      await expect(card).toBeVisible({ timeout: 10_000 })
       await expect(card).toHaveClass(/running/, { timeout: 15_000 })
 
-      const drawer = page.locator('.agent-inspector')
-      await expect(drawer).toBeVisible({ timeout: 5_000 })
-
-      // Poll the relay directly for a kind:1 authored by this character.
-      // With continuous listening the driver's first turn runs the default
-      // "introduce yourself" seed, which should post within ~30-60s of spawn.
+      // Relay gets this character's first post within ~2min.
       const relayWs = RELAY.replace(/^http/, 'ws')
       const deadline = Date.now() + 120_000
       let found: { content: string } | null = null
@@ -282,8 +287,13 @@ test.describe('agent-sandbox', () => {
       }
       expect(found, `expected a kind:1 event from ${c.pubkey} on the relay`).not.toBeNull()
 
+      // Clicking the running card opens the inspector drawer.
+      await card.click()
+      const drawer = page.locator('.agent-inspector')
+      await expect(drawer).toBeVisible({ timeout: 5_000 })
       await expect(drawer.locator('.ai-row-assistant, .ai-row-tool-call').first()).toBeVisible({ timeout: 10_000 })
 
+      // Stop via the card's stop button.
       await card.getByRole('button', { name: 'stop' }).click()
       await expect(card).not.toHaveClass(/running/, { timeout: 10_000 })
     } finally {
@@ -301,29 +311,23 @@ test.describe('agent-sandbox', () => {
       const result = await spawn(c.pubkey, { seedMessage: 'Just reply with the word done.' })
       await page.goto('/#/agent-sandbox')
 
-      // Wait until the driver is listening — it shows up as a presence row.
+      // Wait until the driver is listening — the card shows 'running'.
+      const card = page.locator('.sandbox3-card', { hasText: c.name })
+      await expect(card).toHaveClass(/running/, { timeout: 30_000 })
+
+      // Also on the map — the character's avatar tile exists with either
+      // a running or thinking border (both imply seat held).
       await expect
         .poll(async () => {
-          const rows = page.locator('.sandbox2-room-body .agent-sandbox-list li', { hasText: c.name })
-          return await rows.count()
-        }, { timeout: 30_000 })
+          return await page.locator('.room-tile-avatar.running, .room-tile-avatar.thinking').count()
+        }, { timeout: 10_000 })
         .toBeGreaterThan(0)
 
       // Stop the runtime explicitly.
       const stopRes = await fetch(`${BRIDGE}/agents/${result.agentId}`, { method: 'DELETE' })
       expect(stopRes.ok).toBe(true)
 
-      // Presence clears within a few state-change cycles.
-      await expect
-        .poll(async () => {
-          const rows = page.locator('.sandbox2-room-body .agent-sandbox-list li', { hasText: c.name })
-          return await rows.count()
-        }, { timeout: 10_000 })
-        .toBe(0)
-
-      // Card's portrait dot is gone (runtime null after the 2min reap, but
-      // running class should drop immediately since `listening` went false).
-      const card = page.locator('.sandbox2-card', { hasText: c.name })
+      // Card goes back to idle.
       await expect(card).not.toHaveClass(/running/, { timeout: 10_000 })
     } finally {
       await fetch(`${BRIDGE}/characters/${c.pubkey}`, { method: 'DELETE' }).catch(() => {})
@@ -376,7 +380,7 @@ test.describe('agent-sandbox', () => {
     // Message should appear in the Recent chat list within a couple of
     // Colyseus state-change cycles.
     await expect(
-      page.locator('.sandbox2-room-body .agent-sandbox-messages li', { hasText: msg }),
+      page.locator('.sandbox3-chatlog li', { hasText: msg }),
     ).toBeVisible({ timeout: 8_000 })
   })
 

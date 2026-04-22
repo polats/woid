@@ -31,10 +31,19 @@ function parseHash() {
   return { view: 'doc', name: homeDoc?.name ?? null }
 }
 
+const SIDEBAR_KEY = 'woid.sidebar.collapsed'
+
 export default function App() {
   const route = useHashRoute(parseHash)
   const [diagrams, setDiagrams] = useState([])
   const [references, setReferences] = useState([])
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem(SIDEBAR_KEY) === '1' } catch { return false }
+  })
+
+  useEffect(() => {
+    try { localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? '1' : '0') } catch {}
+  }, [sidebarCollapsed])
 
   const refreshDiagrams = useCallback(
     () => fetch('/api/diagrams').then((r) => r.json()).then(setDiagrams),
@@ -82,7 +91,7 @@ export default function App() {
   const currentDoc = route.view === 'doc' ? docs.find((d) => d.name === route.name) : null
 
   return (
-    <div className="app">
+    <div className={`app${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <Sidebar
         config={config}
         route={route}
@@ -91,7 +100,19 @@ export default function App() {
         references={references}
         onNewDiagram={newDiagram}
         onAddReference={addReference}
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((v) => !v)}
       />
+      <button
+        type="button"
+        className="sidebar-reopen"
+        onClick={() => setSidebarCollapsed(false)}
+        title="Show sidebar"
+        aria-label="Show sidebar"
+        hidden={!sidebarCollapsed}
+      >
+        ›
+      </button>
       <main className="content-area">
         {route.view === 'tasks' && <Board />}
         {route.view === 'agent-sandbox' && config.features?.agentSandbox && <Sandbox />}
