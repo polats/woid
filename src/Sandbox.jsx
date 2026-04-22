@@ -243,6 +243,25 @@ export default function Sandbox() {
                         {thinking ? 'thinking…' : 'listening'} · {runtime.turns} turn{runtime.turns === 1 ? '' : 's'}
                       </div>
                     )}
+                    {runtime?.lastUsage && (() => {
+                      const total = runtime.lastUsage.totalTokens ?? 0
+                      // Models in our catalog currently report contextWindow=131072;
+                      // surface it here so the gauge scales as we add bigger models.
+                      const cap = 131072
+                      const pct = Math.min(100, (total / cap) * 100)
+                      const level = pct > 80 ? 'red' : pct > 50 ? 'amber' : 'green'
+                      return (
+                        <div
+                          className={`sandbox3-card-gauge level-${level}`}
+                          title={`${total.toLocaleString()} / ${cap.toLocaleString()} tokens · ${pct.toFixed(1)}%`}
+                        >
+                          <div className="sandbox3-card-gauge-bar">
+                            <div className="sandbox3-card-gauge-fill" style={{ width: `${pct}%` }} />
+                          </div>
+                          <span>{total.toLocaleString()}<small> / {(cap/1000).toFixed(0)}K</small></span>
+                        </div>
+                      )
+                    })()}
                     {c.about && <p className="sandbox3-card-about">{c.about}</p>}
                     {c.state && (
                       <p className="sandbox3-card-state" title={c.state}>

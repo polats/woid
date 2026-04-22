@@ -16,6 +16,7 @@ import WebSocket from "ws";
 // nostr-tools SimplePool uses global WebSocket; Node doesn't expose one by default.
 useWebSocketImplementation(WebSocket);
 import { buildSystemPrompt, buildUserTurn } from "./buildContext.js";
+import { readSessionTurns, readLatestUsage } from "./sessionReader.js";
 import { joinRoom, leaveRoom, sendSay, sayAs, moveAs, moveAgent, onNewMessage, onPositionChange, roomSnapshot } from "./room-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -67,6 +68,7 @@ function availableModels() {
         architecture: m.architecture,
         totalParamsB: m.total_params_b,
         activeParamsB: m.active_params_b,
+        contextWindow: 131072,
       };
     })
     .sort((a, b) => {
@@ -742,6 +744,10 @@ function runtimeSnapshot(pubkey) {
   //   running   — driver alive, owns a Colyseus seat, will react to new messages
   //   thinking  — pi child process is active right now (a turn is in flight)
   //   listening — alias for running; exposed for UI clarity
+  // lastUsage — latest assistant usage from pi's session file, for the
+  // card-level context gauge. Cheap tail-read.
+  const sessionPath = join(getCharDir(pubkey), "session.jsonl");
+  const latest = readLatestUsage(sessionPath);
   return {
     agentId: r.id,
     running: !!r.rec.listening,
@@ -752,6 +758,7 @@ function runtimeSnapshot(pubkey) {
     roomName: r.rec.roomName ?? null,
     exitedAt: r.rec.exitedAt ?? null,
     exitCode: r.rec.exitCode ?? null,
+    lastUsage: latest?.usage ?? null,
   };
 }
 
@@ -1205,6 +1212,31 @@ app.get("/characters/:pubkey", (req, res) => {
     updatedAt: c.updatedAt ?? null,
     runtime: runtimeSnapshot(c.pubkey),
   });
+});
+
+// Turns — reads the session JSONL pi writes per character, clusters
+// entries into turn objects (user → assistant → tool results → next
+// user). No separate bookkeeping; pi is the source of truth. Used by
+// the waterfall inspector.
+app.get("/characters/:pubkey/turns", (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+  const sessionPath = join(getCharDir(pubkey), "session.jsonl");
+  const result = readSessionTurns(sessionPath, { limit });
+  res.json(result);
+});
+
+app.get("/characters/:pubkey/turns/:turnId", (req, res) => {
+  const { pubkey, turnId } = req.params;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  const sessionPath = join(getCharDir(pubkey), "session.jsonl");
+  const { turns, meta } = readSessionTurns(sessionPath, { limit: 100 });
+  const turn = turns.find((t) => t.turnId === turnId);
+  if (!turn) return res.status(404).json({ error: "turn not found" });
+  res.json({ turn, meta });
 });
 
 app.get("/characters/:pubkey/avatar", (req, res) => {

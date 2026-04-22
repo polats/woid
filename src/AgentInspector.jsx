@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAgentEvents } from './hooks/useAgentEvents.js'
+import AgentWaterfall from './AgentWaterfall.jsx'
 
 // Walk pi events and pull the latest usage snapshot + counts of deltas.
 // pi emits `usage: {input, output, totalTokens, cacheRead, cacheWrite}` on
@@ -138,7 +139,14 @@ function EventRow({ ev }) {
 
 export default function AgentInspector({ bridgeUrl, agent, onClose }) {
   const [showRaw, setShowRaw] = useState(false)
-  const { events, status } = useAgentEvents({ bridgeUrl, agentId: agent?.agentId })
+  const [mode, setMode] = useState('live') // 'live' | 'turns'
+  const { events, status } = useAgentEvents({
+    bridgeUrl,
+    agentId: agent?.agentId,
+    // Live mode streams SSE; Turns mode reads the session file — no need
+    // to also tail the ring buffer. Don't open an unused EventSource.
+    enabled: mode === 'live',
+  })
 
   const rendered = useMemo(() => {
     return events.map((ev, i) => <EventRow key={ev.seq ?? i} ev={ev} />).filter(Boolean)
@@ -165,33 +173,47 @@ export default function AgentInspector({ bridgeUrl, agent, onClose }) {
           <span className={`status status-${status}`}>{status}</span>
         </div>
         <div>
-          <label className="ai-raw-toggle">
-            <input type="checkbox" checked={showRaw} onChange={(e) => setShowRaw(e.target.checked)} /> raw
-          </label>
+          <div className="ai-mode">
+            <button className={mode === 'live' ? 'on' : ''} onClick={() => setMode('live')}>Live</button>
+            <button className={mode === 'turns' ? 'on' : ''} onClick={() => setMode('turns')}>Turns</button>
+          </div>
+          {mode === 'live' && (
+            <label className="ai-raw-toggle">
+              <input type="checkbox" checked={showRaw} onChange={(e) => setShowRaw(e.target.checked)} /> raw
+            </label>
+          )}
           <button onClick={onClose}>close</button>
         </div>
       </header>
-      <div className="agent-inspector-activity">
-        <span className={`ai-stat${flashTotal ? ' flash' : ''}`} title={`input ${activity.input} · output ${activity.output}`}>
-          <span className="ai-stat-label">tokens</span>
-          <strong>{activity.total.toLocaleString()}</strong>
-          <span className="muted">↑{activity.output.toLocaleString()} ↓{activity.input.toLocaleString()}</span>
-        </span>
-        <span className={`ai-stat${flashDeltas ? ' flash' : ''}`}>
-          <span className="ai-stat-label">deltas</span>
-          <strong>{activity.deltas}</strong>
-        </span>
-        <span className="ai-stat">
-          <span className="ai-stat-label">tools</span>
-          <strong>{activity.toolCalls}</strong>
-        </span>
-        {isLive && <span className="ai-pulse" title="streaming…">●</span>}
-      </div>
+      {mode === 'live' && (
+        <div className="agent-inspector-activity">
+          <span className={`ai-stat${flashTotal ? ' flash' : ''}`} title={`input ${activity.input} · output ${activity.output}`}>
+            <span className="ai-stat-label">tokens</span>
+            <strong>{activity.total.toLocaleString()}</strong>
+            <span className="muted">↑{activity.output.toLocaleString()} ↓{activity.input.toLocaleString()}</span>
+          </span>
+          <span className={`ai-stat${flashDeltas ? ' flash' : ''}`}>
+            <span className="ai-stat-label">deltas</span>
+            <strong>{activity.deltas}</strong>
+          </span>
+          <span className="ai-stat">
+            <span className="ai-stat-label">tools</span>
+            <strong>{activity.toolCalls}</strong>
+          </span>
+          {isLive && <span className="ai-pulse" title="streaming…">●</span>}
+        </div>
+      )}
       <div className="agent-inspector-body">
-        {events.length === 0 && <p className="muted">Waiting for events…</p>}
-        {showRaw
-          ? <pre className="ai-raw">{events.map((e) => JSON.stringify(e)).join('\n')}</pre>
-          : rendered}
+        {mode === 'turns' ? (
+          <AgentWaterfall bridgeUrl={bridgeUrl} pubkey={agent.npub} model={agent.model} />
+        ) : (
+          <>
+            {events.length === 0 && <p className="muted">Waiting for events…</p>}
+            {showRaw
+              ? <pre className="ai-raw">{events.map((e) => JSON.stringify(e)).join('\n')}</pre>
+              : rendered}
+          </>
+        )}
       </div>
     </aside>
   )
