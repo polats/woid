@@ -31,7 +31,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 // server as a third provider called `local`. No auth — the served model is
 // whatever the operator has loaded at the URL. See agent-sandbox/llama-cpp/
 // for a self-contained llama.cpp stack that pairs with this.
-const LOCAL_LLM_BASE_URL = process.env.LOCAL_LLM_BASE_URL || "";
+let LOCAL_LLM_BASE_URL = process.env.LOCAL_LLM_BASE_URL || "";
 // URL browsers/Nostr clients use to fetch resources served by this bridge.
 // Inside docker-compose the bridge is reachable at http://pi-bridge:3457,
 // but kind:0 profiles need a URL external tools can resolve — default to
@@ -229,7 +229,43 @@ function setupPiConfig() {
   console.log(`[pi-bridge] wrote pi models.json with ${availableModels().length} models`);
 }
 
-if (NVIDIA_NIM_API_KEY || GEMINI_API_KEY || LOCAL_LLM_BASE_URL) setupPiConfig();
+// Probe LOCAL_LLM_BASE_URL at boot. Containers often can't resolve
+// `host.docker.internal` without explicit extra_hosts wiring, so if the
+// configured URL is unreachable and uses that hostname, fall back to the
+// default docker bridge gateway 172.17.0.1 which every bridged container
+// can reach out-of-the-box.
+async function probeAndFixLocalLlmUrl() {
+  if (!LOCAL_LLM_BASE_URL) return;
+  const tryUrl = async (url) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1500);
+    try {
+      const r = await fetch(url.replace(/\/v1\/?$/, "") + "/health", { signal: ctrl.signal });
+      return r.ok;
+    } catch { return false; }
+    finally { clearTimeout(t); }
+  };
+  if (await tryUrl(LOCAL_LLM_BASE_URL)) {
+    console.log(`[pi-bridge] local llm reachable at ${LOCAL_LLM_BASE_URL}`);
+    return;
+  }
+  console.warn(`[pi-bridge] local llm NOT reachable at ${LOCAL_LLM_BASE_URL}`);
+  if (LOCAL_LLM_BASE_URL.includes("host.docker.internal")) {
+    const alt = LOCAL_LLM_BASE_URL.replace("host.docker.internal", "172.17.0.1");
+    if (await tryUrl(alt)) {
+      console.warn(`[pi-bridge] falling back to docker bridge gateway: ${alt}`);
+      LOCAL_LLM_BASE_URL = alt;
+      return;
+    }
+  }
+  console.warn(`[pi-bridge] local provider may fail — check LOCAL_LLM_BASE_URL and that llama.cpp is up on the host`);
+}
+
+async function bootstrap() {
+  if (LOCAL_LLM_BASE_URL) await probeAndFixLocalLlmUrl();
+  if (NVIDIA_NIM_API_KEY || GEMINI_API_KEY || LOCAL_LLM_BASE_URL) setupPiConfig();
+}
+await bootstrap();
 
 // Single relay pool shared by admin + per-agent publishing.
 const pool = new SimplePool();

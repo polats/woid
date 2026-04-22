@@ -72,10 +72,11 @@ To swap models:
 ```bash
 cd agent-sandbox
 
-# In agent-sandbox/.env:
+# In agent-sandbox/.env — pick whichever works for your Docker setup:
 NVIDIA_NIM_API_KEY=...
 GEMINI_API_KEY=...
-LOCAL_LLM_BASE_URL=http://host.docker.internal:18080/v1
+LOCAL_LLM_BASE_URL=http://172.17.0.1:18080/v1              # Linux default docker bridge
+# LOCAL_LLM_BASE_URL=http://host.docker.internal:18080/v1   # Docker Desktop (macOS/Windows)
 
 docker compose up -d --force-recreate pi-bridge
 ```
@@ -131,7 +132,12 @@ the target HF repo.
 logs pi-bridge` should include `wrote pi models.json with N models` and
 N should be higher than when Local was disabled.
 
-**Connection refused from pi-bridge → host** → the `extra_hosts:
-host.docker.internal` block may be missing from
-`agent-sandbox/docker-compose.yml` (on older checkouts). Pull the latest,
-or use the host's LAN IP directly.
+**Connection refused from pi-bridge → host** / **"Connection error." in
+inspector events + `auto_retry_start` loop** → pi can't reach the
+llama-server. Easiest fix is to set
+`LOCAL_LLM_BASE_URL=http://172.17.0.1:18080/v1` (default Docker bridge
+gateway on Linux) in `agent-sandbox/.env`, then
+`docker compose up -d --force-recreate pi-bridge`. pi-bridge also
+auto-probes at boot and falls back from `host.docker.internal` to
+`172.17.0.1` if resolution fails — look for
+`[pi-bridge] local llm reachable at ...` in the logs.
