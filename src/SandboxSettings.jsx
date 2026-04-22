@@ -8,7 +8,7 @@ import { useBridgeModels } from './hooks/useBridgeModels.js'
  * useSandboxSettings; this component is pure UI.
  */
 export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
-  const { models, defaultModel: serverDefault } = useBridgeModels(bridgeUrl)
+  const { models, defaultProvider: serverDefaultProvider, defaultModel: serverDefaultModel } = useBridgeModels(bridgeUrl)
   const [open, setOpen] = useState(false)
 
   const serverProviders = useMemo(
@@ -16,18 +16,35 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
     [models],
   )
 
-  // Which provider is active — user selection wins, else server default.
-  const activeProvider = settings.provider || serverProviders[0] || 'nvidia-nim'
+  // Which provider is active. Priority: user selection → server's
+  // PI_DEFAULT_PROVIDER (exposed via /models) → first known provider.
+  // We commit that default into settings on mount so it persists in
+  // localStorage — otherwise spawnBody's `if (settings.provider)` check
+  // falls through every session and the pi-bridge fallback never shows
+  // as "selected" in the UI.
+  const activeProvider = settings.provider || serverDefaultProvider || serverProviders[0] || 'nvidia-nim'
   const providerModels = useMemo(
     () => models.filter((m) => m.provider === activeProvider),
     [models, activeProvider],
   )
-  // If the user has a provider selected, keep settings.model consistent
-  // with it — snap to the provider's first model if the saved id isn't
-  // valid anymore. We deliberately *don't* write settings on mount when
-  // `settings.provider` is unset: that's the "use per-character model"
-  // state, and spawning before the user clicks a provider should leave
-  // per-character + server defaults in charge.
+
+  // Initial commit: when /models loads and settings is empty, write the
+  // server default into localStorage so subsequent renders see it as a
+  // real selection.
+  useEffect(() => {
+    if (settings.provider) return
+    if (!serverDefaultProvider) return
+    const defaultFromCatalog =
+      (serverDefaultModel && models.find((m) => m.id === serverDefaultModel && m.provider === serverDefaultProvider)?.id) ||
+      models.find((m) => m.provider === serverDefaultProvider)?.id ||
+      null
+    if (defaultFromCatalog) {
+      onChange({ provider: serverDefaultProvider, model: defaultFromCatalog })
+    }
+  }, [settings.provider, serverDefaultProvider, serverDefaultModel, models, onChange])
+
+  // Keep settings.model consistent with the active provider — snap to
+  // the provider's first model if the saved id isn't valid anymore.
   useEffect(() => {
     if (!settings.provider) return
     if (providerModels.length === 0) return
@@ -90,16 +107,6 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
             ))}
           </select>
         </label>
-        <p className="sandbox3-settings-hint">
-          Wins over per-character model in AgentProfile. Click
-          <button
-            type="button"
-            className="sandbox3-settings-reset"
-            onClick={() => onChange({ provider: null, model: null })}
-            disabled={!settings.provider}
-          >reset</button>
-          to fall back to each character's own model (or pi-bridge default{serverDefault ? <>: <code>{serverDefault}</code></> : null}).
-        </p>
       </div>
     </details>
   )

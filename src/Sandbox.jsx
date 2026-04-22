@@ -3,8 +3,7 @@ import config from '../woid.config.json'
 import { useSandboxRoom } from './hooks/useSandboxRoom.js'
 import { useSandboxSettings } from './hooks/useSandboxSettings.js'
 import { useBridgeModels } from './hooks/useBridgeModels.js'
-import AgentInspector from './AgentInspector.jsx'
-import AgentProfile from './AgentProfile.jsx'
+import AgentDrawer from './AgentDrawer.jsx'
 import RoomMap from './RoomMap.jsx'
 import SandboxSettings from './SandboxSettings.jsx'
 
@@ -17,8 +16,11 @@ export default function Sandbox() {
   const [chatDraft, setChatDraft] = useState('')
   const [chatSending, setChatSending] = useState(false)
   const [chatError, setChatError] = useState(null)
-  const [profilePubkey, setProfilePubkey] = useState(null)
+  // Unified drawer state — `inspectedId` can be an agentId (running
+  // runtime) or a pubkey (any character, running or not). `drawerTab`
+  // picks which tab opens first; users can flip it from inside.
   const [inspectedId, setInspectedId] = useState(null)
+  const [drawerTab, setDrawerTab] = useState('context')
   const [creating, setCreating] = useState(false)
   const [spawnError, setSpawnError] = useState(null)
   const [humanInfo, setHumanInfo] = useState(null)
@@ -71,30 +73,31 @@ export default function Sandbox() {
       if (!r.ok) throw new Error(await r.text())
       const c = await r.json()
       await refresh()
-      setProfilePubkey(c.pubkey)
+      setInspectedId(c.pubkey)
+      setDrawerTab('profile')
     } catch (err) {
       setSpawnError(err.message || String(err))
     }
   }
 
   // Pick a coherent (provider, model) pair for a spawn. Priority:
-  //   1. Sidebar Settings — if user has selected a provider, that wins.
-  //      This is the *recent explicit* expression of intent; per-character
-  //      model in AgentProfile is the fallback, not the override.
-  //   2. Per-character c.model — used only if Settings has no provider
-  //      selected (i.e. user hasn't touched Settings yet).
-  //   3. Nothing — let pi-bridge use PI_MODEL / PI_DEFAULT_PROVIDER.
+  //   1. Sidebar Settings — the recent explicit expression of intent.
+  //   2. Per-character c.model — only if Settings has no provider set.
+  //   3. Nothing — server falls back to PI_MODEL / PI_DEFAULT_PROVIDER.
+  //
+  // We trust settings as-is without cross-validating against /models,
+  // because the catalog fetch can lag the first spawn on page load.
+  // The server re-validates and falls back to its own default if the
+  // pair is invalid.
   function spawnBody(c, extra = {}) {
     let model, provider
-    if (settings.provider) {
-      const forProvider = models.filter((m) => m.provider === settings.provider)
-      const hit = forProvider.find((m) => m.id === settings.model) ?? forProvider[0]
-      if (hit) { model = hit.id; provider = hit.provider }
-    }
-    if (!model && c.model) {
+    if (settings.provider && settings.model) {
+      provider = settings.provider
+      model = settings.model
+    } else if (c.model) {
       const hit = models.find((m) => m.id === c.model)
-      if (hit) { model = hit.id; provider = hit.provider }
-      else { model = c.model } // unknown id — let server fall through
+      model = c.model
+      if (hit) provider = hit.provider
     }
     return {
       pubkey: c.pubkey,
@@ -264,7 +267,13 @@ export default function Sandbox() {
                       try { e.dataTransfer.setDragImage(portrait, 28, 28) } catch {}
                     }
                   }}
-                  onClick={() => runtime && setInspectedId(runtime.agentId)}
+                  onClick={() => {
+                    // Running → Context tab. Not running → Profile (only
+                    // thing interesting about a stopped character is its
+                    // config).
+                    setInspectedId(runtime ? runtime.agentId : c.pubkey)
+                    setDrawerTab(runtime ? 'context' : 'profile')
+                  }}
                   role="button"
                   tabIndex={0}
                   title={
@@ -319,34 +328,16 @@ export default function Sandbox() {
                         {c.state}
                       </p>
                     )}
-                    <div className="sandbox3-card-actions">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setProfilePubkey(c.pubkey) }}
-                      >
-                        profile
-                      </button>
-                      <a
-                        className="sandbox3-card-jumble"
-                        href={c.npub ? `${JUMBLE_URL}/${c.npub}` : `${JUMBLE_URL}/${c.pubkey}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        title="Open this character's Nostr profile in Jumble"
-                      >
-                        jumble
-                      </a>
-                      {runtime && (
+                    {runtime && (
+                      <div className="sandbox3-card-actions">
                         <button
                           onClick={(e) => { e.stopPropagation(); stopRuntime(runtime.agentId) }}
                           className="danger"
                         >
                           stop
                         </button>
-                      )}
-                      {!runtime && (
-                        <span className="sandbox3-card-hint">drag to map →</span>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 </li>
               )
@@ -378,6 +369,7 @@ export default function Sandbox() {
               // If running: inspect by runtime id. Otherwise open by pubkey
               // so the drawer shows past turns from the session file.
               setInspectedId(c?.runtime?.agentId || pubkey)
+              setDrawerTab(c?.runtime?.agentId ? 'context' : 'profile')
             }}
           />
           {dropToast && <div className="sandbox3-toast">{dropToast.text}</div>}
@@ -410,19 +402,17 @@ export default function Sandbox() {
         </form>
       </section>
 
-      {inspectedAgent && (
-        <AgentInspector
+      {/* Drawer is pinned to viewport-left and slides in from there,
+          overlaying everything (agent cards included). */}
+      {inspectedId && (
+        <AgentDrawer
           bridgeUrl={cfg.bridgeUrl}
+          character={inspectedCharacter}
           agent={inspectedAgent}
+          initialTab={drawerTab}
           onClose={() => setInspectedId(null)}
-        />
-      )}
-      {profilePubkey && (
-        <AgentProfile
-          pubkey={profilePubkey}
-          onClose={() => setProfilePubkey(null)}
           onUpdated={() => refresh()}
-          onDeleted={() => { setProfilePubkey(null); refresh() }}
+          onDeleted={() => { setInspectedId(null); refresh() }}
         />
       )}
     </div>

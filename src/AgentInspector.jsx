@@ -137,33 +137,15 @@ function EventRow({ ev }) {
   }
 }
 
-export default function AgentInspector({ bridgeUrl, agent, onClose }) {
+export default function AgentInspector({ bridgeUrl, agent, view = 'context' }) {
   const [showRaw, setShowRaw] = useState(false)
-  const asideRef = useRef(null)
+  // Only stream SSE when the Live tab is actually showing — avoids
+  // holding an EventSource open while the user is on Context.
   const { events, status } = useAgentEvents({
     bridgeUrl,
     agentId: agent?.agentId,
-    enabled: true,
+    enabled: view === 'live',
   })
-
-  // Click-outside-to-dismiss. Listens on window mousedown so clicks on any
-  // non-inspector element (cards, map tiles, even the page background)
-  // close the drawer. Uses mousedown not click so drag-starts (which also
-  // fire mousedown) naturally dismiss — the user wanted to interact with
-  // something else anyway.
-  useEffect(() => {
-    function onDocMouseDown(e) {
-      if (!asideRef.current) return
-      if (asideRef.current.contains(e.target)) return
-      // Character cards host their own click-to-inspect logic — let them
-      // re-set inspectedId rather than racing with our close. Same for
-      // map avatars.
-      if (e.target.closest('.sandbox3-card') || e.target.closest('.room-tile-avatar.selectable')) return
-      onClose?.()
-    }
-    window.addEventListener('mousedown', onDocMouseDown)
-    return () => window.removeEventListener('mousedown', onDocMouseDown)
-  }, [onClose])
 
   const rendered = useMemo(() => {
     return events.map((ev, i) => <EventRow key={ev.seq ?? i} ev={ev} />).filter(Boolean)
@@ -176,26 +158,24 @@ export default function AgentInspector({ bridgeUrl, agent, onClose }) {
 
   if (!agent) return null
 
+  if (view === 'context') {
+    return (
+      <div className="agent-inspector">
+        <div className="agent-inspector-body">
+          <AgentWaterfall
+            bridgeUrl={bridgeUrl}
+            pubkey={agent.npub}
+            model={agent.model}
+            currentModel={agent.model}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // view === 'live'
   return (
-    <aside className="agent-inspector" ref={asideRef}>
-      <header>
-        <div>
-          <strong>{agent.name}</strong>
-          {agent.model && (
-            <span className="agent-model-badge" title={agent.model}>
-              {agent.model.split('/').pop()}
-            </span>
-          )}
-          <code title={agent.npub}>{agent.npub?.slice(0, 12)}…</code>
-          <span className={`status status-${status}`}>{status}</span>
-        </div>
-        <div>
-          <label className="ai-raw-toggle">
-            <input type="checkbox" checked={showRaw} onChange={(e) => setShowRaw(e.target.checked)} /> raw
-          </label>
-          <button onClick={onClose}>close</button>
-        </div>
-      </header>
+    <div className="agent-inspector">
       <div className="agent-inspector-activity">
         <span className={`ai-stat${flashTotal ? ' flash' : ''}`} title={`input ${activity.input} · output ${activity.output}`}>
           <span className="ai-stat-label">tokens</span>
@@ -210,26 +190,18 @@ export default function AgentInspector({ bridgeUrl, agent, onClose }) {
           <span className="ai-stat-label">tools</span>
           <strong>{activity.toolCalls}</strong>
         </span>
+        <span className={`status status-${status}`} style={{ marginLeft: 'auto' }}>{status}</span>
         {isLive && <span className="ai-pulse" title="streaming…">●</span>}
+        <label className="ai-raw-toggle">
+          <input type="checkbox" checked={showRaw} onChange={(e) => setShowRaw(e.target.checked)} /> raw
+        </label>
       </div>
       <div className="agent-inspector-body">
-        <section className="agent-inspector-section">
-          <header className="agent-inspector-section-head">Turns</header>
-          <AgentWaterfall
-            bridgeUrl={bridgeUrl}
-            pubkey={agent.npub}
-            model={agent.model}
-            currentModel={agent.model}
-          />
-        </section>
-        <section className="agent-inspector-section">
-          <header className="agent-inspector-section-head">Live</header>
-          {events.length === 0 && <p className="muted">Waiting for events…</p>}
-          {showRaw
-            ? <pre className="ai-raw">{events.map((e) => JSON.stringify(e)).join('\n')}</pre>
-            : rendered}
-        </section>
+        {events.length === 0 && <p className="muted">Waiting for events…</p>}
+        {showRaw
+          ? <pre className="ai-raw">{events.map((e) => JSON.stringify(e)).join('\n')}</pre>
+          : rendered}
       </div>
-    </aside>
+    </div>
   )
 }

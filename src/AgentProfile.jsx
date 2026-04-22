@@ -36,7 +36,6 @@ function extractLivePersona(raw) {
 
 export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) {
   const [character, setCharacter] = useState(null)
-  const [models, setModels] = useState([])
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -67,10 +66,6 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
         })
       })
       .catch((err) => setError(err.message || String(err)))
-    fetch(`${cfg.bridgeUrl}/models`)
-      .then((r) => r.json())
-      .then((j) => setModels(j.models || []))
-      .catch(() => {})
   }, [pubkey])
 
   async function save(e) {
@@ -227,175 +222,141 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
   }
 
   if (!character || !form) {
-    return (
-      <div className="agent-profile-modal-backdrop" onClick={onClose}>
-        <div className="agent-profile-modal" onClick={(e) => e.stopPropagation()}>
-          <p className="muted">Loading…</p>
-        </div>
-      </div>
-    )
+    return <p className="muted" style={{ padding: '14px' }}>Loading…</p>
   }
 
-  const jumbleHref = `${JUMBLE_URL}/${character.npub}`
+  const initial = (form.name || '?').trim().charAt(0).toUpperCase()
 
   return (
-    <div className="agent-profile-modal-backdrop" onClick={onClose}>
-      <div className="agent-profile-modal" onClick={(e) => e.stopPropagation()}>
-        <header>
-          <h2>{character.name}</h2>
-          <button onClick={onClose}>close</button>
-        </header>
-        <div className="agent-profile-meta">
-          <code title={character.pubkey}>{character.npub}</code>
-          {character.runtime && <span className="status status-connected">running</span>}
+    <div className="agent-profile">
+      {/* Compact header card — mirrors .sandbox3-card: portrait + name +
+          about, with "Regenerate avatar" tucked directly beneath the
+          portrait so it's obvious what it applies to. */}
+      <div className="agent-profile-card">
+        <div className="agent-profile-card-portrait-col">
+          <div className="agent-profile-card-portrait">
+            {avatarLoading ? (
+              <div className="agent-profile-card-portrait-spinner" aria-label="Generating avatar">
+                <div className="spinner" />
+              </div>
+            ) : character.avatarUrl ? (
+              <img src={character.avatarUrl} alt={form.name || 'avatar'} />
+            ) : (
+              <div className="agent-profile-card-portrait-fallback">{initial}</div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={generateAvatar}
+            disabled={avatarLoading || generating}
+            className="agent-profile-avatar-btn"
+          >
+            {character.avatarUrl ? 'Regenerate avatar' : 'Generate avatar'}
+          </button>
+        </div>
+        <div className="agent-profile-card-body">
+          <input
+            className="agent-profile-name"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            disabled={saving || generating}
+            placeholder="Name"
+            maxLength={80}
+          />
+          <textarea
+            className="agent-profile-about"
+            rows={4}
+            placeholder="Short bio. Published as the Nostr kind:0 about."
+            value={form.about}
+            onChange={(e) => setForm((f) => ({ ...f, about: e.target.value }))}
+            disabled={saving || generating}
+          />
           <a
-            href={jumbleHref}
+            className="agent-profile-card-npub"
+            href={`${JUMBLE_URL}/${character.npub}`}
             target="_blank"
             rel="noreferrer"
-            className="agent-profile-jumble-link"
-            title="Open this character's profile on the hosted Jumble client"
+            title={`Open ${character.name} on Jumble`}
           >
-            View on Jumble ↗
+            {character.npub}
           </a>
         </div>
+      </div>
 
-        <fieldset className="agent-profile-generate agent-profile-generate-top">
-          <legend>AI profile</legend>
+      {error && <p className="agent-profile-error">{error}</p>}
+      {avatarError && <p className="agent-profile-error">{avatarError}</p>}
+
+      <form onSubmit={save} className="agent-profile-actions" noValidate>
+        <span style={{ flex: 1 }} />
+        <button type="submit" disabled={saving || generating} className="primary">
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </form>
+
+      {/* Generate persona — the big obvious action. Seed + model are
+          tucked inside a collapsible to stay out of the way. Label
+          matches the avatar button's verb: Generate when empty,
+          Regenerate when we already have one. */}
+      <fieldset className="agent-profile-generate">
+        <legend>Persona</legend>
+        <button
+          type="button"
+          onClick={generate}
+          disabled={generating || saving}
+          className="agent-profile-generate-btn"
+        >
+          {generating
+            ? 'Streaming…'
+            : (character.about && character.profileSource === 'ai')
+            ? 'Regenerate persona'
+            : 'Generate persona'}
+        </button>
+        {generating && streamModel ? (
+          <p className="agent-profile-generate-model">
+            <span className="spinner agent-profile-generate-spinner" />
+            Streaming from <code>{streamModel}</code>…
+          </p>
+        ) : character.profileModel && character.profileSource === 'ai' ? (
+          <p className="agent-profile-generate-model muted">
+            Last generated by <code>{character.profileModel}</code>
+          </p>
+        ) : null}
+        <details className="agent-profile-generate-options">
+          <summary>Options</summary>
           <label>
-            Seed (optional)
+            Seed
             <input
               value={seed}
               onChange={(e) => setSeed(e.target.value)}
-              placeholder="e.g. 'new kid this summer' — guides the archetype"
+              placeholder="e.g. 'new kid this summer'"
               disabled={generating}
             />
           </label>
-
-          <div className="agent-profile-generate-row">
-            <button
-              type="button"
-              onClick={generate}
-              disabled={generating || saving}
-            >
-              {generating ? 'Streaming…' : '✨ Generate Persona'}
-            </button>
+          <label>
+            Model
             <select
               value={genModel}
               onChange={(e) => setGenModel(e.target.value)}
               disabled={generating}
-              title="Which NIM model to ask"
             >
               {GEN_MODELS.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
               ))}
             </select>
-          </div>
-
-          {generating && streamModel ? (
-            <p className="agent-profile-generate-model">
-              <span className="spinner agent-profile-generate-spinner" />
-              Streaming from <code>{streamModel}</code>…
-            </p>
-          ) : character.profileModel && character.profileSource === 'ai' ? (
-            <p className="agent-profile-generate-model muted">
-              Generated by <code>{character.profileModel}</code>
-            </p>
-          ) : null}
-        </fieldset>
-
-        <form onSubmit={save} className="agent-profile-form">
-          <label>
-            Name
-            <input
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              disabled={saving || generating}
-            />
           </label>
-          <label>
-            About
-            <textarea
-              rows={4}
-              placeholder="Short bio rendered in the Nostr kind:0 profile."
-              value={form.about}
-              onChange={(e) => setForm((f) => ({ ...f, about: e.target.value }))}
-              disabled={saving || generating}
-            />
-          </label>
-          <label>
-            Current state <small className="muted">(AI-writable — evolves each turn)</small>
-            <textarea
-              rows={3}
-              placeholder="How they're feeling, what they've noticed, what they plan to do next. The agent updates this itself via state/update.sh; you can seed or override it here."
-              value={form.state ?? ''}
-              onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
-              disabled={saving || generating}
-            />
-          </label>
-          <label>
-            Default model for runtimes
-            <select
-              value={form.model}
-              onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
-              disabled={saving || models.length === 0}
-            >
-              <option value="">— use spawn-time default —</option>
-              {Object.entries(
-                models.reduce((acc, m) => {
-                  (acc[m.provider || 'other'] ??= []).push(m)
-                  return acc
-                }, {})
-              ).map(([prov, list]) => (
-                <optgroup key={prov} label={prov}>
-                  {list.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.id}{m.activeParamsB ? ` (${m.activeParamsB}B)` : ''}
-                      {m.cost?.input ? ` — $${m.cost.input}/M in` : ''}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
+        </details>
+      </fieldset>
 
-          {error && <p className="agent-profile-error">{error}</p>}
-
-          <div className="agent-profile-actions">
-            <button type="button" onClick={remove} className="danger">Delete</button>
-            <span style={{ flex: 1 }} />
-            <button type="button" onClick={onClose}>Cancel</button>
-            <button type="submit" disabled={saving || generating} className="primary">
-              {saving ? 'Saving…' : 'Save + publish'}
-            </button>
-          </div>
-        </form>
-
-        <div className="agent-profile-avatar-row">
-          <div className="agent-profile-avatar">
-            {avatarLoading ? (
-              <div className="agent-profile-avatar-spinner" aria-label="Generating avatar">
-                <div className="spinner" />
-                <small>Generating with FLUX…</small>
-              </div>
-            ) : character.avatarUrl ? (
-              <img src={character.avatarUrl} alt={character.name} />
-            ) : (
-              <div className="agent-profile-avatar-empty">
-                <span>No avatar</span>
-              </div>
-            )}
-          </div>
-          <div className="agent-profile-avatar-actions">
-            <button type="button" onClick={generateAvatar} disabled={avatarLoading || generating}>
-              {character.avatarUrl ? 'Regenerate avatar' : '✨ Generate avatar'}
-            </button>
-            {avatarError && <p className="agent-profile-error">{avatarError}</p>}
-            <p className="muted">
-              NIM FLUX.1-schnell. Uses the current name + about as the prompt.
-            </p>
-          </div>
-        </div>
-      </div>
+      {/* Destructive actions live at the bottom under an explicit
+          header so they're hard to trigger by accident. */}
+      <fieldset className="agent-profile-danger">
+        <legend>Danger zone</legend>
+        <p className="muted">
+          Deletes this character's keypair, session history, avatar, and
+          any running runtime. Not recoverable.
+        </p>
+        <button type="button" onClick={remove} className="danger">Delete character</button>
+      </fieldset>
     </div>
   )
 }

@@ -1012,21 +1012,181 @@ body {
 }
 
 /* ──────── Agent Inspector ──────── */
-.agent-inspector {
+/* ────── Agent Drawer (side-tabbed) ────── */
+.agent-drawer {
+  /* Pinned to the viewport's left edge, overlaying everything
+     (including the sandbox sidebar cards). Slides in from off-screen
+     left. */
   position: fixed;
   top: 0;
-  right: 0;
+  left: 0;
   bottom: 0;
-  width: 520px;
+  display: flex;
+  flex-direction: row;
+  z-index: 30;
+  animation: agent-drawer-slide-in 220ms ease-out;
+}
+@keyframes agent-drawer-slide-in {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+.agent-drawer.closing {
+  animation: agent-drawer-slide-out 180ms ease-in forwards;
+}
+@keyframes agent-drawer-slide-out {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-100%); }
+}
+.agent-drawer-dimmer.closing {
+  animation: agent-drawer-dim-out 180ms ease-in forwards;
+}
+@keyframes agent-drawer-dim-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+.agent-drawer-main {
+  width: 560px;
+  max-width: calc(95vw - 44px);
   background: var(--paper);
-  border-left: 2px solid var(--ink);
-  box-shadow: -6px 0 0 var(--ink);
+  border-right: 2px solid var(--ink);
+  box-shadow: 6px 0 0 var(--ink);
   display: flex;
   flex-direction: column;
-  z-index: 21;
 }
+.agent-drawer-head {
+  padding: 10px 14px;
+  border-bottom: 2px solid var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--ink);
+  color: var(--paper);
+}
+.agent-drawer-avatar {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  border: 1.5px solid var(--paper);
+  background: var(--paper-3);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.agent-drawer-avatar img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.agent-drawer-avatar span {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 900;
+  font-size: 20px;
+  color: var(--ink);
+}
+.agent-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.agent-drawer-title strong { font-size: 14px; }
+.agent-drawer-title code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--paper-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-drawer-close {
+  background: transparent;
+  border: 1.5px solid var(--paper);
+  color: var(--paper);
+  width: 24px;
+  height: 24px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.agent-drawer-close:hover { background: var(--transmit); border-color: var(--transmit); }
+
+/* Side-tabs — vertical rail attached to the right edge of the main
+   panel. Tabs extend OUTWARD and visually merge with the panel (no
+   left border; active tab shares panel background). Text reads
+   top-to-bottom via writing-mode: vertical-rl; the SVG is reset back
+   to horizontal so the icon stays upright. */
+.agent-drawer-sidetabs {
+  order: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-top: 0;
+  margin-left: -2px;          /* overlap main's right border so tabs feel rooted */
+}
+.agent-drawer-sidetab {
+  writing-mode: vertical-rl;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 6px 18px 8px;
+  background: var(--paper-2);
+  color: var(--ink-muted);
+  border: 2px solid var(--ink);
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  margin-top: -2px;            /* stack borders */
+  transition: background 120ms ease, color 120ms ease, padding-right 120ms ease;
+}
+.agent-drawer-sidetab:first-child { margin-top: 0; }
+.agent-drawer-sidetab svg {
+  writing-mode: horizontal-tb;  /* keep icon upright */
+  flex-shrink: 0;
+}
+.agent-drawer-sidetab:hover:not(.active) {
+  color: var(--ink);
+  padding-right: 10px;
+}
+.agent-drawer-sidetab.active {
+  background: var(--paper);    /* seam disappears into main panel */
+  color: var(--ink);
+  padding-right: 12px;
+  box-shadow: 4px 4px 0 var(--ink);
+  z-index: 1;
+}
+
+.agent-drawer-panel {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--paper);
+  position: relative;
+}
+
+/* Tab content — the embedded profile / inspector both render inside. */
+.agent-drawer-panel .agent-profile,
+.agent-drawer-panel .agent-inspector {
+  padding: 14px;
+}
+.agent-drawer-panel .agent-inspector {
+  padding: 0; /* inspector has its own internal padding */
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
 .room-tile-avatar.selectable { cursor: pointer; }
 .room-tile-avatar.selectable:hover { outline: 2px solid var(--transmit); outline-offset: 1px; }
+
+/* Legacy inspector class kept for back-compat callers — embedded now. */
+.agent-inspector {
+  display: flex;
+  flex-direction: column;
+}
 .agent-inspector header {
   padding: 10px 14px;
   border-bottom: 2px solid var(--ink);
@@ -1083,29 +1243,8 @@ body {
   padding: 10px 14px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 6px;
 }
-.agent-inspector-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.agent-inspector-section > .agent-inspector-section-head {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
-  padding: 4px 0;
-  border-bottom: 1.5px solid var(--ink);
-  position: sticky;
-  top: -10px;
-  background: var(--paper);
-  z-index: 1;
-}
-/* Turns section lays out as grid internally; give it bounded height
-   so the Live section below stays visible without fighting for space. */
-.agent-inspector-section .wf-layout { min-height: 320px; max-height: 60vh; }
 .agent-inspector-activity {
   display: flex;
   gap: 14px;
@@ -1764,51 +1903,226 @@ body {
 .sandbox2-tip { margin-top: 16px; font-size: 12px; }
 .sandbox2-tip a { color: #0066cc; }
 
-/* ── Agent Profile modal ── */
-.agent-profile-modal-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.4);
-  display: flex; align-items: center; justify-content: center; z-index: 30;
+/* ── Agent Profile (inside AgentDrawer) ── */
+.agent-profile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
 }
-.agent-profile-modal {
-  background: #fff; border-radius: 8px; width: 520px; max-width: 90vw;
-  max-height: 90vh; overflow-y: auto; padding: 0;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+
+/* Compact card header — mirrors .sandbox3-card. Avatar on the left,
+   inline-editable name + about on the right. */
+.agent-profile-card {
+  display: flex;
+  gap: var(--sp-3);
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-3);
 }
-.agent-profile-modal header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 12px 18px; border-bottom: 1px solid #eee;
+.agent-profile-card-portrait-col {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  flex: 0 0 96px;
 }
-.agent-profile-modal header h2 { margin: 0; font-size: 16px; }
-.agent-profile-modal header button {
-  padding: 4px 10px; border: 1px solid #ddd; background: #fff;
-  border-radius: 3px; cursor: pointer; font-size: 12px;
+.agent-profile-card-portrait {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  background: var(--paper-3);
+  border: 1.5px solid var(--ink);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.agent-profile-meta {
-  padding: 8px 18px; font-size: 12px; color: #666;
-  display: flex; gap: 10px; align-items: center; border-bottom: 1px solid #f4f4f4;
+.agent-profile-avatar-btn {
+  padding: 4px 6px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  line-height: 1.2;
 }
-.agent-profile-meta code { font-size: 11px; }
-.agent-profile-form {
-  padding: 14px 18px; display: flex; flex-direction: column; gap: 12px;
+.agent-profile-avatar-btn:hover:not(:disabled) {
+  background: var(--ink); color: var(--paper);
 }
-.agent-profile-form label {
-  display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #555;
+.agent-profile-avatar-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.agent-profile-card-portrait img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
 }
-.agent-profile-form input, .agent-profile-form textarea, .agent-profile-form select {
-  padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px;
-  font-family: inherit; font-size: 13px; color: #222;
+.agent-profile-card-portrait-fallback {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 900;
+  font-size: 48px;
+  color: var(--prussian);
 }
-.agent-profile-form textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monospace; font-size: 12px; }
-.agent-profile-error { color: #c00; font-size: 12px; margin: 0; }
-.agent-profile-actions { display: flex; gap: 8px; align-items: center; }
+.agent-profile-card-portrait-spinner {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-muted);
+}
+
+.agent-profile-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.agent-profile-name {
+  font-family: var(--font-display);
+  font-stretch: 85%;
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-bottom: 1.5px dashed transparent;
+  padding: 2px 0;
+  outline: none;
+}
+.agent-profile-name:hover,
+.agent-profile-name:focus { border-bottom-color: var(--ink-muted); }
+.agent-profile-about {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: transparent;
+  border: 1.5px dashed transparent;
+  padding: 4px 6px;
+  resize: vertical;
+  min-height: 72px;
+  outline: none;
+}
+.agent-profile-about:hover,
+.agent-profile-about:focus { border-color: var(--ink-muted); }
+.agent-profile-card-npub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  word-break: break-all;
+  margin-top: auto;
+  text-decoration: none;
+  border-bottom: 1px dashed var(--ink-faint);
+  padding-bottom: 1px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.agent-profile-card-npub:hover {
+  color: var(--transmit);
+  border-bottom-color: var(--transmit);
+}
+.agent-profile-card-npub::after {
+  content: " ↗";
+  color: var(--ink-faint);
+}
+.agent-profile-card-npub:hover::after { color: var(--transmit); }
+
+.agent-profile-error {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--transmit);
+  background: var(--paper-2);
+  border-left: 3px solid var(--transmit);
+  padding: 6px 10px;
+  margin: 0;
+}
+
+.agent-profile-actions {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+}
 .agent-profile-actions button {
-  padding: 6px 14px; border: 1px solid #ddd; background: #fff;
-  border-radius: 4px; cursor: pointer; font-size: 13px;
+  padding: 6px 14px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 120ms, box-shadow 120ms;
 }
-.agent-profile-actions button.primary { border-color: #0066cc; background: #0066cc; color: #fff; }
-.agent-profile-actions button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.agent-profile-actions button.danger { color: #c00; border-color: #f0c0c0; }
-.agent-profile-actions button.danger:hover { background: #fff0f0; }
+.agent-profile-actions button:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.agent-profile-actions button.primary {
+  background: var(--ink);
+  color: var(--paper);
+}
+.agent-profile-actions button.primary:hover:not(:disabled) {
+  box-shadow: 2px 2px 0 var(--transmit);
+}
+.agent-profile-actions button.danger {
+  color: var(--transmit);
+  border-color: var(--transmit);
+}
+.agent-profile-actions button.danger:hover:not(:disabled) {
+  background: var(--transmit);
+  color: var(--paper);
+}
+.agent-profile-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Danger zone — destructive actions, isolated at the bottom. */
+.agent-profile-danger {
+  margin: var(--sp-3) 0 0;
+  border: 1.5px dashed var(--transmit);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  background: var(--paper-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.agent-profile-danger legend {
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--transmit);
+  font-weight: bold;
+}
+.agent-profile-danger .muted {
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+  color: var(--ink-muted);
+}
+.agent-profile-danger button.danger {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border: 1.5px solid var(--transmit);
+  background: var(--paper);
+  color: var(--transmit);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 120ms, box-shadow 120ms;
+}
+.agent-profile-danger button.danger:hover:not(:disabled) {
+  background: var(--transmit);
+  color: var(--paper);
+  transform: translate(-1px, -1px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
 
 /* ── Relay feed page ── */
 .relay-feed-view { padding: 24px 32px; overflow-y: auto; }
@@ -1826,33 +2140,100 @@ body {
 .relay-feed-author time { font-size: 11px; color: #888; font-variant-numeric: tabular-nums; }
 .relay-feed-content { font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 
+/* Persona generator — on-brand block. The main "Generate" button is
+   the obvious action; seed + model are tucked inside an expandable
+   "Options" details. */
 .agent-profile-generate {
-  border: 1px dashed #d0d4ff; border-radius: 6px; padding: 12px 14px;
-  margin: 0; display: flex; flex-direction: column; gap: 8px;
-  background: #fafbff;
+  margin: 0;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-2);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
 }
 .agent-profile-generate legend {
-  padding: 0 6px; font-size: 11px; color: #3b3f9e; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink);
+  font-weight: bold;
 }
-.agent-profile-generate input[type="text"],
-.agent-profile-generate input:not([type]) {
-  padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px;
-  font-family: inherit; font-size: 13px; width: 100%;
+.agent-profile-generate-btn {
+  padding: 10px 16px;
+  border: 1.5px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  align-self: stretch;
+  transition: transform 120ms, box-shadow 120ms, background 120ms;
 }
-.agent-profile-generate button {
-  padding: 8px 14px; border: 1px solid #3b3f9e; background: #eef2ff;
-  color: #3b3f9e; border-radius: 4px; cursor: pointer; font-size: 13px;
-  font-weight: 600; align-self: flex-start;
+.agent-profile-generate-btn:hover:not(:disabled) {
+  background: var(--transmit);
+  border-color: var(--transmit);
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--ink);
 }
-.agent-profile-generate button:hover:not(:disabled) { background: #e0e7ff; }
-.agent-profile-generate button:disabled { opacity: 0.5; cursor: not-allowed; }
-.agent-profile-checkbox {
-  flex-direction: row !important; align-items: center; gap: 6px !important;
-  font-size: 12px; color: #555;
+.agent-profile-generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.agent-profile-generate-options {
+  border-top: 1px dashed var(--ink-faint);
+  padding-top: var(--sp-2);
 }
-.agent-profile-checkbox input { width: auto !important; }
-.agent-profile-generate .muted { font-size: 11px; margin: 0; }
+.agent-profile-generate-options summary {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  cursor: pointer;
+  padding: 2px 0;
+}
+.agent-profile-generate-options summary:hover { color: var(--ink); }
+.agent-profile-generate-options[open] summary { color: var(--ink); margin-bottom: var(--sp-2); }
+.agent-profile-generate-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: var(--sp-2);
+}
+.agent-profile-generate-options input,
+.agent-profile-generate-options select {
+  padding: 5px 8px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.agent-profile-generate-model {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.agent-profile-generate-model code {
+  font-size: 10px;
+  color: var(--ink);
+}
+.agent-profile-generate-spinner { width: 12px; height: 12px; border-width: 2px; }
 
 /* ── Profile modal additions: avatar, streaming preview, Jumble link ── */
 .agent-profile-jumble-link {
@@ -1992,7 +2373,23 @@ body {
   height: 100%;
   overflow: hidden;
   background: var(--paper);
+  /* When the drawer is open, widen the first grid column to the
+     drawer's width so the stage shifts right to clear it. The sidebar
+     cards keep their own 280px width and stay at their original x;
+     they sit hidden behind the drawer, while the stage (room + chat)
+     becomes narrower and fully visible. */
+  transition: grid-template-columns 220ms ease-out;
 }
+.sandbox3:has(.agent-drawer:not(.closing)) {
+  grid-template-columns: 594px 1fr;
+}
+.sandbox3-cards {
+  /* Fix the sidebar width so widening its grid cell (when drawer is
+     open) doesn't stretch the cards. */
+  width: 280px;
+  justify-self: start;
+}
+
 
 .sandbox3-cards {
   display: flex; flex-direction: column; gap: var(--sp-2);
@@ -2224,6 +2621,9 @@ body {
   background: var(--card);
   border: 2px solid var(--ink);
   box-shadow: var(--shadow-card);
+  position: relative;       /* anchor for .agent-drawer + .agent-drawer-dimmer */
+  /* no overflow clip — drawer animates across the sidebar area, which
+     sits on top (z-index 22). */
   padding: var(--sp-3);
   overflow: hidden;
 }
@@ -2248,6 +2648,9 @@ body {
     repeating-linear-gradient(45deg, var(--paper-3) 0 2px, transparent 2px 6px),
     var(--paper-2);
   border: 1.5px solid var(--ink);
+  /* Establish a container so the map can size relative to this frame's
+     height using cqh, guaranteeing it fits both dimensions. */
+  container-type: size;
 }
 .sandbox3-toast {
   position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
@@ -2276,16 +2679,33 @@ body {
 
 /* ── Room map (the grid) ── */
 .room-map-wrap {
-  width: 100%; max-width: 880px;
-  display: flex; flex-direction: column; align-items: center; gap: var(--sp-2);
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
 }
 .room-map {
   display: grid;
-  width: 100%;
+  /* Size to the smaller of (parent width) or (parent height * 4/3) so
+     the 4:3 map always fits within the frame on any aspect ratio. The
+     frame is a CSS container (`container-type: size`), so `cqh` here
+     resolves to the frame's own height. We subtract the caption's
+     approximate height so map + caption together fit without clipping
+     the top of the map. */
+  width: min(100%, calc((100cqh - 36px) * 4 / 3));
+  max-width: 880px;
+  max-height: calc(100cqh - 36px);
   aspect-ratio: 4 / 3;
   gap: 1px;
   background: var(--ink);
   border: 2px solid var(--ink);
+}
+.room-map-caption {
+  flex: 0 0 auto;
+  margin-top: var(--sp-2);
 }
 .room-tile {
   background: var(--card);
