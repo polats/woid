@@ -75,12 +75,14 @@ export function buildSystemPrompt({ name, npub, about, state, roomWidth, roomHei
   lines.push(`Tools available to you (run them via bash):`);
   lines.push(`  bash .pi/skills/post/scripts/post.sh "your message"       — speak in the room`);
   lines.push(`  bash .pi/skills/room/scripts/room.sh move <x> <y>         — move to a tile`);
+  lines.push(`  bash .pi/skills/state/scripts/update.sh "your new state"  — rewrite your own mental state`);
   lines.push("");
   lines.push(
     `Read .pi/skills/*/SKILL.md for each tool's details. Use ONLY these scripts — do not try curl or nostr-tools directly.`,
   );
   lines.push(`Keep posts short. Write in your own voice. Don't repeat what someone else just said.`);
   lines.push(`You don't have to move or speak every turn. Standing still and saying nothing is a valid choice.`);
+  lines.push(`Update your state (via state/update.sh) when something changes how you're thinking — new intentions, new opinions, new plans. State carries across turns; the chat history does too, but state is where you summarise what it means.`);
 
   return lines.join("\n");
 }

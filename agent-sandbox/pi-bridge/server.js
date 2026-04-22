@@ -31,7 +31,7 @@ const NVIDIA_NIM_API_KEY = process.env.NVIDIA_NIM_API_KEY || "";
 // the host-mapped port.
 const PUBLIC_BRIDGE_URL = process.env.PUBLIC_BRIDGE_URL || "http://localhost:13457";
 const SKILL_TEMPLATES_DIR = join(__dirname, "skill-templates");
-const DEFAULT_SKILLS = ["post", "room"];
+const DEFAULT_SKILLS = ["post", "room", "state"];
 
 mkdirSync(WORKSPACE, { recursive: true });
 
@@ -367,6 +367,7 @@ function listCharacters() {
         npub: npubEncode(c.pubkey),
         name: c.name,
         about: c.about ?? null,
+        state: c.state ?? null,
         avatarUrl: c.avatarUrl ?? null,
         model: c.model ?? null,
         profileSource: c.profileSource ?? null,
@@ -1195,6 +1196,7 @@ app.get("/characters/:pubkey", (req, res) => {
     npub: npubEncode(c.pubkey),
     name: c.name,
     about: c.about ?? null,
+    state: c.state ?? null,
     avatarUrl: c.avatarUrl ?? null,
     model: c.model ?? null,
     profileSource: c.profileSource ?? null,
@@ -1419,10 +1421,11 @@ app.patch("/characters/:pubkey", async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
-  const { name, about, avatarUrl, model } = req.body || {};
+  const { name, about, state, avatarUrl, model } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = String(name).trim() || c.name;
   if (about !== undefined) patch.about = about ? String(about) : null;
+  if (state !== undefined) patch.state = state ? String(state).slice(0, 2000) : null;
   if (avatarUrl !== undefined) patch.avatarUrl = avatarUrl ? String(avatarUrl) : null;
   if (model !== undefined) {
     const validIds = new Set(availableModels().map((m) => m.id));
@@ -1447,6 +1450,7 @@ app.patch("/characters/:pubkey", async (req, res) => {
     npub: npubEncode(next.pubkey),
     name: next.name,
     about: next.about ?? null,
+    state: next.state ?? null,
     avatarUrl: next.avatarUrl ?? null,
     model: next.model ?? null,
     profileSource: next.profileSource ?? null,
@@ -1523,6 +1527,25 @@ app.get("/agents/:id/events/stream", (req, res) => {
     clearInterval(hb);
     rec.events.emitter.off("event", onEvent);
   });
+});
+
+// Persist the agent's evolving state blob. The state field is distinct
+// from `about` (locked persona) — it's the short "where my head is right
+// now" string the agent writes to itself between turns. buildSystemPrompt
+// surfaces it to the LLM; state/update.sh is how the agent writes to it.
+app.post("/internal/state", (req, res) => {
+  try {
+    const { pubkey, state } = req.body || {};
+    if (!pubkey) return res.status(400).json({ error: "pubkey required" });
+    if (typeof state !== "string") return res.status(400).json({ error: "state must be a string" });
+    const c = loadCharacter(pubkey);
+    if (!c) return res.status(404).json({ error: "unknown character" });
+    saveCharacterManifest(pubkey, { state: state.slice(0, 2000) });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[internal:state]", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Internal mirror of /agents/:id/move for a running pi process — pi's

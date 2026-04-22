@@ -62,6 +62,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
         setForm({
           name: c.name ?? '',
           about: c.about ?? '',
+          state: c.state ?? '',
           model: c.model ?? '',
         })
       })
@@ -83,6 +84,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
         body: JSON.stringify({
           name: form.name,
           about: form.about.trim() || null,
+          state: form.state.trim() || null,
           model: form.model || null,
         }),
       })
@@ -317,6 +319,16 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
               placeholder="Short bio rendered in the Nostr kind:0 profile."
               value={form.about}
               onChange={(e) => setForm((f) => ({ ...f, about: e.target.value }))}
+              disabled={saving || generating}
+            />
+          </label>
+          <label>
+            Current state <small className="muted">(AI-writable — evolves each turn)</small>
+            <textarea
+              rows={3}
+              placeholder="How they're feeling, what they've noticed, what they plan to do next. The agent updates this itself via state/update.sh; you can seed or override it here."
+              value={form.state ?? ''}
+              onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
               disabled={saving || generating}
             />
           </label>
