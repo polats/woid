@@ -98,6 +98,60 @@ export function onNewMessage(agentId, handler) {
   };
 }
 
+// Watch for agent position changes (moves) in the room. Calls `handler`
+// with { fromNpub, fromName, x, y, wasAdjacent, isAdjacent } whenever a
+// non-self agent's (x, y) changes. The caller decides what to do based
+// on adjacency transition. Dedupes own-pubkey changes.
+export function onPositionChange(agentId, selfPubkey, handler) {
+  const conn = connections.get(agentId);
+  if (!conn) return () => {};
+  // Snapshot: npub -> {x,y}. Seed from current state to avoid a huge
+  // burst of "arrival" events for everyone already in the room at join.
+  const seen = new Map();
+  if (conn.room?.state?.agents?.forEach) {
+    conn.room.state.agents.forEach((a) => {
+      if (a.npub) seen.set(a.npub, { x: a.x ?? 0, y: a.y ?? 0 });
+    });
+  }
+  const selfFrom = () => {
+    const agents = conn.room?.state?.agents;
+    if (!agents?.forEach) return { x: 0, y: 0 };
+    let me = null;
+    agents.forEach((a) => { if (a.npub === selfPubkey) me = a; });
+    return { x: me?.x ?? 0, y: me?.y ?? 0 };
+  };
+  const cb = () => {
+    const agents = conn.room?.state?.agents;
+    if (!agents?.forEach) return;
+    const me = selfFrom();
+    agents.forEach((a) => {
+      const npub = a.npub;
+      if (!npub || npub === selfPubkey) return;
+      const prev = seen.get(npub);
+      const cur = { x: a.x ?? 0, y: a.y ?? 0 };
+      if (!prev) {
+        // Presence is new — treat as arrival only if they're adjacent now.
+        seen.set(npub, cur);
+        const isAdjacent = Math.max(Math.abs(cur.x - me.x), Math.abs(cur.y - me.y)) <= 1;
+        if (isAdjacent) {
+          handler({ fromNpub: npub, fromName: a.name, x: cur.x, y: cur.y, wasAdjacent: false, isAdjacent: true });
+        }
+        return;
+      }
+      if (prev.x !== cur.x || prev.y !== cur.y) {
+        const wasAdjacent = Math.max(Math.abs(prev.x - me.x), Math.abs(prev.y - me.y)) <= 1;
+        const isAdjacent = Math.max(Math.abs(cur.x - me.x), Math.abs(cur.y - me.y)) <= 1;
+        seen.set(npub, cur);
+        if (!wasAdjacent && isAdjacent) {
+          handler({ fromNpub: npub, fromName: a.name, x: cur.x, y: cur.y, wasAdjacent, isAdjacent });
+        }
+      }
+    });
+  };
+  try { conn.room.onStateChange(cb); } catch {}
+  return () => { try { conn.room.onStateChange.remove?.(cb); } catch {} };
+}
+
 // Read-only snapshot for an already-joined room (used by re-prompt builds).
 export function roomSnapshot(agentId) {
   const conn = connections.get(agentId);

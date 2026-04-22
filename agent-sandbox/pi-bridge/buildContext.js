@@ -73,14 +73,14 @@ export function buildSystemPrompt({ name, npub, about, state, roomWidth, roomHei
 
   lines.push("");
   lines.push(`Tools available to you (run them via bash):`);
-  lines.push(`  bash .pi/skills/post/scripts/post.sh "your message"   — speak in the room`);
-  // In Phase B we'll add: move.sh, state.sh. Keep the list minimal until
-  // those ship — system prompt budget matters.
+  lines.push(`  bash .pi/skills/post/scripts/post.sh "your message"       — speak in the room`);
+  lines.push(`  bash .pi/skills/room/scripts/room.sh move <x> <y>         — move to a tile`);
   lines.push("");
   lines.push(
-    `Read .pi/skills/post/SKILL.md for the post tool's details. Use ONLY that script to post — do not try curl or nostr-tools directly.`,
+    `Read .pi/skills/*/SKILL.md for each tool's details. Use ONLY these scripts — do not try curl or nostr-tools directly.`,
   );
   lines.push(`Keep posts short. Write in your own voice. Don't repeat what someone else just said.`);
+  lines.push(`You don't have to move or speak every turn. Standing still and saying nothing is a valid choice.`);
 
   return lines.join("\n");
 }

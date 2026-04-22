@@ -16,7 +16,7 @@ import WebSocket from "ws";
 // nostr-tools SimplePool uses global WebSocket; Node doesn't expose one by default.
 useWebSocketImplementation(WebSocket);
 import { buildSystemPrompt, buildUserTurn } from "./buildContext.js";
-import { joinRoom, leaveRoom, sendSay, sayAs, moveAs, moveAgent, onNewMessage, roomSnapshot } from "./room-client.js";
+import { joinRoom, leaveRoom, sendSay, sayAs, moveAs, moveAgent, onNewMessage, onPositionChange, roomSnapshot } from "./room-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -31,7 +31,7 @@ const NVIDIA_NIM_API_KEY = process.env.NVIDIA_NIM_API_KEY || "";
 // the host-mapped port.
 const PUBLIC_BRIDGE_URL = process.env.PUBLIC_BRIDGE_URL || "http://localhost:13457";
 const SKILL_TEMPLATES_DIR = join(__dirname, "skill-templates");
-const DEFAULT_SKILLS = ["post"];
+const DEFAULT_SKILLS = ["post", "room"];
 
 mkdirSync(WORKSPACE, { recursive: true });
 
@@ -911,7 +911,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, x, y })
   }).catch(() => {});
 
   // Subscribe to new room messages. Messages from this agent are skipped.
-  rec.unsubscribe = onNewMessage(agentId, (msg) => {
+  const unsubMsg = onNewMessage(agentId, (msg) => {
     if (!rec.listening) return;
     if (msg.fromNpub === rec.pubkey) return; // own echo
     rec.lastMessageAt = Date.now();
@@ -924,6 +924,21 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, x, y })
     if (rec.debounceTimer) clearTimeout(rec.debounceTimer);
     rec.debounceTimer = setTimeout(() => tryListenTurn(rec), AGENT_DEBOUNCE_MS);
   });
+  // Subscribe to position changes. Fires only when another agent moves
+  // into adjacent distance (Chebyshev 1); room-client.js does the
+  // bookkeeping. `arrival` trigger wins if both messages and positions
+  // change in the same debounce window — the last-set trigger is used.
+  const unsubPos = onPositionChange(agentId, rec.pubkey, (evt) => {
+    if (!rec.listening) return;
+    rec.lastMessageAt = Date.now();
+    rec.pendingTrigger = {
+      trigger: "arrival",
+      triggerContext: { fromPubkey: evt.fromNpub, fromName: evt.fromName, x: evt.x, y: evt.y },
+    };
+    if (rec.debounceTimer) clearTimeout(rec.debounceTimer);
+    rec.debounceTimer = setTimeout(() => tryListenTurn(rec), AGENT_DEBOUNCE_MS);
+  });
+  rec.unsubscribe = () => { try { unsubMsg() } catch {}; try { unsubPos() } catch {} };
 
   // Idle timeout — if nothing's happened for a while, the driver shuts
   // down on its own so forgotten agents don't hold seats forever.
@@ -1508,6 +1523,23 @@ app.get("/agents/:id/events/stream", (req, res) => {
     clearInterval(hb);
     rec.events.emitter.off("event", onEvent);
   });
+});
+
+// Internal mirror of /agents/:id/move for a running pi process — pi's
+// room.sh doesn't know its own agentId, only its pubkey.
+app.post("/internal/move", (req, res) => {
+  try {
+    const { pubkey, x, y } = req.body || {};
+    if (!pubkey) return res.status(400).json({ error: "pubkey required" });
+    const rt = activeRuntimeForCharacter(pubkey);
+    if (!rt) return res.status(404).json({ error: "no running runtime" });
+    const ok = moveAgent(rt.id, x, y);
+    if (!ok) return res.status(500).json({ error: "move failed" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[internal:move]", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Only reachable from inside the container (pi's post.sh calls it over localhost).
