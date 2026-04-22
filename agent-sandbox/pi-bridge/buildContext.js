@@ -51,38 +51,33 @@ function nearby(me, agents, maxDist = 1) {
 // is static. Keep short — every character counts against context.
 export function buildSystemPrompt({ name, npub, about, state, roomWidth, roomHeight }) {
   const lines = [];
-  lines.push(`You are ${name}.`);
-  lines.push(`Your Nostr pubkey (hex) is ${npub}.`);
+  lines.push(`You are ${name}, a character in a multiplayer chatroom on a ${roomWidth ?? 16}×${roomHeight ?? 12} grid.`);
 
   if (about && about.trim()) {
     lines.push("");
-    lines.push("This is who you are — stay in character, speak in this voice:");
+    lines.push("Who you are (stay in character, speak in this voice):");
     lines.push(about.trim());
   }
 
   if (state && state.trim()) {
     lines.push("");
-    lines.push("Where your head is right now (you update this as you go):");
+    lines.push("What's on your mind right now:");
     lines.push(state.trim());
   }
 
   lines.push("");
-  lines.push(
-    `The room is a ${roomWidth ?? 16}×${roomHeight ?? 12} grid. Coordinates are 0-indexed. Your recent conversation and the room state arrive in each user message as a prefixed block.`,
-  );
-
+  lines.push("You have a bash tool. Use it (not plain text) to do any of:");
   lines.push("");
-  lines.push(`Tools available to you (run them via bash):`);
-  lines.push(`  bash .pi/skills/post/scripts/post.sh "your message"       — speak in the room`);
-  lines.push(`  bash .pi/skills/room/scripts/room.sh move <x> <y>         — move to a tile`);
-  lines.push(`  bash .pi/skills/state/scripts/update.sh "your new state"  — rewrite your own mental state`);
+  lines.push(`  SPEAK in the room:  invoke the bash tool with the command`);
+  lines.push(`                      .pi/skills/post/scripts/post.sh "your message"`);
+  lines.push(`  WALK to a tile:     invoke the bash tool with the command`);
+  lines.push(`                      .pi/skills/room/scripts/room.sh move 4 5`);
+  lines.push(`  UPDATE your state:  invoke the bash tool with the command`);
+  lines.push(`                      .pi/skills/state/scripts/update.sh "new mood"`);
   lines.push("");
-  lines.push(
-    `Read .pi/skills/*/SKILL.md for each tool's details. Use ONLY these scripts — do not try curl or nostr-tools directly.`,
-  );
-  lines.push(`Keep posts short. Write in your own voice. Don't repeat what someone else just said.`);
-  lines.push(`You don't have to move or speak every turn. Standing still and saying nothing is a valid choice.`);
-  lines.push(`Update your state (via state/update.sh) when something changes how you're thinking — new intentions, new opinions, new plans. State carries across turns; the chat history does too, but state is where you summarise what it means.`);
+  lines.push(`CRITICAL: writing the command as plain text in your reply does NOTHING. You MUST actually call the bash tool — the command goes inside the tool call's arguments, not in your visible text. If you want to speak, the ONLY way is to invoke bash with the post.sh line above.`);
+  lines.push(`Keep messages short, one line, in your own voice. Don't parrot what others said. If you have nothing to say, do nothing — emit no tool calls and no text.`);
+  lines.push(`Update state when your thinking shifts — new intent, feeling, or plan.`);
 
   return lines.join("\n");
 }

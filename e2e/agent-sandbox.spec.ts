@@ -65,7 +65,9 @@ test.describe('agent-sandbox', () => {
 
   test('/models returns tool-capable catalog with a default', async () => {
     const m = await (await fetch(`${BRIDGE}/models`)).json()
-    expect(m.default).toMatch(/\//)
+    expect(typeof m.default).toBe('string')
+    expect(m.default.length).toBeGreaterThan(2)
+    expect(['nvidia-nim', 'google', 'local']).toContain(m.defaultProvider)
     expect(Array.isArray(m.models)).toBe(true)
     expect(m.models.length).toBeGreaterThan(5)
     expect(m.models.some((x: { id: string }) => x.id === m.default)).toBe(true)

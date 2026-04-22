@@ -1025,13 +1025,6 @@ body {
   flex-direction: column;
   z-index: 21;
 }
-.sandbox3-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(20, 24, 33, 0.18);
-  z-index: 20;
-  cursor: pointer;
-}
 .room-tile-avatar.selectable { cursor: pointer; }
 .room-tile-avatar.selectable:hover { outline: 2px solid var(--transmit); outline-offset: 1px; }
 .agent-inspector header {
@@ -2206,6 +2199,22 @@ body {
 .sandbox3-card-actions button.primary:hover { background: var(--transmit); border-color: var(--transmit); }
 .sandbox3-card-actions button.danger { color: var(--bad-ink); border-color: var(--bad-ink); }
 .sandbox3-card-actions button.danger:hover { background: var(--bad-ink); color: var(--paper); }
+.sandbox3-card-actions .sandbox3-card-jumble {
+  padding: 2px 8px; border: 1.5px solid var(--ink); background: var(--paper);
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
+  text-transform: uppercase; text-decoration: none; color: var(--ink);
+}
+.sandbox3-card-actions .sandbox3-card-jumble:hover { background: var(--ink); color: var(--paper); }
+.sandbox3-card-model {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  letter-spacing: .04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
 
 /* ── Stage (map + chat + input) ── */
 .sandbox3-stage {

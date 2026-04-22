@@ -133,9 +133,15 @@ function providerForModelId(modelId) {
   return "nvidia-nim";
 }
 
-// Default provider + model. Flip PI_DEFAULT_PROVIDER to switch the whole
-// sandbox to Gemini without touching code. Explicit PI_MODEL wins.
-const PI_DEFAULT_PROVIDER = process.env.PI_DEFAULT_PROVIDER || "nvidia-nim";
+// Default provider + model. Resolution order:
+//   1. PI_DEFAULT_PROVIDER env (explicit operator override)
+//   2. `local` if LOCAL_LLM_BASE_URL is set and reachable
+//   3. `nvidia-nim` if key present
+//   4. `google` if key present
+// Explicit PI_MODEL env wins over the catalog default.
+const PI_DEFAULT_PROVIDER =
+  process.env.PI_DEFAULT_PROVIDER ||
+  (LOCAL_LLM_BASE_URL ? "local" : NVIDIA_NIM_API_KEY ? "nvidia-nim" : GEMINI_API_KEY ? "google" : "nvidia-nim");
 const DEFAULT_MODEL_BY_PROVIDER = {
   "nvidia-nim": "moonshotai/kimi-k2.5",
   "google": "gemini-2.5-flash-lite",
@@ -1186,6 +1192,10 @@ setInterval(() => {
 async function publishKind1(agentId, content, modelTag) {
   const rec = agents.get(agentId);
   if (!rec) throw new Error("unknown agent");
+  // The Colyseus room is the primary channel — do it first, synchronously,
+  // so the message reaches the chat immediately regardless of whether the
+  // Nostr relay is healthy. Relay publish is best-effort in the background.
+  sendSay(agentId, content);
   const tags = [];
   if (modelTag) tags.push(["model", modelTag]);
   const event = finalizeEvent(
@@ -1197,21 +1207,17 @@ async function publishKind1(agentId, content, modelTag) {
     },
     rec.sk,
   );
-  try {
-    const results = await Promise.allSettled(pool.publish([RELAY_URL], event));
+  // Fire-and-forget — log failures but don't propagate to pi. Small local
+  // models were failing entire turns when the relay round-trip hiccupped.
+  Promise.allSettled(pool.publish([RELAY_URL], event)).then((results) => {
     const ok = results.some((r) => r.status === "fulfilled");
     if (!ok) {
       const reasons = results.map((r) => r.status === "rejected" ? r.reason?.message || String(r.reason) : "").filter(Boolean);
-      console.error(`[publish] all relays failed: ${reasons.join("; ")}`);
-      throw new Error(`publish failed: ${reasons.join("; ")}`);
+      console.warn(`[publish] relay failed (chat still delivered): ${reasons.join("; ")}`);
+    } else {
+      console.log(`[publish] ok event=${event.id.slice(0, 12)} relay=${RELAY_URL}`);
     }
-    console.log(`[publish] ok event=${event.id.slice(0, 12)} relay=${RELAY_URL}`);
-  } catch (err) {
-    console.error(`[publish] error: ${err.message}`);
-    throw err;
-  }
-  // Also echo into the room chat so room observers see agent speech even without watching the relay
-  sendSay(agentId, content);
+  });
   return event;
 }
 

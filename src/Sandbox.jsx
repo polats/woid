@@ -9,6 +9,7 @@ import RoomMap from './RoomMap.jsx'
 import SandboxSettings from './SandboxSettings.jsx'
 
 const cfg = config.agentSandbox || {}
+const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'
 
 export default function Sandbox() {
   const [characters, setCharacters] = useState([])
@@ -287,6 +288,11 @@ export default function Sandbox() {
                         {thinking ? 'thinking…' : 'listening'} · {runtime.turns} turn{runtime.turns === 1 ? '' : 's'}
                       </div>
                     )}
+                    {(runtime?.model || c.model) && (
+                      <div className="sandbox3-card-model" title={runtime?.model || c.model}>
+                        {(runtime?.model || c.model).split('/').pop()}
+                      </div>
+                    )}
                     {runtime?.lastUsage && (() => {
                       const total = runtime.lastUsage.totalTokens ?? 0
                       // Models in our catalog currently report contextWindow=131072;
@@ -319,6 +325,16 @@ export default function Sandbox() {
                       >
                         profile
                       </button>
+                      <a
+                        className="sandbox3-card-jumble"
+                        href={c.npub ? `${JUMBLE_URL}/${c.npub}` : `${JUMBLE_URL}/${c.pubkey}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        title="Open this character's Nostr profile in Jumble"
+                      >
+                        jumble
+                      </a>
                       {runtime && (
                         <button
                           onClick={(e) => { e.stopPropagation(); stopRuntime(runtime.agentId) }}
@@ -395,18 +411,11 @@ export default function Sandbox() {
       </section>
 
       {inspectedAgent && (
-        <>
-          <div
-            className="sandbox3-backdrop"
-            onClick={() => setInspectedId(null)}
-            aria-hidden="true"
-          />
-          <AgentInspector
-            bridgeUrl={cfg.bridgeUrl}
-            agent={inspectedAgent}
-            onClose={() => setInspectedId(null)}
-          />
-        </>
+        <AgentInspector
+          bridgeUrl={cfg.bridgeUrl}
+          agent={inspectedAgent}
+          onClose={() => setInspectedId(null)}
+        />
       )}
       {profilePubkey && (
         <AgentProfile

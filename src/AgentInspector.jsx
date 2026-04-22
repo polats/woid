@@ -139,11 +139,31 @@ function EventRow({ ev }) {
 
 export default function AgentInspector({ bridgeUrl, agent, onClose }) {
   const [showRaw, setShowRaw] = useState(false)
+  const asideRef = useRef(null)
   const { events, status } = useAgentEvents({
     bridgeUrl,
     agentId: agent?.agentId,
     enabled: true,
   })
+
+  // Click-outside-to-dismiss. Listens on window mousedown so clicks on any
+  // non-inspector element (cards, map tiles, even the page background)
+  // close the drawer. Uses mousedown not click so drag-starts (which also
+  // fire mousedown) naturally dismiss — the user wanted to interact with
+  // something else anyway.
+  useEffect(() => {
+    function onDocMouseDown(e) {
+      if (!asideRef.current) return
+      if (asideRef.current.contains(e.target)) return
+      // Character cards host their own click-to-inspect logic — let them
+      // re-set inspectedId rather than racing with our close. Same for
+      // map avatars.
+      if (e.target.closest('.sandbox3-card') || e.target.closest('.room-tile-avatar.selectable')) return
+      onClose?.()
+    }
+    window.addEventListener('mousedown', onDocMouseDown)
+    return () => window.removeEventListener('mousedown', onDocMouseDown)
+  }, [onClose])
 
   const rendered = useMemo(() => {
     return events.map((ev, i) => <EventRow key={ev.seq ?? i} ev={ev} />).filter(Boolean)
@@ -157,7 +177,7 @@ export default function AgentInspector({ bridgeUrl, agent, onClose }) {
   if (!agent) return null
 
   return (
-    <aside className="agent-inspector">
+    <aside className="agent-inspector" ref={asideRef}>
       <header>
         <div>
           <strong>{agent.name}</strong>
