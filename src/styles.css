@@ -1023,8 +1023,17 @@ body {
   box-shadow: -6px 0 0 var(--ink);
   display: flex;
   flex-direction: column;
-  z-index: 20;
+  z-index: 21;
 }
+.sandbox3-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 24, 33, 0.18);
+  z-index: 20;
+  cursor: pointer;
+}
+.room-tile-avatar.selectable { cursor: pointer; }
+.room-tile-avatar.selectable:hover { outline: 2px solid var(--transmit); outline-offset: 1px; }
 .agent-inspector header {
   padding: 10px 14px;
   border-bottom: 2px solid var(--ink);

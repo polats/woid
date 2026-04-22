@@ -865,10 +865,16 @@ const agents = new Map();
 // exited-but-not-yet-reaped. The 409-on-duplicate-spawn check uses a
 // separate activeRuntimeForCharacter() below.
 function runtimeForCharacter(pubkey) {
+  // Prefer an active (listening) runtime. Falls back to the most recently
+  // inserted stopped/zombie record so respawns surface the fresh agentId
+  // in /characters instead of a 120s-pending-reap corpse.
+  let fallback = null;
   for (const [id, rec] of agents.entries()) {
-    if (rec.pubkey === pubkey) return { id, rec };
+    if (rec.pubkey !== pubkey) continue;
+    if (rec.listening) return { id, rec };
+    fallback = { id, rec };
   }
-  return null;
+  return fallback;
 }
 
 function activeRuntimeForCharacter(pubkey) {

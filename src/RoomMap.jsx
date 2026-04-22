@@ -17,6 +17,7 @@ export default function RoomMap({
   humanPubkey = null,
   onDropCharacter,           // (pubkey, x, y) -> spawn/move decision handled by caller
   onMoveSelf,                // (x, y) -> human move
+  onSelectCharacter,         // (pubkey) -> open inspector drawer
 }) {
   const [dragOver, setDragOver] = useState(null)
 
@@ -94,18 +95,23 @@ export default function RoomMap({
                 onClick={() => onCellClick(x, y)}
                 title={occupants.map((o) => `${o.name} (${o.x},${o.y})`).join(', ') || `(${x}, ${y})`}
               >
-                {occupants.slice(0, 1).map((o) => (
-                  <div
-                    key={o.npub}
-                    className={`room-tile-avatar kind-${o.kind}${o.thinking ? ' thinking' : ''}${o.running ? ' running' : ''}`}
-                  >
-                    {o.avatarUrl ? (
-                      <img src={o.avatarUrl} alt={o.name} draggable={false} />
-                    ) : (
-                      <span>{initial(o.name)}</span>
-                    )}
-                  </div>
-                ))}
+                {occupants.slice(0, 1).map((o) => {
+                  const selectable = o.kind === 'character' && onSelectCharacter
+                  return (
+                    <div
+                      key={o.npub}
+                      className={`room-tile-avatar kind-${o.kind}${o.thinking ? ' thinking' : ''}${o.running ? ' running' : ''}${selectable ? ' selectable' : ''}`}
+                      onClick={selectable ? (e) => { e.stopPropagation(); onSelectCharacter(o.npub) } : undefined}
+                      title={selectable ? `Click to inspect ${o.name}` : undefined}
+                    >
+                      {o.avatarUrl ? (
+                        <img src={o.avatarUrl} alt={o.name} draggable={false} />
+                      ) : (
+                        <span>{initial(o.name)}</span>
+                      )}
+                    </div>
+                  )
+                })}
                 {occupants.length > 1 && (
                   <span className="room-tile-badge">+{occupants.length - 1}</span>
                 )}

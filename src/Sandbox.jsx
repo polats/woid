@@ -128,6 +128,13 @@ export default function Sandbox() {
   async function stopRuntime(agentId) {
     try {
       await fetch(`${cfg.bridgeUrl}/agents/${agentId}`, { method: 'DELETE' })
+      // Optimistically drop the runtime so the card reflects "stopped"
+      // before the next 3s /characters poll — otherwise a quick drag-back
+      // onto the map would try to MOVE the dead agent and hit /move 404.
+      setCharacters((prev) => prev.map((c) =>
+        c.runtime?.agentId === agentId ? { ...c, runtime: null } : c,
+      ))
+      if (inspectedId === agentId) setInspectedId(null)
       await refresh()
     } catch {}
   }
@@ -199,15 +206,23 @@ export default function Sandbox() {
     } catch {}
   }
 
-  const inspectedCharacter = characters.find((c) => c.runtime?.agentId === inspectedId)
+  // Prefer the agentId match, but also accept a pubkey-only inspectedId
+  // (set when clicking a non-running character on the map). Fall back to
+  // a stub from inspectedId alone so the drawer still opens even while
+  // /characters refresh is in-flight.
+  const inspectedCharacter = inspectedId
+    ? characters.find((c) => c.runtime?.agentId === inspectedId || c.pubkey === inspectedId)
+    : null
   const inspectedAgent = inspectedCharacter
     ? {
-        agentId: inspectedCharacter.runtime.agentId,
+        agentId: inspectedCharacter.runtime?.agentId ?? null,
         name: inspectedCharacter.name,
         npub: inspectedCharacter.pubkey,
-        model: inspectedCharacter.runtime.model ?? inspectedCharacter.model,
-        running: inspectedCharacter.runtime.running,
+        model: inspectedCharacter.runtime?.model ?? inspectedCharacter.model,
+        running: inspectedCharacter.runtime?.running,
       }
+    : inspectedId
+    ? { agentId: inspectedId, name: '—', npub: null, model: null, running: false }
     : null
 
   return (
@@ -342,6 +357,12 @@ export default function Sandbox() {
             humanPubkey={humanInfo?.pubkey}
             onDropCharacter={onDropCharacter}
             onMoveSelf={onMoveSelf}
+            onSelectCharacter={(pubkey) => {
+              const c = characters.find((x) => x.pubkey === pubkey)
+              // If running: inspect by runtime id. Otherwise open by pubkey
+              // so the drawer shows past turns from the session file.
+              setInspectedId(c?.runtime?.agentId || pubkey)
+            }}
           />
           {dropToast && <div className="sandbox3-toast">{dropToast.text}</div>}
         </div>
@@ -374,11 +395,18 @@ export default function Sandbox() {
       </section>
 
       {inspectedAgent && (
-        <AgentInspector
-          bridgeUrl={cfg.bridgeUrl}
-          agent={inspectedAgent}
-          onClose={() => setInspectedId(null)}
-        />
+        <>
+          <div
+            className="sandbox3-backdrop"
+            onClick={() => setInspectedId(null)}
+            aria-hidden="true"
+          />
+          <AgentInspector
+            bridgeUrl={cfg.bridgeUrl}
+            agent={inspectedAgent}
+            onClose={() => setInspectedId(null)}
+          />
+        </>
       )}
       {profilePubkey && (
         <AgentProfile
