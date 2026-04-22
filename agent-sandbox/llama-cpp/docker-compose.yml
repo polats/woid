@@ -24,7 +24,11 @@ services:
               count: all
               capabilities: [gpu]
     ports:
-      - "127.0.0.1:18080:8080"
+      # Bind to all host interfaces so containers on other user-defined
+      # bridge networks (notably agent-sandbox's pi-bridge) can reach us
+      # via their docker bridge gateway IP. 127.0.0.1-only binding would
+      # isolate us to host loopback.
+      - "18080:8080"
     volumes:
       - hf-cache:/root/.cache/huggingface
     environment:
