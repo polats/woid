@@ -27,7 +27,11 @@ gameServer.define("sandbox", SandboxRoom)
   .filterBy(["roomName"])
   .enableRealtimeListing();
 
-gameServer.listen(PORT).then(() => {
-  console.log(`[room-server] listening on :${PORT}`);
+// Bind "::" (dual-stack) so Railway's private network can reach us:
+// *.railway.internal DNS resolves to IPv6 only, and Node's default
+// listen() on Linux has bound IPv4-only for us in the past. Being
+// explicit removes that foot-gun.
+gameServer.listen(PORT, "::").then(() => {
+  console.log(`[room-server] listening on [::]:${PORT}`);
   console.log(`[room-server] rooms: sandbox (filtered by roomName), lobby`);
 });
