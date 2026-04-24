@@ -44,6 +44,9 @@ services:
       S3_REGION: "${S3_REGION:-}"
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
       S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
+      # ExternalHarness HMAC secret — required to spawn agents with
+      # harness: "external". Generate once: openssl rand -hex 32.
+      AGENT_TOKEN_SECRET: "${AGENT_TOKEN_SECRET:-}"
     volumes:
       - pi-workspace:/workspace
     # Let the bridge reach a llama.cpp server running on the host via

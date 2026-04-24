@@ -1238,16 +1238,72 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
   }, 30_000);
   rec.idleTimer.unref();
 
-  // First turn — typed trigger "spawn". If no explicit seed, the intro
-  // nudge encourages the agent to say hello. Listener-triggered turns
-  // later carry "message_received" / "arrival" with a triggerContext.
+  // Forward room messages to any harness that wants them (external's
+  // SSE stream). No-op for pi/direct. Must be registered before the
+  // seed turn fires so the client sees every room message going forward.
+  const unsubExtraMsg = onNewMessage(agentId, (msg) => {
+    try { rec.harnessInstance?.notifyMessage?.(msg); } catch {}
+  });
+  const prevUnsub = rec.unsubscribe;
+  rec.unsubscribe = () => {
+    try { prevUnsub?.(); } catch {}
+    try { unsubExtraMsg?.(); } catch {}
+  };
+
+  const out = { agentId, npub: character.pubkey, pubkey: character.pubkey, model: chosenModel, name: resolvedName, harness: chosenHarness };
+
+  // Pre-start the harness BEFORE the seed turn fires — both to avoid
+  // a race between the async seed runPiTurn and the external pre-start
+  // (both used to call ensureHarness and could create two instances),
+  // and so external-harness spawners get a token + URLs back in the
+  // spawn response. For external harness we additionally defer the
+  // seed turn emission until AFTER the spawn response returns so the
+  // caller has time to open the SSE stream first.
+  if (chosenHarness === "external") {
+    const snapshot = roomSnapshot(agentId);
+    const systemPrompt = buildSystemPrompt({
+      name: rec.name,
+      npub: rec.pubkey,
+      about: character?.about,
+      state: character?.state,
+      roomWidth: snapshot.width,
+      roomHeight: snapshot.height,
+    });
+    try {
+      await ensureHarness(rec, { systemPrompt });
+    } catch (err) {
+      rec.listening = false;
+      await leaveRoom(agentId).catch(() => {});
+      agents.delete(agentId);
+      err.code = err.code || 503;
+      throw err;
+    }
+    out.agentToken = rec.harnessInstance.getToken();
+    out.streamUrl = `${PUBLIC_BRIDGE_URL}/external/${character.pubkey}/events/stream`;
+    out.actUrl = `${PUBLIC_BRIDGE_URL}/external/${character.pubkey}/act`;
+    out.heartbeatUrl = `${PUBLIC_BRIDGE_URL}/external/${character.pubkey}/heartbeat`;
+  }
+
+  console.log(`[agent] spawned ${agentId} name="${resolvedName}" model=${chosenModel} harness=${chosenHarness} npub=${character.pubkey.slice(0, 12)}...`);
+
+  // Seed turn — typed trigger "spawn". For non-external harnesses,
+  // fire immediately. For external, delay briefly so the client has
+  // a chance to open the SSE stream before the first turn_request;
+  // attachStream re-emits on connect, so this is belt-and-suspenders.
   const firstSeed =
     seedMessage
     || "Introduce yourself briefly to the room by posting a short greeting.";
-  runPiTurn(rec, { seedMessage: firstSeed, trigger: "spawn", triggerContext: {} });
+  const fireSeed = () => {
+    runPiTurn(rec, { seedMessage: firstSeed, trigger: "spawn", triggerContext: {} })
+      .catch((err) => console.error(`[spawn:${agentId}] seed turn failed:`, err?.message || err));
+  };
+  if (chosenHarness === "external") {
+    setTimeout(fireSeed, 500);
+  } else {
+    fireSeed();
+  }
 
-  console.log(`[agent] spawned ${agentId} name="${resolvedName}" model=${chosenModel} npub=${character.pubkey.slice(0, 12)}...`);
-  return { agentId, npub: character.pubkey, pubkey: character.pubkey, model: chosenModel, name: resolvedName };
+  return out;
 }
 
 // Called from the room-message listener (debounced). Runs a new pi turn if:
@@ -1459,6 +1515,86 @@ app.post("/agents/:id/move", (req, res) => {
   if (!ok) return res.status(404).json({ error: "not found" });
   res.json({ ok: true });
 });
+
+// ── External-harness endpoints ──
+// The SSE stream, action POST, and heartbeat for agents spawned with
+// harness: "external". All three are keyed by pubkey rather than
+// agentId since the client only knows the pubkey it minted.
+
+function _extBearer(req) {
+  const auth = String(req.headers.authorization || "");
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (m) return m[1].trim();
+  return (req.query?.token || "").toString();
+}
+
+function _resolveExternal(req, res) {
+  const pubkey = req.params.pubkey;
+  const active = activeRuntimeForCharacter(pubkey);
+  if (!active) { res.status(404).json({ error: "no active agent for pubkey" }); return null; }
+  const rec = active.rec;
+  if (rec.harness !== "external" || !rec.harnessInstance?.verifyToken) {
+    res.status(400).json({ error: "not an external-harness agent" });
+    return null;
+  }
+  const token = _extBearer(req);
+  const parsed = rec.harnessInstance.verifyToken(token);
+  if (!parsed) { res.status(401).json({ error: "invalid or expired token" }); return null; }
+  return rec;
+}
+
+app.get("/external/:pubkey/events/stream", (req, res) => {
+  const rec = _resolveExternal(req, res);
+  if (!rec) return;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+  res.write(": connected\n\n");
+  const lastEventId = req.headers["last-event-id"];
+  try { rec.harnessInstance.attachStream({ res, lastEventId }); } catch (err) {
+    console.error(`[ext:stream:${rec.pubkey.slice(0,10)}] attach failed:`, err?.message || err);
+    return res.end();
+  }
+  const ka = setInterval(() => {
+    try { res.write(": ping\n\n"); } catch { clearInterval(ka); }
+  }, 15_000);
+  req.on("close", () => {
+    clearInterval(ka);
+    try { rec.harnessInstance?.detachStream?.(); } catch {}
+  });
+});
+
+app.post("/external/:pubkey/act", (req, res) => {
+  const rec = _resolveExternal(req, res);
+  if (!rec) return;
+  const { turnId, text, move, state } = req.body || {};
+  if (!turnId) return res.status(400).json({ error: "turnId required" });
+  const result = rec.harnessInstance.recordAct({ turnId, text, move, state });
+  if (!result?.ok) return res.status(result.code || 400).json({ error: result.error });
+  res.json({ ok: true, actions: result.actions });
+});
+
+app.post("/external/:pubkey/heartbeat", (req, res) => {
+  const rec = _resolveExternal(req, res);
+  if (!rec) return;
+  rec.harnessInstance.touchHeartbeat();
+  res.json({ ok: true });
+});
+
+// Idle external agents lose their connection → evict so the room
+// doesn't zombie. Checked every 60s.
+setInterval(() => {
+  for (const [id, rec] of agents.entries()) {
+    if (rec.harness !== "external") continue;
+    if (!rec.harnessInstance?.isIdleTooLong) continue;
+    if (rec.harnessInstance.isIdleTooLong()) {
+      console.log(`[external] evicting ${rec.pubkey.slice(0, 10)} — heartbeat timeout`);
+      stopAgent(id).catch(() => {});
+    }
+  }
+}, 60_000).unref();
 
 // ── /complete — headless one-shot LLM call via pi ──
 //
