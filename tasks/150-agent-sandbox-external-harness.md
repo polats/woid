@@ -1,7 +1,7 @@
 ---
 name: ExternalHarness — LLMs drive their own agent + update llms.txt
 description: Implement the external-brain path as a Harness (SSE turn-stream + authenticated act endpoint) and update llms.txt so external LLMs reading it know they can pick this harness at spawn time.
-status: todo
+status: done
 order: 150
 epic: agent-sandbox
 ---

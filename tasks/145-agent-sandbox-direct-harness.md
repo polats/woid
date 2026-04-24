@@ -1,7 +1,7 @@
 ---
 name: DirectHarness — call-my-ghost-style direct SDK brain
 description: Implement a Harness that skips pi entirely: one SDK call per turn, structured JSON response parsed into actions. Mirrors call-my-ghost's brain-gemini pattern.
-status: todo
+status: done
 order: 145
 epic: agent-sandbox
 ---

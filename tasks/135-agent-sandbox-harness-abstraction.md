@@ -1,7 +1,7 @@
 ---
 name: Harness abstraction — pluggable brains (pi, direct, external, hermes…)
 description: Extract a small Harness interface so the bridge's turn loop doesn't know or care how the LLM gets called. Wrap existing pi-pool as the first implementation without changing behavior.
-status: todo
+status: done
 order: 135
 epic: agent-sandbox
 ---
