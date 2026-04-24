@@ -11,6 +11,7 @@ import crypto from "crypto";
 import * as s3 from "./s3.js";
 import * as piPool from "./pi-pool.js";
 import * as rateLimiter from "./rate-limiter.js";
+import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/index.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -555,6 +556,7 @@ function listCharacters() {
         state: c.state ?? null,
         avatarUrl: c.avatarUrl ?? null,
         model: c.model ?? null,
+        harness: c.harness ?? null,
         profileSource: c.profileSource ?? null,
         profileModel: c.profileModel ?? null,
         createdAt: c.createdAt ?? null,
@@ -958,6 +960,7 @@ function runtimeSnapshot(pubkey) {
     thinking: !!r.rec.thinking,
     turns: r.rec.turns ?? 0,
     model: r.rec.model ?? null,
+    harness: r.rec.harness ?? null,
     roomName: r.rec.roomName ?? null,
     exitedAt: r.rec.exitedAt ?? null,
     exitCode: r.rec.exitCode ?? null,
@@ -965,24 +968,54 @@ function runtimeSnapshot(pubkey) {
   };
 }
 
-// Ensure a pi-pool handle exists for `rec`. The handle is spawned on
-// first use and reused for every subsequent turn for this agent,
-// removing the ~600ms–2s cold-start per reply of the old
-// spawn-per-turn model. The system prompt is pinned to the handle —
-// if it ever needs to change (character about/state edit), we'd
-// `piPool.restartHandle(...)` here after detecting the delta.
-function ensurePiHandle(rec, { systemPrompt }) {
-  let handle = piPool.getPi(rec.agentId);
-  if (handle) return handle;
+// Execute actions returned by a harness turn. Each action is a
+// discriminated-union object — { type: 'say'|'move'|'state', ... }.
+// Harnesses that commit side-effects themselves (like PiHarness via
+// its bash loopback through /internal/post) return an empty array
+// and this is a no-op for them.
+async function executeActions(rec, actions) {
+  if (!Array.isArray(actions) || actions.length === 0) return;
+  for (const action of actions) {
+    try {
+      if (action.type === "say" && action.text) {
+        await publishKind1(rec.agentId, String(action.text), rec.model);
+      } else if (action.type === "move" && Number.isFinite(action.x) && Number.isFinite(action.y)) {
+        moveAgent(rec.agentId, action.x, action.y);
+      } else if (action.type === "state" && action.value != null) {
+        saveCharacterManifest(rec.pubkey, { state: String(action.value).slice(0, 2000) });
+      }
+    } catch (err) {
+      console.error(`[actions:${rec.agentId}] ${action.type} failed:`, err?.message || err);
+      rec.events.push({ kind: "action-error", action: action.type, error: err?.message || String(err) });
+    }
+  }
+}
+
+// Ensure a harness is started for `rec`. Harnesses are created lazily
+// on the first turn so stopAgent between create and trigger doesn't
+// pay any cost. Persisted across turns for the life of the agent.
+async function ensureHarness(rec, { systemPrompt }) {
+  if (rec.harnessInstance) {
+    // System prompt drift (e.g. character PATCHed mid-session) — tell
+    // the harness so it can repin (pi) or just remember it (direct).
+    if (rec.systemPromptSignature !== systemPrompt) {
+      rec.harnessInstance.updateSystemPrompt?.(systemPrompt);
+      rec.systemPromptSignature = systemPrompt;
+    }
+    return rec.harnessInstance;
+  }
   const charDir = getCharDir(rec.pubkey);
   const sessionPath = join(charDir, "session.jsonl");
   const provider = rec.provider || providerForModelId(rec.model);
-  handle = piPool.startPi({
+  const harnessName = rec.harness || DEFAULT_HARNESS;
+  const harness = createHarness(harnessName);
+  await harness.start({
     agentId: rec.agentId,
+    pubkey: rec.pubkey,
+    systemPrompt,
     provider,
     model: rec.model,
     sessionPath,
-    systemPrompt,
     cwd: charDir,
     env: {
       ...process.env,
@@ -991,22 +1024,22 @@ function ensurePiHandle(rec, { systemPrompt }) {
       LOCAL_LLM_BASE_URL,
       HOME: homedir(),
     },
-    // Route pi events into the agent's ring buffer so the inspector
-    // drawer / waterfall keep working unchanged.
     onEvent: (ev) => {
-      if (ev.kind === "pool:crashed") {
+      if (ev?.data?.kind === "pool:crashed" || ev?.kind === "pool:crashed") {
         rec.listening = false;
         rec.events.push({ kind: "exit", code: "crash-loop", turns: rec.turns });
       }
       rec.events.push(ev);
     },
   });
+  rec.harnessInstance = harness;
   rec.systemPromptSignature = systemPrompt;
-  return handle;
+  return harness;
 }
 
-// Drive a single turn using the resident pi handle for `rec`. Returns
-// the turn Promise so callers can await completion and surface errors.
+// Drive a single turn via the agent's harness. Harness-agnostic —
+// pi / direct / external all plug in here without runPiTurn knowing
+// the difference. Returns the turn result for callers that care.
 async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {} }) {
   const character = loadCharacter(rec.pubkey);
   const snapshot = roomSnapshot(rec.agentId);
@@ -1047,22 +1080,17 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     return null;
   }
 
-  // Spawn handle on first turn. If the system prompt has drifted (e.g.
-  // character was PATCHed mid-session), restart the handle so pi sees
-  // the new prompt; session file persists, so history survives.
-  let handle = piPool.getPi(rec.agentId);
-  if (handle && rec.systemPromptSignature && rec.systemPromptSignature !== systemPrompt) {
-    handle = piPool.restartHandle(rec.agentId, { systemPrompt });
-    rec.systemPromptSignature = systemPrompt;
-  }
-  if (!handle) handle = ensurePiHandle(rec, { systemPrompt });
+  const harness = await ensureHarness(rec, { systemPrompt });
 
   rec.turns = (rec.turns ?? 0) + 1;
   rec.lastTriggerAt = Date.now();
   rec.thinking = true;
 
   try {
-    const result = await handle.turn(userTurn);
+    const result = await harness.turn(userTurn);
+    // Execute any actions the harness produced. PiHarness returns
+    // [] because its bash-tool loopback already committed them.
+    await executeActions(rec, result?.actions);
     // Bump the high-water mark so the next user turn's delta carries
     // only messages newer than the current snapshot.
     const latest = snapshot.messages?.length
@@ -1077,7 +1105,7 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
       provider,
       error: err?.message || String(err),
     });
-    if (!wasRateLimit) console.error(`[pi:${rec.agentId}] turn error:`, err?.message || err);
+    if (!wasRateLimit) console.error(`[${harness.name}:${rec.agentId}] turn error:`, err?.message || err);
     return null;
   } finally {
     rec.thinking = false;
@@ -1090,7 +1118,7 @@ const AGENT_MIN_TRIGGER_GAP_MS = Number(process.env.AGENT_MIN_TRIGGER_GAP_MS || 
 const AGENT_DEBOUNCE_MS = Number(process.env.AGENT_DEBOUNCE_MS || 1_500);
 const AGENT_IDLE_TIMEOUT_MS = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 5 * 60_000);
 
-async function createAgent({ pubkey, name, seedMessage, roomName, model, provider, x, y }) {
+async function createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, x, y }) {
   // Resolve character: either provided by pubkey, or auto-create (back-compat).
   let character;
   if (pubkey) {
@@ -1103,6 +1131,15 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
     }
   } else {
     character = createCharacter({ name });
+  }
+
+  // Harness selection: spawn-time override > character manifest > default.
+  // Validate against the factory's known list to fail fast on typos.
+  const chosenHarness = harness || character.harness || DEFAULT_HARNESS;
+  if (!KNOWN_HARNESSES.includes(chosenHarness)) {
+    const err = new Error(`unknown harness "${chosenHarness}" (known: ${KNOWN_HARNESSES.join(", ")})`);
+    err.code = 400;
+    throw err;
   }
   const agentId = makeAgentId();
   const charDir = getCharDir(character.pubkey);
@@ -1139,6 +1176,8 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
     // right --provider flag on every subsequent turn. Explicit wins over
     // catalog inference (which only checks id prefixes).
     provider: provider || providerForModelId(chosenModel),
+    harness: chosenHarness,
+    harnessInstance: null,
     events,
     process: null,
     turns: 0,
@@ -1151,7 +1190,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
   };
   agents.set(agentId, rec);
 
-  saveCharacterManifest(character.pubkey, { model: chosenModel });
+  saveCharacterManifest(character.pubkey, { model: chosenModel, harness: chosenHarness });
 
   publishAdminWelcome({
     agentPubkey: character.pubkey,
@@ -1240,9 +1279,14 @@ async function stopAgent(agentId) {
   if (rec.debounceTimer) { clearTimeout(rec.debounceTimer); rec.debounceTimer = null; }
   if (rec.idleTimer) { clearInterval(rec.idleTimer); rec.idleTimer = null; }
   if (rec.unsubscribe) { try { rec.unsubscribe(); } catch {} }
-  // Tear down the resident pi handle. Sends SIGTERM; pool escalates to
-  // SIGKILL if the child doesn't exit promptly.
-  piPool.stopPi(agentId);
+  // Tear down the harness. PiHarness kills its subprocess; Direct /
+  // External release whatever resources they hold.
+  try {
+    await rec.harnessInstance?.stop();
+  } catch (err) {
+    console.error(`[stop:${agentId}] harness.stop threw:`, err?.message || err);
+  }
+  rec.harnessInstance = null;
   rec.thinking = false;
   rec.exitedAt = Date.now();
   rec.events.push({ kind: "exit", code: "stopped", turns: rec.turns });
@@ -1397,12 +1441,12 @@ app.post("/human/say", async (req, res) => {
 
 app.post("/agents", async (req, res) => {
   try {
-    const { pubkey, name, seedMessage, roomName, model, provider, x, y } = req.body || {};
+    const { pubkey, name, seedMessage, roomName, model, provider, harness, x, y } = req.body || {};
     if (!pubkey && !name) return res.status(400).json({ error: "pubkey or name required" });
-    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, provider, x, y });
+    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, x, y });
     res.json(result);
   } catch (err) {
-    const status = err.code === 409 ? 409 : 500;
+    const status = err.code === 400 ? 400 : err.code === 409 ? 409 : 500;
     if (status !== 409) console.error("[agents:create]", err);
     res.status(status).json({ error: err.message });
   }
@@ -1893,6 +1937,7 @@ app.get("/agents", (_req, res) => {
     npub: rec.pubkey,
     roomName: rec.roomName,
     model: rec.model,
+    harness: rec.harness,
     running: !!rec.listening,
     exitedAt: rec.exitedAt ?? null,
     exitCode: rec.exitCode ?? null,

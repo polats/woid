@@ -13,6 +13,8 @@ RUN cd /app/bridge && npm install --production
 
 COPY server.js prompt-builder.js buildContext.js sessionReader.js room-client.js s3.js pi-pool.js rate-limiter.js nim-catalog.json gemini-catalog.json local-catalog.json /app/bridge/
 COPY skill-templates/ /app/bridge/skill-templates/
+COPY harnesses/ /app/bridge/harnesses/
+COPY providers/ /app/bridge/providers/
 
 RUN mkdir -p /workspace
 
