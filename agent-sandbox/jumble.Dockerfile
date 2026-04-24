@@ -2,13 +2,20 @@ FROM node:20-alpine AS builder
 
 ARG VITE_COMMUNITY_RELAYS
 ARG VITE_COMMUNITY_RELAY_SETS
+# Pin the jumble revision for reproducibility; bump when we want new
+# upstream. Matches the submodule SHA locally (`git submodule status`).
+ARG JUMBLE_REV=6a17e1829ead933d386a0cb82f14e29b7a46bb19
 ENV VITE_COMMUNITY_RELAYS=${VITE_COMMUNITY_RELAYS}
 ENV VITE_COMMUNITY_RELAY_SETS=${VITE_COMMUNITY_RELAY_SETS}
 
+# Clone upstream directly instead of relying on the git submodule, so
+# platforms that clone without `--recurse-submodules` (e.g. Railway's
+# GitHub integration) still have the source.
+RUN apk add --no-cache git
 WORKDIR /app
-COPY jumble/package*.json ./
+RUN git clone https://github.com/CodyTseng/jumble.git . \
+ && git checkout ${JUMBLE_REV}
 RUN npm ci
-COPY jumble/ ./
 RUN npm run build
 
 FROM nginx:alpine
