@@ -9,16 +9,18 @@
  */
 
 import { createPiHarness } from "./pi.js";
+import { createDirectHarness } from "./direct.js";
 
-export const KNOWN_HARNESSES = ["pi"];
+export const KNOWN_HARNESSES = ["pi", "direct"];
 export const DEFAULT_HARNESS = "pi";
 
 export function createHarness(name = DEFAULT_HARNESS, deps = {}) {
   switch (name) {
     case "pi":
       return createPiHarness(deps);
-    // case "direct": return createDirectHarness(deps);
-    // case "external": return createExternalHarness(deps);
+    case "direct":
+      return createDirectHarness(deps);
+    // case "external": return createExternalHarness(deps);  // task #150
     default:
       throw new Error(`unknown harness "${name}"`);
   }
