@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import config from './config.js'
 import { useRelayFeed } from './hooks/useRelayFeed.js'
+import { profileUrl, eventUrl } from './lib/jumble.js'
 
 const cfg = config.agentSandbox || {}
 
@@ -56,6 +57,17 @@ export default function RelayFeed() {
                 <button className="agent-sandbox-info-copy" onClick={() => copy(adminInfo.npub)}>
                   copy
                 </button>
+                {profileUrl(cfg.jumbleUrl, adminInfo.npub || adminInfo.pubkey) && (
+                  <a
+                    className="relay-feed-jumble-link"
+                    href={profileUrl(cfg.jumbleUrl, adminInfo.npub || adminInfo.pubkey)}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open on Jumble"
+                  >
+                    jumble ↗
+                  </a>
+                )}
               </>
             ) : <span className="muted">loading…</span>}
           </div>
@@ -86,14 +98,37 @@ export default function RelayFeed() {
             if (isProfile) {
               try { profile = JSON.parse(ev.content) } catch {}
             }
+            const authorJumble = profileUrl(cfg.jumbleUrl, ev.pubkey)
+            const eventJumble = eventUrl(cfg.jumbleUrl, ev.id, {
+              author: ev.pubkey,
+              kind: ev.kind,
+              relays: cfg.relayUrl ? [cfg.relayUrl] : [],
+            })
             return (
               <li key={ev.id} className={isProfile ? 'relay-feed-item-profile' : ''}>
                 <div className="relay-feed-author">
-                  <strong>{npubToName.get(ev.pubkey) || ev.pubkey.slice(0, 10) + '…'}</strong>
+                  {authorJumble ? (
+                    <a href={authorJumble} target="_blank" rel="noreferrer" className="relay-feed-author-link" title="Open author on Jumble">
+                      <strong>{npubToName.get(ev.pubkey) || ev.pubkey.slice(0, 10) + '…'}</strong>
+                    </a>
+                  ) : (
+                    <strong>{npubToName.get(ev.pubkey) || ev.pubkey.slice(0, 10) + '…'}</strong>
+                  )}
                   <span className="relay-feed-kind">kind:{ev.kind}</span>
                   <time dateTime={new Date(ev.created_at * 1000).toISOString()}>
                     {new Date(ev.created_at * 1000).toLocaleTimeString()}
                   </time>
+                  {eventJumble && (
+                    <a
+                      className="relay-feed-jumble-link"
+                      href={eventJumble}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open event on Jumble"
+                    >
+                      jumble ↗
+                    </a>
+                  )}
                 </div>
                 {isProfile ? (
                   <div className="relay-feed-profile">

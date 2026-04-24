@@ -2151,9 +2151,24 @@ body {
   padding: 10px 14px; background: #fff; border: 1px solid #e5e5e5; border-radius: 6px;
 }
 .relay-feed-author {
-  display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;
+  display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; flex-wrap: wrap;
 }
 .relay-feed-author time { font-size: 11px; color: #888; font-variant-numeric: tabular-nums; }
+.relay-feed-author-link { color: inherit; text-decoration: none; }
+.relay-feed-author-link:hover strong { text-decoration: underline; }
+.relay-feed-jumble-link {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-decoration: none;
+  border: 1px solid var(--ink-faint);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.relay-feed-jumble-link:hover { color: var(--ink); border-color: var(--ink); background: var(--paper-2); }
 .relay-feed-content { font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 
 /* Persona generator — on-brand block. The main "Generate" button is
