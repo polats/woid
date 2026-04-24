@@ -1014,28 +1014,44 @@ body {
 /* ──────── Agent Inspector ──────── */
 /* ────── Agent Drawer (side-tabbed) ────── */
 .agent-drawer {
-  /* Pinned to the viewport's left edge, overlaying everything
-     (including the sandbox sidebar cards). Slides in from off-screen
-     left. */
-  position: fixed;
+  /* Absolute within sandbox3 so it follows the sandbox when the main
+     Woid sidebar opens/closes. A transparent left padding equal to the
+     cards column + gutters acts as a "shoulder": the visible content
+     (main + side-tabs) starts at the cards' right edge, and
+     translateX(-100%) pulls the whole box fully off-screen left — so
+     the content appears to emerge from *behind* the cards rather than
+     from the viewport edge. sandbox3's overflow:hidden clips the
+     shoulder. Cards sit above the drawer via z-index. */
+  position: absolute;
   top: 0;
   left: 0;
   bottom: 0;
+  /* sandbox3 padding (sp-3) + cards column (280px) + grid gap (sp-3) */
+  padding-left: calc(280px + var(--sp-3) * 2);
+  box-sizing: content-box;
   display: flex;
   flex-direction: row;
-  z-index: 30;
+  z-index: 5;
+  pointer-events: none; /* transparent shoulder shouldn't catch clicks */
   animation: agent-drawer-slide-in 220ms ease-out;
 }
+.agent-drawer > * { pointer-events: auto; }
 @keyframes agent-drawer-slide-in {
-  from { transform: translateX(-100%); }
-  to   { transform: translateX(0); }
+  /* Reveal from the cards' right edge outward. The drawer box starts
+     at clip-right:100% (nothing visible past its own left edge, which
+     sits at the cards' right edge) and opens to clip-right:0 (full
+     content visible). The transparent padding-left shoulder is always
+     clipped anyway, so the animation reads as the drawer *unfolding*
+     out of the cards column. */
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
 }
 .agent-drawer.closing {
   animation: agent-drawer-slide-out 180ms ease-in forwards;
 }
 @keyframes agent-drawer-slide-out {
-  from { transform: translateX(0); }
-  to   { transform: translateX(-100%); }
+  from { clip-path: inset(0 0 0 0); }
+  to   { clip-path: inset(0 100% 0 0); }
 }
 .agent-drawer-dimmer.closing {
   animation: agent-drawer-dim-out 180ms ease-in forwards;
@@ -1045,7 +1061,7 @@ body {
   to   { opacity: 0; }
 }
 .agent-drawer-main {
-  width: 560px;
+  width: 420px;
   max-width: calc(95vw - 44px);
   background: var(--paper);
   border-right: 2px solid var(--ink);
@@ -1384,7 +1400,7 @@ body {
 }
 .wf-layout {
   display: grid;
-  grid-template-columns: 180px 1fr;
+  grid-template-columns: 130px 1fr;
   gap: 10px;
   height: 100%;
 }
@@ -2373,21 +2389,29 @@ body {
   height: 100%;
   overflow: hidden;
   background: var(--paper);
-  /* When the drawer is open, widen the first grid column to the
-     drawer's width so the stage shifts right to clear it. The sidebar
-     cards keep their own 280px width and stay at their original x;
-     they sit hidden behind the drawer, while the stage (room + chat)
-     becomes narrower and fully visible. */
+  /* Containing block for the agent drawer (absolute-positioned), so it
+     tracks the sandbox regardless of the main sidebar's open/closed
+     state. */
+  position: relative;
+  /* When the drawer is open, widen the first grid column by the
+     drawer's width so the stage shrinks and the drawer fits between
+     the cards column and the stage. The cards keep their own 280px
+     width; the extra space is where the drawer lives. */
   transition: grid-template-columns 220ms ease-out;
 }
 .sandbox3:has(.agent-drawer:not(.closing)) {
-  grid-template-columns: 594px 1fr;
+  /* 280 cards + sp-3 gap + drawer-main 420 + sidetab rail ~44 */
+  grid-template-columns: calc(280px + var(--sp-3) + 420px + 44px) 1fr;
 }
 .sandbox3-cards {
   /* Fix the sidebar width so widening its grid cell (when drawer is
      open) doesn't stretch the cards. */
   width: 280px;
   justify-self: start;
+  /* Stack above the drawer so the slide-in reads as "emerging from
+     behind the cards". */
+  position: relative;
+  z-index: 10;
 }
 
 
@@ -2548,6 +2572,23 @@ body {
   0%, 100% { box-shadow: 2px 2px 0 var(--ink); }
   50%      { box-shadow: 2px 2px 0 var(--amber); }
 }
+/* Selected — mirrors the card that owns the currently open drawer.
+   Uses a right-edge accent bar so it visually "connects" to the drawer
+   emerging from that edge. Pseudo-element (not background/box-shadow)
+   so it stacks cleanly with .running (ok-bg background) and .thinking
+   (pulsing shadow) without clashing. */
+.sandbox3-card { position: relative; }
+.sandbox3-card.selected::after {
+  content: '';
+  position: absolute;
+  top: -1.5px;
+  bottom: -1.5px;
+  right: -1.5px;
+  width: 4px;
+  background: var(--transmit);
+  pointer-events: none;
+}
+.sandbox3-card.selected { border-right-color: var(--transmit); }
 
 .sandbox3-card-portrait {
   position: relative;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import config from '../woid.config.json'
+import config from './config.js'
 import { useSandboxRoom } from './hooks/useSandboxRoom.js'
 import { useSandboxSettings } from './hooks/useSandboxSettings.js'
 import { useBridgeModels } from './hooks/useBridgeModels.js'
@@ -251,11 +251,12 @@ export default function Sandbox() {
             {characters.map((c) => {
               const runtime = c.runtime?.running ? c.runtime : null
               const thinking = !!runtime?.thinking
+              const selected = inspectedId && (inspectedId === c.pubkey || inspectedId === runtime?.agentId)
               const initial = (c.name || '?').trim().charAt(0).toUpperCase()
               return (
                 <li
                   key={c.pubkey}
-                  className={`sandbox3-card${runtime ? ' running' : ''}${thinking ? ' thinking' : ''}`}
+                  className={`sandbox3-card${runtime ? ' running' : ''}${thinking ? ' thinking' : ''}${selected ? ' selected' : ''}`}
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData('application/x-character-pubkey', c.pubkey)
@@ -402,8 +403,9 @@ export default function Sandbox() {
         </form>
       </section>
 
-      {/* Drawer is pinned to viewport-left and slides in from there,
-          overlaying everything (agent cards included). */}
+      {/* Drawer is anchored to the right edge of the cards column and
+          slides out from behind them; the stage shrinks via grid-
+          template-columns to make room. */}
       {inspectedId && (
         <AgentDrawer
           bridgeUrl={cfg.bridgeUrl}
