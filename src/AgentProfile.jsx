@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import config from '../woid.config.json'
+import config from './config.js'
 
 const cfg = config.agentSandbox || {}
 const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'

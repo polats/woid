@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import config from '../woid.config.json'
+import config from './config.js'
 import { useHashRoute } from './hooks/useHashRoute.js'
 import Sidebar from './layout/Sidebar.jsx'
 import Board from './Board.jsx'

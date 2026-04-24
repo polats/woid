@@ -12,7 +12,8 @@
     "test:view": "npx serve testing -l 3333",
     "agent-sandbox:up": "docker compose -f agent-sandbox/docker-compose.yml --env-file agent-sandbox/.env up --build",
     "agent-sandbox:down": "docker compose -f agent-sandbox/docker-compose.yml down",
-    "agent-sandbox:smoke": "node scripts/agent-sandbox-smoke.mjs"
+    "agent-sandbox:smoke": "node scripts/agent-sandbox-smoke.mjs",
+    "agent-sandbox:smoke:prod": "node scripts/agent-sandbox-smoke-prod.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.77",

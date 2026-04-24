@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import config from '../woid.config.json'
+import config from './config.js'
 import { useRelayFeed } from './hooks/useRelayFeed.js'
 
 const cfg = config.agentSandbox || {}
