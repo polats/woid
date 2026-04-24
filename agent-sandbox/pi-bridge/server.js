@@ -9,6 +9,8 @@ import { fileURLToPath } from "url";
 import { homedir, tmpdir } from "os";
 import crypto from "crypto";
 import * as s3 from "./s3.js";
+import * as piPool from "./pi-pool.js";
+import * as rateLimiter from "./rate-limiter.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -953,7 +955,7 @@ function runtimeSnapshot(pubkey) {
     agentId: r.id,
     running: !!r.rec.listening,
     listening: !!r.rec.listening,
-    thinking: !!r.rec.process,
+    thinking: !!r.rec.thinking,
     turns: r.rec.turns ?? 0,
     model: r.rec.model ?? null,
     roomName: r.rec.roomName ?? null,
@@ -963,11 +965,49 @@ function runtimeSnapshot(pubkey) {
   };
 }
 
-// Spawn a single pi turn for an existing agent record. Non-blocking;
-// mutates rec.process and rec.events as stdout events arrive. Returns
-// the child immediately.
-function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {} }) {
+// Ensure a pi-pool handle exists for `rec`. The handle is spawned on
+// first use and reused for every subsequent turn for this agent,
+// removing the ~600ms–2s cold-start per reply of the old
+// spawn-per-turn model. The system prompt is pinned to the handle —
+// if it ever needs to change (character about/state edit), we'd
+// `piPool.restartHandle(...)` here after detecting the delta.
+function ensurePiHandle(rec, { systemPrompt }) {
+  let handle = piPool.getPi(rec.agentId);
+  if (handle) return handle;
   const charDir = getCharDir(rec.pubkey);
+  const sessionPath = join(charDir, "session.jsonl");
+  const provider = rec.provider || providerForModelId(rec.model);
+  handle = piPool.startPi({
+    agentId: rec.agentId,
+    provider,
+    model: rec.model,
+    sessionPath,
+    systemPrompt,
+    cwd: charDir,
+    env: {
+      ...process.env,
+      NVIDIA_NIM_API_KEY,
+      GEMINI_API_KEY,
+      LOCAL_LLM_BASE_URL,
+      HOME: homedir(),
+    },
+    // Route pi events into the agent's ring buffer so the inspector
+    // drawer / waterfall keep working unchanged.
+    onEvent: (ev) => {
+      if (ev.kind === "pool:crashed") {
+        rec.listening = false;
+        rec.events.push({ kind: "exit", code: "crash-loop", turns: rec.turns });
+      }
+      rec.events.push(ev);
+    },
+  });
+  rec.systemPromptSignature = systemPrompt;
+  return handle;
+}
+
+// Drive a single turn using the resident pi handle for `rec`. Returns
+// the turn Promise so callers can await completion and surface errors.
+async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {} }) {
   const character = loadCharacter(rec.pubkey);
   const snapshot = roomSnapshot(rec.agentId);
 
@@ -993,63 +1033,55 @@ function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerContext = {
     seedMessage,
   });
 
-  // Pi owns the conversation history per character. The session JSONL
-  // lives next to agent.json so it survives bridge restarts, container
-  // rebuilds, and host reboots. Each pi invocation appends to it.
-  // buildUserTurn carries only the delta since lastSeenMessageTs.
-  const sessionPath = join(getCharDir(rec.pubkey), "session.jsonl");
-  // Route to the right provider by model id. Explicit provider override
-  // wins (set on the runtime record at spawn time); otherwise infer from
-  // the model id against our catalogs.
   const provider = rec.provider || providerForModelId(rec.model);
-  const args = [
-    "--provider", provider,
-    "--model", rec.model,
-    "--mode", "json",
-    "--print",
-    "--session", sessionPath,
-    "--system-prompt", systemPrompt,
-  ];
-  args.push(userTurn);
 
-  const child = spawn(PI_BIN, args, {
-    cwd: charDir,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NVIDIA_NIM_API_KEY, GEMINI_API_KEY, LOCAL_LLM_BASE_URL, HOME: homedir() },
-  });
-  rec.process = child;
+  // Global rate-limit circuit breaker — short-circuit the turn rather
+  // than hammering a quota'd provider. The listener will re-trigger
+  // once the cooldown expires.
+  if (rateLimiter.isInCooldown(provider)) {
+    rec.events.push({
+      kind: "rate-limit-deferred",
+      provider,
+      remainingMs: rateLimiter.getCooldownRemaining(provider),
+    });
+    return null;
+  }
+
+  // Spawn handle on first turn. If the system prompt has drifted (e.g.
+  // character was PATCHed mid-session), restart the handle so pi sees
+  // the new prompt; session file persists, so history survives.
+  let handle = piPool.getPi(rec.agentId);
+  if (handle && rec.systemPromptSignature && rec.systemPromptSignature !== systemPrompt) {
+    handle = piPool.restartHandle(rec.agentId, { systemPrompt });
+    rec.systemPromptSignature = systemPrompt;
+  }
+  if (!handle) handle = ensurePiHandle(rec, { systemPrompt });
+
   rec.turns = (rec.turns ?? 0) + 1;
   rec.lastTriggerAt = Date.now();
+  rec.thinking = true;
 
-  const rl = createInterface({ input: child.stdout });
-  rl.on("line", (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    try {
-      const parsed = JSON.parse(trimmed);
-      rec.events.push({ kind: "pi", data: parsed });
-    } catch {
-      rec.events.push({ kind: "stdout", text: trimmed });
-    }
-  });
-  child.stderr.on("data", (d) => {
-    const text = d.toString().trimEnd();
-    if (!text) return;
-    console.error(`[pi:${rec.agentId}:err] ${text}`);
-    rec.events.push({ kind: "stderr", text });
-  });
-  child.on("exit", (code) => {
-    console.log(`[pi:${rec.agentId}] turn=${rec.turns} exited code=${code}`);
-    rec.events.push({ kind: "exit", code, turn: rec.turns });
-    if (agents.get(rec.agentId) === rec) rec.process = null;
-    // Bump the high-water mark so the next turn's user message only
-    // carries messages newer than this turn's snapshot.
+  try {
+    const result = await handle.turn(userTurn);
+    // Bump the high-water mark so the next user turn's delta carries
+    // only messages newer than the current snapshot.
     const latest = snapshot.messages?.length
       ? Math.max(...snapshot.messages.map((m) => m.ts ?? 0))
       : rec.lastSeenMessageTs ?? 0;
     rec.lastSeenMessageTs = latest;
-  });
-  return child;
+    return result;
+  } catch (err) {
+    const wasRateLimit = rateLimiter.recordError(provider, err);
+    rec.events.push({
+      kind: wasRateLimit ? "rate-limit" : "turn-error",
+      provider,
+      error: err?.message || String(err),
+    });
+    if (!wasRateLimit) console.error(`[pi:${rec.agentId}] turn error:`, err?.message || err);
+    return null;
+  } finally {
+    rec.thinking = false;
+  }
 }
 
 // Per-agent caps for continuous listening. Tunable via env.
@@ -1186,7 +1218,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
 //   - we're under AGENT_MAX_TURNS
 function tryListenTurn(rec) {
   if (!rec.listening) return;
-  if (rec.process) return; // busy with a turn
+  if (rec.thinking) return; // a turn is already in flight on the resident pi
   if (rec.turns >= AGENT_MAX_TURNS) {
     console.log(`[driver:${rec.agentId}] reached max turns (${AGENT_MAX_TURNS}), stopping`);
     stopAgent(rec.agentId).catch(() => {});
@@ -1196,7 +1228,9 @@ function tryListenTurn(rec) {
   if (sinceLast < AGENT_MIN_TRIGGER_GAP_MS) return;
   const pending = rec.pendingTrigger ?? { trigger: "heartbeat", triggerContext: {} };
   rec.pendingTrigger = null;
-  runPiTurn(rec, pending);
+  runPiTurn(rec, pending).catch((err) => {
+    console.error(`[driver:${rec.agentId}] turn failed:`, err?.message || err);
+  });
 }
 
 async function stopAgent(agentId) {
@@ -1206,8 +1240,10 @@ async function stopAgent(agentId) {
   if (rec.debounceTimer) { clearTimeout(rec.debounceTimer); rec.debounceTimer = null; }
   if (rec.idleTimer) { clearInterval(rec.idleTimer); rec.idleTimer = null; }
   if (rec.unsubscribe) { try { rec.unsubscribe(); } catch {} }
-  try { rec.process?.kill(); } catch {}
-  rec.process = null;
+  // Tear down the resident pi handle. Sends SIGTERM; pool escalates to
+  // SIGKILL if the child doesn't exit promptly.
+  piPool.stopPi(agentId);
+  rec.thinking = false;
   rec.exitedAt = Date.now();
   rec.events.push({ kind: "exit", code: "stopped", turns: rec.turns });
   await leaveRoom(agentId);
@@ -1282,6 +1318,8 @@ app.get("/health", (_req, res) => {
     nim: !!NVIDIA_NIM_API_KEY,
     relay: RELAY_URL,
     activeAgents: agents.size,
+    pool: piPool.poolSnapshot(),
+    cooldowns: rateLimiter.snapshot(),
   });
 });
 
@@ -1855,7 +1893,7 @@ app.get("/agents", (_req, res) => {
     npub: rec.pubkey,
     roomName: rec.roomName,
     model: rec.model,
-    running: !!rec.process,
+    running: !!rec.listening,
     exitedAt: rec.exitedAt ?? null,
     exitCode: rec.exitCode ?? null,
   }));

@@ -11,7 +11,7 @@ RUN npm install -g @mariozechner/pi-coding-agent
 COPY package.json package-lock.json* /app/bridge/
 RUN cd /app/bridge && npm install --production
 
-COPY server.js prompt-builder.js buildContext.js sessionReader.js room-client.js s3.js nim-catalog.json gemini-catalog.json local-catalog.json /app/bridge/
+COPY server.js prompt-builder.js buildContext.js sessionReader.js room-client.js s3.js pi-pool.js rate-limiter.js nim-catalog.json gemini-catalog.json local-catalog.json /app/bridge/
 COPY skill-templates/ /app/bridge/skill-templates/
 
 RUN mkdir -p /workspace
