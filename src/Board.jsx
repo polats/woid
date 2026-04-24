@@ -35,9 +35,18 @@ export default function Board() {
   const [tasks, setTasks] = useState([])
   const [activeId, setActiveId] = useState(null)
   const [editing, setEditing] = useState(null)
+  // The tasks API is served by a Vite dev plugin (server/tasks.js) and
+  // therefore absent in prod builds on Vercel. Detect and show an
+  // empty-state message instead of crashing the route on a 404.
+  const [apiAvailable, setApiAvailable] = useState(true)
 
   useEffect(() => {
-    api('GET').then(setTasks)
+    api('GET')
+      .then((rows) => {
+        setTasks(Array.isArray(rows) ? rows : [])
+        setApiAvailable(true)
+      })
+      .catch(() => setApiAvailable(false))
   }, [])
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
@@ -106,6 +115,20 @@ export default function Board() {
     await api('DELETE', { id })
     setTasks((prev) => prev.filter((t) => t.id !== id))
     setEditing(null)
+  }
+
+  if (!apiAvailable) {
+    return (
+      <div className="board board-embedded">
+        <header className="board-header">
+          <h1>Sprint Board</h1>
+        </header>
+        <p className="muted" style={{ padding: 20 }}>
+          The sprint board is a dev-only tool; its API is served by Vite
+          during local development and isn't deployed. Run <code>npm run dev</code> locally to edit tasks.
+        </p>
+      </div>
+    )
   }
 
   return (

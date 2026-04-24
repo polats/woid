@@ -113,6 +113,31 @@ body {
 }
 .sidebar ul { list-style: none; padding: 0; margin: 0; }
 .sidebar li { margin: 0; }
+/* Collapsed Dev section — lives at the bottom and groups dev-only
+   tools (sprint board, testing sessions, diagrams, references) behind
+   a toggleable <details>. Auto-opens when the active route is inside. */
+.sidebar-dev { margin-top: 18px; border-top: 1px dashed var(--ink-faint); padding-top: 6px; }
+.sidebar-dev > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 8px 0 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  user-select: none;
+}
+.sidebar-dev > summary::-webkit-details-marker { display: none; }
+.sidebar-dev > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 120ms;
+  margin-right: 4px;
+}
+.sidebar-dev[open] > summary::before { transform: rotate(90deg); }
+.sidebar-dev > summary:hover { color: var(--ink); }
+.sidebar-dev h2 { margin-top: 12px; }
 .sidebar-link {
   display: block;
   padding: 5px 8px;

@@ -45,12 +45,15 @@ export default function App() {
     try { localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? '1' : '0') } catch {}
   }, [sidebarCollapsed])
 
+  // Both endpoints are served by a Vite dev plugin and are absent in
+  // prod builds. Swallow failures so the Dev-section nav simply shows
+  // empty lists instead of emitting unhandled rejections.
   const refreshDiagrams = useCallback(
-    () => fetch('/api/diagrams').then((r) => r.json()).then(setDiagrams),
+    () => fetch('/api/diagrams').then((r) => r.ok ? r.json() : []).then(setDiagrams).catch(() => setDiagrams([])),
     [],
   )
   const refreshReferences = useCallback(
-    () => fetch('/api/references/').then((r) => r.json()).then(setReferences),
+    () => fetch('/api/references/').then((r) => r.ok ? r.json() : []).then(setReferences).catch(() => setReferences([])),
     [],
   )
 

@@ -59,58 +59,6 @@ export default function Sidebar({
         </>
       )}
 
-      <h2>Sprint</h2>
-      <ul>
-        <li>
-          <a href="#/tasks" className={linkClass(route.view === 'tasks')}>Tasks</a>
-        </li>
-      </ul>
-
-      <h2>Testing</h2>
-      <ul>
-        <li>
-          <a href="#/testing" className={linkClass(route.view === 'testing')}>Sessions</a>
-        </li>
-      </ul>
-
-      <h2>Diagrams</h2>
-      <ul>
-        {diagrams.map((d) => (
-          <li key={d.id}>
-            <a
-              href={`#/diagrams/${encodeURIComponent(d.id)}`}
-              className={linkClass(route.view === 'diagram' && route.id === d.id)}
-            >
-              {d.title}
-            </a>
-          </li>
-        ))}
-        <li>
-          <button className="sidebar-link sidebar-action" onClick={onNewDiagram}>
-            + New diagram
-          </button>
-        </li>
-      </ul>
-
-      <h2>References</h2>
-      <ul>
-        {references.map((r) => (
-          <li key={r.id}>
-            <a
-              href={`#/references/${encodeURIComponent(r.id)}`}
-              className={linkClass(route.view === 'reference' && route.id === r.id)}
-            >
-              {r.id}
-            </a>
-          </li>
-        ))}
-        <li>
-          <button className="sidebar-link sidebar-action" onClick={onAddReference}>
-            + Add reference
-          </button>
-        </li>
-      </ul>
-
       <h2>Docs</h2>
       <ul>
         {docs.map((d) => (
@@ -124,6 +72,67 @@ export default function Sidebar({
           </li>
         ))}
       </ul>
+
+      {/* Dev-only tooling (sprint board, testing sessions, diagrams,
+          references). Collapsed by default — backed by a Vite dev API
+          that isn't deployed. The <details> open state re-opens
+          automatically whenever the user lands on one of these routes
+          so the active nav is visible even in prod. */}
+      <details className="sidebar-dev" open={['tasks', 'testing', 'diagram', 'reference'].includes(route.view)}>
+        <summary>Dev</summary>
+
+        <h2>Sprint</h2>
+        <ul>
+          <li>
+            <a href="#/tasks" className={linkClass(route.view === 'tasks')}>Tasks</a>
+          </li>
+        </ul>
+
+        <h2>Testing</h2>
+        <ul>
+          <li>
+            <a href="#/testing" className={linkClass(route.view === 'testing')}>Sessions</a>
+          </li>
+        </ul>
+
+        <h2>Diagrams</h2>
+        <ul>
+          {diagrams.map((d) => (
+            <li key={d.id}>
+              <a
+                href={`#/diagrams/${encodeURIComponent(d.id)}`}
+                className={linkClass(route.view === 'diagram' && route.id === d.id)}
+              >
+                {d.title}
+              </a>
+            </li>
+          ))}
+          <li>
+            <button className="sidebar-link sidebar-action" onClick={onNewDiagram}>
+              + New diagram
+            </button>
+          </li>
+        </ul>
+
+        <h2>References</h2>
+        <ul>
+          {references.map((r) => (
+            <li key={r.id}>
+              <a
+                href={`#/references/${encodeURIComponent(r.id)}`}
+                className={linkClass(route.view === 'reference' && route.id === r.id)}
+              >
+                {r.id}
+              </a>
+            </li>
+          ))}
+          <li>
+            <button className="sidebar-link sidebar-action" onClick={onAddReference}>
+              + Add reference
+            </button>
+          </li>
+        </ul>
+      </details>
     </aside>
   )
 }
