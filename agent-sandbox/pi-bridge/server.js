@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, cpSync
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir, tmpdir } from "os";
+import crypto from "crypto";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -382,6 +383,33 @@ async function publishKind1From({ sk, pubkey, content, tags = [] }) {
   );
   await publishSignedEvent(event, `kind1:${pubkey.slice(0, 10)}`);
   return event;
+}
+
+// Rebase stale avatar URLs to the current PUBLIC_BRIDGE_URL and
+// re-publish kind:0 for any character whose saved URL points at a
+// different origin. Runs once at startup so PUBLIC_BRIDGE_URL changes
+// (e.g. moving from localhost dev to a prod Railway hostname)
+// self-heal without manual intervention. Idempotent: when the URL
+// origin already matches, this is a no-op.
+async function rebaseStaleAvatarUrls() {
+  let bridgeOrigin;
+  try { bridgeOrigin = new URL(PUBLIC_BRIDGE_URL).origin; } catch { return; }
+  const rows = listCharacters();
+  for (const c of rows) {
+    if (!c.avatarUrl) continue;
+    let current;
+    try { current = new URL(c.avatarUrl); } catch { continue; }
+    if (current.origin === bridgeOrigin) continue;
+    // Preserve the path + query (which includes the cache-buster),
+    // only swap the origin. Refresh the cache-buster too so clients
+    // see the new URL as a fresh resource.
+    const newUrl = `${PUBLIC_BRIDGE_URL}${current.pathname}?t=${Date.now()}`;
+    saveCharacterManifest(c.pubkey, { avatarUrl: newUrl });
+    console.log(`[rebase] ${c.name} ${current.origin} -> ${bridgeOrigin}`);
+    await publishCharacterProfile(c.pubkey).catch((err) => {
+      console.error(`[rebase] publish failed for ${c.name}:`, err?.message || err);
+    });
+  }
 }
 
 async function publishCharacterProfile(pubkey) {
@@ -1335,6 +1363,120 @@ app.post("/agents/:id/move", (req, res) => {
   res.json({ ok: true });
 });
 
+// ── /complete — headless one-shot LLM call via pi ──
+//
+// Unlike the full agent runtime (Colyseus seat, listener, skill scripts,
+// relay publishing), this is just a thin wrapper around `pi --print`:
+//   POST /complete { systemPrompt, userMessage, provider?, model?, sessionKey? }
+//   → { text, thinking?, model, provider, usage }
+//
+// `sessionKey`, if set, enables stateful history: pi is invoked with
+// `--session $WORKSPACE/.sessions/<sha256(sessionKey)>.jsonl` so
+// subsequent calls with the same key see prior turns. Omit for
+// stateless one-shots.
+//
+// Tools are not exposed. Pi's built-in `bash` is still reachable but
+// pointing a stateless call at bash is a recipe for sadness; the
+// intent is that the caller asks for structured JSON in the system
+// prompt and parses `text` on return.
+
+const COMPLETE_SESSIONS_DIR = join(WORKSPACE, ".sessions");
+mkdirSync(COMPLETE_SESSIONS_DIR, { recursive: true });
+
+function sessionPathForKey(key) {
+  const hash = crypto.createHash("sha256").update(String(key)).digest("hex").slice(0, 32);
+  return join(COMPLETE_SESSIONS_DIR, `${hash}.jsonl`);
+}
+
+function runPiComplete({ systemPrompt, userMessage, provider, model, sessionKey, timeoutMs = 90_000 }) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      "--provider", provider,
+      "--model", model,
+      "--mode", "json",
+      "--print",
+      "--system-prompt", systemPrompt,
+    ];
+    if (sessionKey) args.push("--session", sessionPathForKey(sessionKey));
+    args.push(userMessage);
+
+    const child = spawn(PI_BIN, args, {
+      cwd: WORKSPACE,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, NVIDIA_NIM_API_KEY, GEMINI_API_KEY, LOCAL_LLM_BASE_URL, HOME: homedir() },
+    });
+
+    let text = "";
+    let thinking = "";
+    let lastUsage = null;
+    let lastModel = model;
+    let lastProvider = provider;
+    let errText = "";
+    const rl = createInterface({ input: child.stdout });
+
+    rl.on("line", (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      try {
+        const ev = JSON.parse(trimmed);
+        if (ev.type === "message_end" && ev.message?.role === "assistant") {
+          const msg = ev.message;
+          const parts = Array.isArray(msg.content) ? msg.content : [];
+          text = parts.filter((p) => p?.type === "text").map((p) => p.text || "").join("");
+          thinking = parts.filter((p) => p?.type === "thinking").map((p) => p.thinking || "").join("");
+          if (msg.usage) lastUsage = msg.usage;
+          if (msg.model) lastModel = msg.model;
+          if (msg.provider) lastProvider = msg.provider;
+        }
+      } catch { /* non-JSON stdout — ignore */ }
+    });
+    child.stderr.on("data", (d) => { errText += d.toString(); });
+
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      reject(new Error(`pi --print timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.on("error", (err) => { clearTimeout(timer); reject(err); });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        return reject(new Error(`pi exited with code ${code}${errText ? `: ${errText.slice(0, 400)}` : ""}`));
+      }
+      resolve({
+        text,
+        thinking: thinking || undefined,
+        model: lastModel,
+        provider: lastProvider,
+        usage: lastUsage ?? undefined,
+      });
+    });
+  });
+}
+
+app.post("/complete", async (req, res) => {
+  try {
+    const { systemPrompt, userMessage, provider, model, sessionKey, timeoutMs } = req.body || {};
+    if (!systemPrompt || !userMessage) {
+      return res.status(400).json({ error: "systemPrompt and userMessage required" });
+    }
+    const effModel = model || DEFAULT_MODEL_ID;
+    const effProvider = provider || providerForModelId(effModel);
+    const result = await runPiComplete({
+      systemPrompt,
+      userMessage,
+      provider: effProvider,
+      model: effModel,
+      sessionKey: sessionKey || null,
+      timeoutMs: timeoutMs || 90_000,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("[complete]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Characters (persistent identities) ──
 
 app.get("/characters", (_req, res) => {
@@ -1791,6 +1933,11 @@ app.listen(PORT, () => {
   // Publish admin kind:0 profile. Fire-and-forget so a relay outage doesn't
   // block bridge startup; it's idempotent — reissuing is harmless.
   publishAdminProfile().catch(() => {});
+  // Rewrite any character avatar URLs whose origin doesn't match the
+  // current PUBLIC_BRIDGE_URL. No-op when nothing's stale.
+  rebaseStaleAvatarUrls().catch((err) => {
+    console.error("[rebase] failed:", err?.message || err);
+  });
 });
 
 process.on("SIGTERM", async () => {
