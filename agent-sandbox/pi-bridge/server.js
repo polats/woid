@@ -8,6 +8,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir, tmpdir } from "os";
 import crypto from "crypto";
+import * as s3 from "./s3.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -844,11 +845,21 @@ async function generateAvatar({ pubkey, name, about, promptOverride }) {
 
   const mime = sniffMime(b64);
   const ext = mime.split("/")[1] || "jpg";
+  const buffer = Buffer.from(b64, "base64");
+  const filename = `avatar.${ext}`;
 
+  // Prefer S3 when configured (prod). Local dev with no S3 env vars
+  // falls through to filesystem. We intentionally write to BOTH when
+  // S3 is configured so stale readers (in-flight cache, older code
+  // paths) stay consistent and so the Railway volume holds a local
+  // mirror for disaster-recovery purposes.
+  if (s3.s3Configured) {
+    await s3.putAvatar(pubkey, ext, buffer, mime);
+  }
   const dir = getCharDir(pubkey);
   mkdirSync(dir, { recursive: true });
-  const filename = `avatar.${ext}`;
-  writeFileSync(join(dir, filename), Buffer.from(b64, "base64"));
+  writeFileSync(join(dir, filename), buffer);
+
   const avatarUrl = `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/avatar?t=${Date.now()}`;
   return { avatarUrl, prompt, filename };
 }
@@ -857,6 +868,10 @@ function deleteCharacter(pubkey) {
   const dir = getCharDir(pubkey);
   if (!existsSync(dir)) return false;
   rmSync(dir, { recursive: true, force: true });
+  // Fire-and-forget — S3 cleanup shouldn't block the HTTP response,
+  // and a stray orphan object is harmless (next putAvatar with same
+  // key overwrites).
+  if (s3.s3Configured) s3.deleteAvatar(pubkey).catch(() => {});
   console.log(`[char] deleted ${pubkey.slice(0, 12)}...`);
   return true;
 }
@@ -1547,10 +1562,31 @@ app.get("/characters/:pubkey/turns/:turnId", (req, res) => {
   res.json({ turn, meta });
 });
 
-app.get("/characters/:pubkey/avatar", (req, res) => {
+app.get("/characters/:pubkey/avatar", async (req, res) => {
   const pubkey = req.params.pubkey;
+
+  // Prefer S3 when configured — objects uploaded by generateAvatar()
+  // are the canonical source of truth in prod. Fall back to the local
+  // workspace volume so local dev (no S3 vars) keeps working and so
+  // legacy characters whose bytes live only on disk still serve.
+  if (s3.s3Configured) {
+    try {
+      const found = await s3.headAvatar(pubkey);
+      if (found) {
+        const { body, contentType } = await s3.getAvatarStream(pubkey, found.ext);
+        res.setHeader("Content-Type", contentType || found.contentType || "image/jpeg");
+        // Long immutable cache — URL includes a ?t= cache-buster so
+        // clients fetch a fresh one when avatars change.
+        res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        return body.pipe(res);
+      }
+    } catch (err) {
+      console.error(`[avatar:s3] ${pubkey.slice(0, 12)} — ${err.message}; falling back to disk`);
+    }
+  }
+
   const dir = getCharDir(pubkey);
-  // Check in priority order for the extension that might be on disk.
   for (const ext of ["jpeg", "jpg", "png", "webp", "gif"]) {
     const path = join(dir, `avatar.${ext}`);
     if (existsSync(path)) {
