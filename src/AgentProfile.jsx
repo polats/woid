@@ -455,18 +455,12 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
             rows={2}
             disabled={saving || generating}
           />
-          <small className="agent-profile-field-hint">
-            The agent's own short scratch-pad. It rewrites this between turns; you can edit it here to nudge them.
-          </small>
         </label>
         {character?.mood && (
           <div className="agent-profile-mood">
             <span className="agent-profile-field-label">Mood</span>
             <span className="agent-profile-mood-pill">energy: {character.mood.energy ?? '—'}</span>
             <span className="agent-profile-mood-pill">social: {character.mood.social ?? '—'}</span>
-            <small className="agent-profile-field-hint">
-              Live mood readings the agent maintains via the dynamic prompt. Updated as turns unfold.
-            </small>
           </div>
         )}
       </fieldset>
