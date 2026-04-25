@@ -16,17 +16,18 @@ const GEN_MODELS = [
 ]
 
 // Brain selector. Mirrors KNOWN_HARNESSES in agent-sandbox/pi-bridge/harnesses/index.js.
+// `direct` first because it's the default brain for new spawns.
 // Description is shown as a tooltip + a one-line hint under the select.
 const HARNESS_OPTIONS = [
-  {
-    id: 'pi',
-    label: 'pi (coding agent)',
-    hint: 'Subprocess with bash/read/write tools. Use when the agent needs file/shell access.',
-  },
   {
     id: 'direct',
     label: 'direct (in-process SDK)',
     hint: 'One LLM call per turn, JSON out. Faster and simpler — recommended for most characters.',
+  },
+  {
+    id: 'pi',
+    label: 'pi (coding agent)',
+    hint: 'Subprocess with bash/read/write tools. Use when the agent needs file/shell access.',
   },
   {
     id: 'external',
