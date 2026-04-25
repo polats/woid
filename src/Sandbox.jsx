@@ -327,20 +327,25 @@ export default function Sandbox() {
                       </div>
                     )}
                     {(() => {
-                      // What's actually running this character: prefer the
-                      // live runtime values; fall back to the manifest for
-                      // characters that aren't currently spawned. Show
-                      // "model · brain" so it's obvious which harness is
-                      // driving them.
+                      // Prefer the live runtime values for spawned chars;
+                      // fall back to manifest. Two separate pills (model
+                      // + brain) so a long model id can truncate inside
+                      // its own pill without smushing the brain tag.
                       const m = runtime?.model || c.model
                       const h = runtime?.harness || c.harness
                       if (!m && !h) return null
-                      const mShort = m ? m.split('/').pop() : null
-                      const tooltip = [m && `model: ${m}`, h && `brain: ${h}`].filter(Boolean).join(' · ')
                       return (
-                        <div className="sandbox3-card-model" title={tooltip}>
-                          {mShort || '—'}
-                          {h && <span className="sandbox3-card-harness"> · {h}</span>}
+                        <div className="sandbox3-card-tags">
+                          {m && (
+                            <span className="sandbox3-card-tag sandbox3-card-tag-model" title={`model: ${m}`}>
+                              {m.split('/').pop()}
+                            </span>
+                          )}
+                          {h && (
+                            <span className="sandbox3-card-tag sandbox3-card-tag-harness" title={`brain: ${h}`}>
+                              {h}
+                            </span>
+                          )}
                         </div>
                       )
                     })()}

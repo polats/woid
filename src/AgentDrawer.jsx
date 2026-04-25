@@ -21,8 +21,17 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
   const [profileDirty, setProfileDirty] = useState(false)
   const asideRef = useRef(null)
   const closingRef = useRef(false)
+  // dirtyRef MUST stay in sync at the moment of the dirty change, not
+  // just on the next render. dismiss() / handleTabChange() / Sandbox's
+  // safelySetInspectedId all read dirtyRef synchronously to decide
+  // whether to prompt; if it's stale (the React state has been queued
+  // but not yet committed), the user sees a 'discard?' prompt over a
+  // save they just successfully completed.
   const dirtyRef = useRef(false)
-  dirtyRef.current = profileDirty
+  function applyDirty(d) {
+    dirtyRef.current = d
+    setProfileDirty(d)
+  }
 
   const prevPubkeyRef = useRef(character?.pubkey)
   useEffect(() => {
@@ -57,7 +66,7 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
     if (next === tab) return
     if (tab === 'profile' && dirtyRef.current && next !== 'profile') {
       if (!window.confirm('You have unsaved profile changes. Discard and switch tab?')) return
-      setProfileDirty(false)
+      applyDirty(false)
     }
     setTab(next)
   }
@@ -131,12 +140,18 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
             </div>
             <div className="agent-drawer-title">
               <strong>{name}</strong>
-              {model && (
-                <span className="agent-model-badge" title={`model: ${model}${harness ? ` · brain: ${harness}` : ''}`}>
-                  {model.split('/').pop()}
-                  {harness && <span className="agent-harness-badge"> · {harness}</span>}
-                </span>
-              )}
+              <div className="agent-drawer-tags">
+                {model && (
+                  <span className="agent-model-badge" title={`model: ${model}`}>
+                    {model.split('/').pop()}
+                  </span>
+                )}
+                {harness && (
+                  <span className="agent-harness-badge-pill" title={`brain: ${harness}`}>
+                    {harness}
+                  </span>
+                )}
+              </div>
               <code title={npub}>{npub ? npub.slice(0, 12) + '…' : ''}</code>
             </div>
             <button className="agent-drawer-close" onClick={dismiss} aria-label="close">×</button>
@@ -150,7 +165,7 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
                   onClose={dismiss}
                   onDeleted={onDeleted}
                   onUpdated={onUpdated}
-                  onDirtyChange={setProfileDirty}
+                  onDirtyChange={applyDirty}
                 />
               ) : (
                 <p className="muted" style={{ padding: 14 }}>No character loaded.</p>

@@ -1039,6 +1039,62 @@ body {
   opacity: 0.78;
   margin-left: 2px;
 }
+
+/* Drawer header — split model + brain pills with their own widths.
+   `flex-wrap` so a long model id wraps onto its own line above the
+   brain pill instead of pushing the close button off the right edge.
+   Each pill independently caps width with ellipsis. */
+.agent-drawer-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+.agent-drawer-tags .agent-model-badge {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+.agent-harness-badge-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--ink);
+  letter-spacing: .04em;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+/* Card tags — same idea but compact and within the card body. */
+.sandbox3-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 2px;
+}
+.sandbox3-card-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 5px;
+  border: 1px solid var(--ink);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sandbox3-card-tag-model {
+  background: var(--violet);
+  color: var(--paper);
+  max-width: 180px;
+}
+.sandbox3-card-tag-harness {
+  background: var(--paper);
+  color: var(--ink);
+}
 /* System tab — shows the system prompt currently being passed to
    the character's brain on every turn. */
 .agent-system {
