@@ -21,7 +21,7 @@ import WebSocket from "ws";
 // nostr-tools SimplePool uses global WebSocket; Node doesn't expose one by default.
 useWebSocketImplementation(WebSocket);
 import { buildSystemPrompt, buildUserTurn } from "./buildContext.js";
-import { readSessionTurns, readLatestUsage } from "./sessionReader.js";
+import { readSessionTurns, readLatestUsage, readDirectTurns, readDirectLatestUsage } from "./sessionReader.js";
 import { joinRoom, leaveRoom, sendSay, sayAs, moveAs, moveAgent, onNewMessage, onPositionChange, roomSnapshot } from "./room-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -949,10 +949,16 @@ function runtimeSnapshot(pubkey) {
   //   running   — driver alive, owns a Colyseus seat, will react to new messages
   //   thinking  — pi child process is active right now (a turn is in flight)
   //   listening — alias for running; exposed for UI clarity
-  // lastUsage — latest assistant usage from pi's session file, for the
-  // card-level context gauge. Cheap tail-read.
-  const sessionPath = join(getCharDir(pubkey), "session.jsonl");
-  const latest = readLatestUsage(sessionPath);
+  // lastUsage — latest assistant usage for the card-level context gauge.
+  // Reads from whichever JSONL the active harness wrote: pi → session.jsonl,
+  // direct → turns.jsonl. Cheap tail-read.
+  const dir = getCharDir(pubkey);
+  const harness = r.rec.harness || DEFAULT_HARNESS;
+  const latest = harness === "direct"
+    ? readDirectLatestUsage(join(dir, "turns.jsonl"))
+    : harness === "external"
+      ? null
+      : readLatestUsage(join(dir, "session.jsonl"));
   return {
     agentId: r.id,
     running: !!r.rec.listening,
@@ -1761,13 +1767,27 @@ app.get("/characters/:pubkey", (req, res) => {
 // entries into turn objects (user → assistant → tool results → next
 // user). No separate bookkeeping; pi is the source of truth. Used by
 // the waterfall inspector.
+// Read turns from whichever JSONL the character's harness writes to.
+// Pi appends to session.jsonl; DirectHarness to turns.jsonl. External
+// has no local history (the driver owns it remotely) — return empty
+// for now until we add a server-side mirror for inspector parity.
+function readTurnsForCharacter(pubkey, harness, limit) {
+  const dir = getCharDir(pubkey);
+  if (harness === "direct") {
+    return readDirectTurns(join(dir, "turns.jsonl"), { limit });
+  }
+  if (harness === "external") {
+    return { turns: [], meta: { harness: "external", note: "external driver owns history" } };
+  }
+  return readSessionTurns(join(dir, "session.jsonl"), { limit });
+}
+
 app.get("/characters/:pubkey/turns", (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
-  const sessionPath = join(getCharDir(pubkey), "session.jsonl");
-  const result = readSessionTurns(sessionPath, { limit });
+  const result = readTurnsForCharacter(pubkey, c.harness || DEFAULT_HARNESS, limit);
   res.json(result);
 });
 
@@ -1775,8 +1795,7 @@ app.get("/characters/:pubkey/turns/:turnId", (req, res) => {
   const { pubkey, turnId } = req.params;
   const c = loadCharacter(pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
-  const sessionPath = join(getCharDir(pubkey), "session.jsonl");
-  const { turns, meta } = readSessionTurns(sessionPath, { limit: 100 });
+  const { turns, meta } = readTurnsForCharacter(pubkey, c.harness || DEFAULT_HARNESS, 100);
   const turn = turns.find((t) => t.turnId === turnId);
   if (!turn) return res.status(404).json({ error: "turn not found" });
   res.json({ turn, meta });

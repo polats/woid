@@ -151,6 +151,100 @@ function extractToolCalls(content) {
     }));
 }
 
+/**
+ * DirectHarness writes its own append-only JSONL with a simpler shape
+ * (one entry per message: `{ ts, role: 'user'|'assistant', content,
+ * actions?, thinking?, usage?, harness: 'direct' }`). Cluster these
+ * the same way as pi turns so the waterfall renders identically.
+ *
+ * Direct entries have:
+ *   user      — content is the user message string
+ *   assistant — content is the raw model output (typically JSON);
+ *               actions[] holds the parsed Action structs;
+ *               thinking is the parsed thinking string if any;
+ *               usage carries token counts.
+ */
+export function readDirectTurns(jsonlPath, { limit = 20 } = {}) {
+  if (!existsSync(jsonlPath)) return { turns: [], meta: { harness: "direct" } };
+  const raw = readFileSync(jsonlPath, "utf-8");
+  const lines = raw.split("\n").filter(Boolean);
+  const meta = { harness: "direct", model: null, provider: null, startedAt: null };
+  const turns = [];
+  let current = null;
+  let turnCounter = 0;
+  for (const line of lines) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (!entry || typeof entry !== "object") continue;
+    if (!meta.startedAt && entry.ts) meta.startedAt = new Date(entry.ts).toISOString();
+    if (entry.role === "user") {
+      if (current) turns.push(current);
+      turnCounter += 1;
+      current = {
+        turnId: `direct-${turnCounter}-${entry.ts ?? ""}`,
+        startedAt: entry.ts ? new Date(entry.ts).toISOString() : null,
+        user: { text: String(entry.content ?? ""), blocks: null, timestamp: entry.ts },
+        assistant: null,
+        toolResults: [],
+        usage: null,
+        model: null,
+        provider: null,
+      };
+    } else if (entry.role === "assistant") {
+      if (!current) continue;
+      const actions = Array.isArray(entry.actions) ? entry.actions : [];
+      // The card waterfall expects an `assistant.text` field. Prefer the
+      // human-readable parsed `say` action if present; fall back to the
+      // raw JSON content so the inspector still shows something useful.
+      const sayText = actions.find((a) => a?.type === "say")?.text;
+      current.assistant = {
+        timestamp: entry.ts,
+        text: sayText || String(entry.content ?? ""),
+        thinking: entry.thinking || "",
+        toolCalls: actions.map((a) => ({
+          toolCallId: `direct-${a.type}`,
+          toolName: a.type,
+          args: a,
+        })),
+        stopReason: "stop",
+        responseId: null,
+      };
+      if (entry.usage) current.usage = entry.usage;
+      if (current.startedAt && entry.ts) {
+        current.endedAt = new Date(entry.ts).toISOString();
+        current.durationMs = Math.max(
+          0,
+          new Date(current.endedAt).getTime() - new Date(current.startedAt).getTime(),
+        );
+      }
+    }
+  }
+  if (current) turns.push(current);
+  turns.reverse();
+  return { turns: turns.slice(0, limit), meta };
+}
+
+/**
+ * DirectHarness latest-usage tail for the card token gauge. Mirrors
+ * `readLatestUsage` but reads our own format.
+ */
+export function readDirectLatestUsage(jsonlPath) {
+  if (!existsSync(jsonlPath)) return null;
+  const st = statSync(jsonlPath);
+  if (st.size === 0) return null;
+  const raw = readFileSync(jsonlPath, "utf-8");
+  const lines = raw.split("\n").filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const e = JSON.parse(lines[i]);
+      if (e?.role === "assistant" && e.usage) {
+        return { model: null, provider: null, usage: e.usage };
+      }
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
 // Cheap helper for the card-level context gauge. Tails the JSONL and
 // returns just {totalTokens, model, contextWindow} from the latest
 // assistant entry. Called frequently — stays fast.

@@ -2,30 +2,61 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAgentEvents } from './hooks/useAgentEvents.js'
 import AgentWaterfall from './AgentWaterfall.jsx'
 
-// Walk pi events and pull the latest usage snapshot + counts of deltas.
-// pi emits `usage: {input, output, totalTokens, cacheRead, cacheWrite}` on
-// every message payload; streaming is signalled by `message_update` events.
+// Walk events and pull the latest usage snapshot + activity counts.
+// Handles two event shapes:
+//   * pi (kind='pi', data is one of pi's RPC events). Usage lives on
+//     `message.usage` or `assistantMessageEvent.partial.usage`. Streaming
+//     deltas come as `message_update` events; tool calls as
+//     `tool_execution_start`.
+//   * direct / external (kind='turn_start'|'action'|'think'|'turn_end').
+//     Usage lives on `turn_end.data.usage` (summed across the turn);
+//     "actions" map to tool calls; "think" / "action" / "turn_*" are
+//     each one delta tick.
 function computeActivity(events) {
   let input = 0, output = 0, total = 0, cacheRead = 0, cacheWrite = 0
   let deltas = 0
   let toolCalls = 0
   let lastActivityTs = null
   for (const e of events) {
-    if (e.kind !== 'pi' || !e.data) continue
-    if (e.data.type === 'message_update') {
+    if (!e || !e.kind) continue
+
+    if (e.kind === 'pi' && e.data) {
+      if (e.data.type === 'message_update') {
+        deltas++
+        lastActivityTs = e.ts
+      }
+      if (e.data.type === 'tool_execution_start') toolCalls++
+      const msg = e.data.message || e.data.assistantMessageEvent?.partial
+      const u = msg?.usage
+      if (u) {
+        if ((u.input ?? 0) > input) input = u.input
+        if ((u.output ?? 0) > output) output = u.output
+        if ((u.totalTokens ?? 0) > total) total = u.totalTokens
+        if ((u.cacheRead ?? 0) > cacheRead) cacheRead = u.cacheRead
+        if ((u.cacheWrite ?? 0) > cacheWrite) cacheWrite = u.cacheWrite
+      }
+      continue
+    }
+
+    // Non-pi (direct / external / pool) harness events.
+    if (e.kind === 'action') {
+      toolCalls++
+      deltas++
+      lastActivityTs = e.ts
+      continue
+    }
+    if (e.kind === 'think' || e.kind === 'turn_start' || e.kind === 'turn_end') {
       deltas++
       lastActivityTs = e.ts
     }
-    if (e.data.type === 'tool_execution_start') toolCalls++
-    // Find usage on either the envelope's message or the update's partial.
-    const msg = e.data.message || e.data.assistantMessageEvent?.partial
-    const u = msg?.usage
-    if (u) {
-      if ((u.input ?? 0) > input) input = u.input
-      if ((u.output ?? 0) > output) output = u.output
-      if ((u.totalTokens ?? 0) > total) total = u.totalTokens
-      if ((u.cacheRead ?? 0) > cacheRead) cacheRead = u.cacheRead
-      if ((u.cacheWrite ?? 0) > cacheWrite) cacheWrite = u.cacheWrite
+    if (e.kind === 'turn_end') {
+      const u = e.data?.usage
+      if (u) {
+        // Direct usage is per-turn, not cumulative — accumulate.
+        input += (u.input ?? 0)
+        output += (u.output ?? 0)
+        total += (u.totalTokens ?? (u.input ?? 0) + (u.output ?? 0))
+      }
     }
   }
   return { input, output, total, cacheRead, cacheWrite, deltas, toolCalls, lastActivityTs }
@@ -74,6 +105,63 @@ function EventRow({ ev }) {
   if (kind === 'exit') {
     return <div className="ai-row ai-row-exit">Process exited (code={code})</div>
   }
+
+  // Direct / external harness events. These are emitted with kind set
+  // directly (not nested under 'pi'). Render them with the same row
+  // shapes the pi cases use so the Live tab feels uniform.
+  if (kind === 'turn_start') {
+    return <div className="ai-row ai-row-turn">— turn {data?.turn ?? ''} ({data?.harness ?? ''})</div>
+  }
+  if (kind === 'turn_end') {
+    const u = data?.usage
+    if (!u) return null
+    return (
+      <div className="ai-row ai-row-meta">
+        turn {data?.turn ?? ''} done · in {u.input ?? 0} · out {u.output ?? 0} · total {u.totalTokens ?? ''}
+      </div>
+    )
+  }
+  if (kind === 'think') {
+    const text = typeof data === 'string' ? data : (data?.thinking || '')
+    if (!text) return null
+    return (
+      <div className="ai-row ai-row-assistant">
+        <details className="ai-thinking">
+          <summary>thinking ({text.length} chars)</summary>
+          <pre>{text}</pre>
+        </details>
+      </div>
+    )
+  }
+  if (kind === 'action') {
+    const a = data || {}
+    if (a.type === 'say') {
+      return (
+        <div className="ai-row ai-row-assistant">
+          <span className="ai-label">say</span>
+          <div className="ai-text">{a.text}</div>
+        </div>
+      )
+    }
+    if (a.type === 'move') {
+      return <div className="ai-row ai-row-tool-call"><span className="ai-label">move</span><pre>{`(${a.x}, ${a.y})`}</pre></div>
+    }
+    if (a.type === 'state') {
+      return <div className="ai-row ai-row-tool-call"><span className="ai-label">state</span><pre>{a.value}</pre></div>
+    }
+    return <div className="ai-row ai-row-unknown">action: {a.type}</div>
+  }
+  if (kind === 'error' || kind === 'turn-error' || kind === 'action-error') {
+    const msg = data?.message || data?.error || JSON.stringify(data || {}).slice(0, 200)
+    return <div className="ai-row ai-row-err"><span className="ai-label">{kind}</span><pre>{msg}</pre></div>
+  }
+  if (kind === 'rate-limit' || kind === 'rate-limit-deferred') {
+    return <div className="ai-row ai-row-meta">{kind} · {data?.provider || ''}{data?.remainingMs ? ` · ${Math.round(data.remainingMs / 1000)}s` : ''}</div>
+  }
+  if (kind === 'pool:spawn' || kind === 'pool:exit' || kind === 'pool:crashed') {
+    return <div className="ai-row ai-row-meta">{kind} {data?.code ?? data?.pid ?? ''}</div>
+  }
+
   if (kind !== 'pi' || !data?.type) return null
 
   switch (data.type) {

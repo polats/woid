@@ -136,7 +136,19 @@ export function createDirectHarness(deps = {}) {
         onEvent({ kind: "action", data: action });
       }
       if (parsed.thinking) onEvent({ kind: "think", data: parsed.thinking });
-      onEvent({ kind: "turn_end", data: { harness: "direct", turn: turns } });
+      // Surface usage + counts in turn_end so the Live inspector can
+      // tally tokens and tool calls without parsing the JSONL.
+      onEvent({
+        kind: "turn_end",
+        data: {
+          harness: "direct",
+          turn: turns,
+          usage,
+          actionCount: parsed.actions.length,
+          model,
+          provider,
+        },
+      });
 
       return {
         actions: parsed.actions,
