@@ -1114,11 +1114,16 @@ body {
 .sandbox3-card-tag-model {
   background: var(--violet);
   color: var(--paper);
-  max-width: 180px;
+  max-width: 140px;
 }
 .sandbox3-card-tag-harness {
   background: var(--paper);
   color: var(--ink);
+}
+.sandbox3-card-tag-style {
+  background: var(--paper-3);
+  color: var(--ink);
+  border-color: var(--ink-faint);
 }
 /* System tab — shows the system prompt currently being passed to
    the character's brain on every turn. */
