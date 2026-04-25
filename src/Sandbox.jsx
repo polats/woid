@@ -336,14 +336,24 @@ export default function Sandbox() {
                       // fall back to manifest. Two separate pills (model
                       // + brain) so a long model id can truncate inside
                       // its own pill without smushing the brain tag.
-                      const m = runtime?.model || c.model
                       const h = runtime?.harness || c.harness
+                      const isExternal = h === 'external'
+                      // For external harness, the bridge `model` is a
+                      // placeholder — the external client's own LLM does
+                      // the thinking. Show its self-declared driver
+                      // instead, or omit the pill if undeclared (the
+                      // harness pill alone carries the signal).
+                      const driver = runtime?.externalDriver || null
+                      const m = isExternal ? driver : (runtime?.model || c.model)
                       if (!m && !h) return null
                       return (
                         <div className="sandbox3-card-tags">
                           {m && (
-                            <span className="sandbox3-card-tag sandbox3-card-tag-model" title={`model: ${m}`}>
-                              {m.split('/').pop()}
+                            <span
+                              className="sandbox3-card-tag sandbox3-card-tag-model"
+                              title={isExternal ? `external driver: ${m}` : `model: ${m}`}
+                            >
+                              {isExternal ? m : m.split('/').pop()}
                             </span>
                           )}
                           {h && (

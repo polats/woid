@@ -147,12 +147,14 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
               <strong>{name}</strong>
               <div className="agent-drawer-tags">
                 {isExternal ? (
-                  <span
-                    className="agent-model-badge"
-                    title={externalDriver ? `external driver: ${externalDriver}` : 'external client; driver not declared'}
-                  >
-                    {externalDriver || 'external'}
-                  </span>
+                  // External: render the driver in the model slot only when
+                  // declared; otherwise let the harness pill alone carry the
+                  // signal (avoid the "external · external" double-pill).
+                  externalDriver && (
+                    <span className="agent-model-badge" title={`external driver: ${externalDriver}`}>
+                      {externalDriver}
+                    </span>
+                  )
                 ) : (
                   model && (
                     <span className="agent-model-badge" title={`model: ${model}`}>
