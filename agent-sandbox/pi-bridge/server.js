@@ -12,6 +12,7 @@ import * as s3 from "./s3.js";
 import * as piPool from "./pi-pool.js";
 import * as rateLimiter from "./rate-limiter.js";
 import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/index.js";
+import { DIRECT_SCHEMA_HINT } from "./harnesses/direct.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -1781,6 +1782,50 @@ function readTurnsForCharacter(pubkey, harness, limit) {
   }
   return readSessionTurns(join(dir, "session.jsonl"), { limit });
 }
+
+// Surface the system prompt the bridge would pass to the harness for
+// this character. Built fresh on each call so it reflects the current
+// about/state and the chosen harness's variant. Used by the drawer's
+// System tab so users can see exactly what the agent is being told.
+app.get("/characters/:pubkey/system-prompt", (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  // Try to use the live runtime's room dimensions if the character is
+  // spawned; otherwise fall back to the SandboxRoom defaults from the
+  // schema (16×12). Either way, the prompt shape matches what
+  // ensureHarness would feed the brain on the next turn.
+  const active = activeRuntimeForCharacter(pubkey);
+  const snap = active ? roomSnapshot(active.id) : { width: 16, height: 12 };
+  const harness = c.harness || DEFAULT_HARNESS;
+  const base = buildSystemPrompt({
+    name: c.name,
+    npub: pubkey,
+    about: c.about,
+    state: c.state,
+    roomWidth: snap.width,
+    roomHeight: snap.height,
+    harness,
+  });
+  // Reproduce what each harness appends internally so the user sees
+  // the complete prompt the LLM actually receives. Pi consumes the
+  // base directly. Direct adds the JSON output contract. External
+  // streams the base verbatim to its SSE client (the remote driver
+  // is free to compose whatever schema it wants on top).
+  const systemPrompt = harness === "direct" ? base + DIRECT_SCHEMA_HINT : base;
+  res.json({
+    pubkey,
+    harness,
+    systemPrompt,
+    roomWidth: snap.width,
+    roomHeight: snap.height,
+    note: harness === "pi"
+      ? "Pi consumes this prompt verbatim and uses its built-in bash tool to invoke the skill scripts referenced above."
+      : harness === "direct"
+        ? "DirectHarness appends an OUTPUT CONTRACT (the trailing block) so the LLM responds in the structured JSON shape the bridge can parse into actions."
+        : "ExternalHarness streams this prompt to your remote driver verbatim. Your client is free to add any output schema or tool definitions on top before calling its own LLM.",
+  });
+});
 
 app.get("/characters/:pubkey/turns", (req, res) => {
   const pubkey = req.params.pubkey;

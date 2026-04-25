@@ -26,7 +26,7 @@ import * as providers from "../providers/index.js";
 // comparable budget for our shape. Tune via env.
 const MAX_HISTORY_TURNS = Number(process.env.DIRECT_HISTORY_TURNS || 20);
 
-const SCHEMA_HINT = [
+export const DIRECT_SCHEMA_HINT = [
   "",
   "--- OUTPUT CONTRACT ---",
   "Respond with ONLY a single JSON object, no prose, no markdown fences.",
@@ -60,7 +60,7 @@ export function createDirectHarness(deps = {}) {
 
     async start(opts) {
       agentId = opts.agentId;
-      systemPrompt = opts.systemPrompt + SCHEMA_HINT;
+      systemPrompt = opts.systemPrompt + DIRECT_SCHEMA_HINT;
       provider = opts.provider;
       model = opts.model;
       sessionPath = opts.sessionPath
@@ -74,7 +74,7 @@ export function createDirectHarness(deps = {}) {
     },
 
     updateSystemPrompt(next) {
-      systemPrompt = (next || "") + SCHEMA_HINT;
+      systemPrompt = (next || "") + DIRECT_SCHEMA_HINT;
     },
 
     async turn(userTurn) {

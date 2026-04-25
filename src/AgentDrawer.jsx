@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import AgentProfile from './AgentProfile.jsx'
 import AgentInspector from './AgentInspector.jsx'
+import AgentSystemPrompt from './AgentSystemPrompt.jsx'
 
 /**
  * Left-slide drawer with vertical side-tabs hosting:
@@ -107,6 +108,16 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
             <IconLive />
             <span>Live</span>
           </button>
+          <button
+            className={`agent-drawer-sidetab${tab === 'system' ? ' active' : ''}`}
+            role="tab"
+            aria-selected={tab === 'system'}
+            onClick={() => handleTabChange('system')}
+            title="System — current system prompt sent to the brain"
+          >
+            <IconSystem />
+            <span>System</span>
+          </button>
         </nav>
 
         <div className="agent-drawer-main">
@@ -141,6 +152,12 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
                   onUpdated={onUpdated}
                   onDirtyChange={setProfileDirty}
                 />
+              ) : (
+                <p className="muted" style={{ padding: 14 }}>No character loaded.</p>
+              )
+            ) : tab === 'system' ? (
+              character?.pubkey ? (
+                <AgentSystemPrompt bridgeUrl={bridgeUrl} pubkey={character.pubkey} />
               ) : (
                 <p className="muted" style={{ padding: 14 }}>No character loaded.</p>
               )
@@ -186,6 +203,14 @@ function IconLive() {
       <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
       <path d="M6 6a8 8 0 000 12M18 6a8 8 0 010 12" />
       <path d="M3 3a12 12 0 000 18M21 3a12 12 0 010 18" />
+    </svg>
+  )
+}
+
+function IconSystem() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 6h16M4 12h12M4 18h8" />
     </svg>
   )
 }

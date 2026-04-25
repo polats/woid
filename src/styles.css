@@ -1039,6 +1039,61 @@ body {
   opacity: 0.78;
   margin-left: 2px;
 }
+/* System tab — shows the system prompt currently being passed to
+   the character's brain on every turn. */
+.agent-system {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 100%;
+}
+.agent-system-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.agent-system-pill {
+  background: var(--violet);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.agent-system-copy {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.agent-system-copy:hover { background: var(--ink); color: var(--paper); }
+.agent-system-prompt {
+  flex: 1;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--ink-faint);
+  background: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+}
+.agent-system-note {
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+}
 .sandbox3-card-harness {
   opacity: 0.7;
   font-style: italic;
