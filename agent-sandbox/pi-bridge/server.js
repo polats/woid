@@ -14,6 +14,7 @@ import * as rateLimiter from "./rate-limiter.js";
 import * as apiQuota from "./api-quota.js";
 import * as personaLog from "./persona-log.js";
 import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/index.js";
+import { createGM } from "./gm.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -1029,6 +1030,15 @@ function runtimeSnapshot(pubkey) {
   };
 }
 
+// Game Master — single chokepoint for committing harness-emitted
+// actions. See gm.js for the verb registry and dispatch logic.
+const gm = createGM({
+  publishKind1,
+  moveAgent,
+  saveCharacterManifest,
+  loadCharacter,
+});
+
 // Execute actions returned by a harness turn. Each action is a
 // discriminated-union object — { type: 'say'|'move'|'state', ... }.
 // Harnesses that commit side-effects themselves (like PiHarness via
@@ -1037,23 +1047,14 @@ function runtimeSnapshot(pubkey) {
 async function executeActions(rec, actions) {
   if (!Array.isArray(actions) || actions.length === 0) return;
   for (const action of actions) {
-    try {
-      if (action.type === "say" && action.text) {
-        await publishKind1(rec.agentId, String(action.text), rec.model);
-      } else if (action.type === "move" && Number.isFinite(action.x) && Number.isFinite(action.y)) {
-        moveAgent(rec.agentId, action.x, action.y);
-      } else if (action.type === "state" && action.value != null) {
-        saveCharacterManifest(rec.pubkey, { state: String(action.value).slice(0, 2000) });
-      } else if (action.type === "mood" && action.value && typeof action.value === "object") {
-        // Merge with the existing mood so an update of just `energy`
-        // doesn't blow away `social`.
-        const c = loadCharacter(rec.pubkey);
-        const next = { ...(c?.mood || {}), ...action.value };
-        saveCharacterManifest(rec.pubkey, { mood: next });
-      }
-    } catch (err) {
-      console.error(`[actions:${rec.agentId}] ${action.type} failed:`, err?.message || err);
-      rec.events.push({ kind: "action-error", action: action.type, error: err?.message || String(err) });
+    const result = await gm.dispatch(
+      { agentId: rec.agentId, pubkey: rec.pubkey, model: rec.model },
+      action,
+    );
+    if (!result.ok) {
+      const verb = result.verb || action?.type || "?";
+      console.error(`[actions:${rec.agentId}] ${verb} rejected: ${result.reason}`);
+      rec.events.push({ kind: "action-error", action: verb, error: result.reason });
     }
   }
 }
