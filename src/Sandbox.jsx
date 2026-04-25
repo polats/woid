@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import config from './config.js'
 import { useSandboxRoom } from './hooks/useSandboxRoom.js'
-import { useSandboxSettings } from './hooks/useSandboxSettings.js'
 import { useBridgeModels } from './hooks/useBridgeModels.js'
 import AgentDrawer from './AgentDrawer.jsx'
 import RoomMap from './RoomMap.jsx'
-import SandboxSettings from './SandboxSettings.jsx'
 
 const cfg = config.agentSandbox || {}
 const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'
@@ -46,7 +44,6 @@ export default function Sandbox() {
     setInspectedId(next)
     if (tab) setDrawerTab(tab)
   }
-  const { settings, update: updateSettings } = useSandboxSettings()
   const { models } = useBridgeModels(cfg.bridgeUrl)
 
   const { status: roomStatus, state: roomState, error: roomError } = useSandboxRoom({
@@ -100,35 +97,23 @@ export default function Sandbox() {
     }
   }
 
-  // Resolve the (provider, model, harness, promptStyle) tuple for a
-  // spawn. Same priority for all four: per-character manifest wins;
-  // sidebar settings is the spawn default applied only when the
-  // character has nothing pinned. Server fills in its own defaults if
-  // both sides are empty.
-  //
-  // (We don't cross-validate model against /models here because the
-  // catalog fetch can lag the first spawn on page load. The bridge
-  // re-validates and falls back to its own default if the pair is
-  // invalid.)
+  // Spawn body. Pulls model/provider/harness/promptStyle straight from
+  // the character manifest. The bridge fills in its own defaults for
+  // any field the manifest doesn't have. Per-character editing is in
+  // the agent drawer's Profile tab.
   function spawnBody(c, extra = {}) {
-    let model, provider
+    let provider
     if (c.model) {
       const hit = models.find((m) => m.id === c.model)
-      model = c.model
       if (hit) provider = hit.provider
-    } else if (settings.provider && settings.model) {
-      provider = settings.provider
-      model = settings.model
     }
-    const harness = c.harness || settings.harness
-    const promptStyle = c.promptStyle || settings.promptStyle
     return {
       pubkey: c.pubkey,
       roomName: cfg.defaultRoom || 'sandbox',
-      ...(model ? { model } : {}),
+      ...(c.model ? { model: c.model } : {}),
       ...(provider ? { provider } : {}),
-      ...(harness ? { harness } : {}),
-      ...(promptStyle ? { promptStyle } : {}),
+      ...(c.harness ? { harness: c.harness } : {}),
+      ...(c.promptStyle ? { promptStyle: c.promptStyle } : {}),
       ...extra,
     }
   }
@@ -257,11 +242,6 @@ export default function Sandbox() {
   return (
     <div className="sandbox3">
       <aside className="sandbox3-cards">
-        <SandboxSettings
-          bridgeUrl={cfg.bridgeUrl}
-          settings={settings}
-          onChange={updateSettings}
-        />
         <header>
           <h2>Agents</h2>
           <button onClick={newCharacter} title="Create a new character with a random name + keypair">

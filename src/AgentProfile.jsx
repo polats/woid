@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import config from './config.js'
+import { useBridgeModels } from './hooks/useBridgeModels.js'
+
+const PROVIDER_LABELS = { 'nvidia-nim': 'NIM', 'google': 'Google', 'local': 'Local' }
 
 const cfg = config.agentSandbox || {}
 const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'
@@ -76,6 +79,24 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  const { models, defaultProvider: serverDefaultProvider } = useBridgeModels(cfg.bridgeUrl)
+  const serverProviders = useMemo(
+    () => Array.from(new Set(models.map((m) => m.provider))).filter(Boolean),
+    [models],
+  )
+  // Active provider for the model dropdown. If the character pinned a
+  // model, infer its provider; otherwise keep what the user toggled,
+  // falling back to the bridge default.
+  const characterProvider = useMemo(() => {
+    if (!form?.model) return null
+    return models.find((m) => m.id === form.model)?.provider || null
+  }, [form?.model, models])
+  const [selectedProvider, setSelectedProvider] = useState(null)
+  const activeProvider = characterProvider || selectedProvider || serverDefaultProvider || serverProviders[0] || 'nvidia-nim'
+  const providerModels = useMemo(
+    () => models.filter((m) => m.provider === activeProvider),
+    [models, activeProvider],
+  )
 
   // Persona streaming. Always overwrites the name — the random default handle
   // is never worth keeping.
@@ -414,45 +435,88 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
       {error && <p className="agent-profile-error">{error}</p>}
       {avatarError && <p className="agent-profile-error">{avatarError}</p>}
 
-      {/* Settings — applies on every spawn unless overridden. Brain
+      {/* Settings — applies on every spawn for this character. Brain
           is operational (which LLM drives the character), not
           identity, so it lives outside the persona card. */}
       <fieldset className="agent-profile-section">
         <legend>Settings</legend>
         <label className="agent-profile-field">
-          <span className="agent-profile-field-label">Brain</span>
+          <span className="agent-profile-field-label">Provider</span>
+          <div className="sandbox3-settings-providers">
+            {['nvidia-nim', 'google', 'local'].map((p) => (
+              <button
+                key={p}
+                type="button"
+                className={p === activeProvider ? 'on' : ''}
+                disabled={!serverProviders.includes(p) || saving || generating}
+                onClick={() => {
+                  setSelectedProvider(p)
+                  // Snap the character's model to the first model of the
+                  // newly-picked provider (or clear if there are none).
+                  const next = models.find((m) => m.provider === p)
+                  setForm((f) => ({ ...f, model: next?.id || '' }))
+                }}
+                title={!serverProviders.includes(p) ? `${PROVIDER_LABELS[p]} not configured on pi-bridge` : ''}
+              >
+                {PROVIDER_LABELS[p] || p}
+              </button>
+            ))}
+          </div>
+        </label>
+        <label className="agent-profile-field">
+          <span className="agent-profile-field-label">Model</span>
           <select
             className="agent-profile-field-select"
-            value={form.harness}
-            onChange={(e) => setForm((f) => ({ ...f, harness: e.target.value }))}
-            disabled={saving || generating}
-            title={HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
+            value={form.model || ''}
+            onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+            disabled={providerModels.length === 0 || saving || generating}
           >
-            {HARNESS_OPTIONS.map((h) => (
-              <option key={h.id} value={h.id} title={h.hint}>
-                {h.label}
+            <option value="">— bridge default —</option>
+            {providerModels.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.id}
+                {m.activeParamsB ? ` (${m.activeParamsB}B)` : ''}
+                {m.cost?.input ? ` — $${m.cost.input}/M in` : ''}
               </option>
             ))}
           </select>
+        </label>
+        <label className="agent-profile-field">
+          <span className="agent-profile-field-label">Brain</span>
+          <div className="sandbox3-settings-providers">
+            {HARNESS_OPTIONS.map((h) => (
+              <button
+                key={h.id}
+                type="button"
+                className={h.id === form.harness ? 'on' : ''}
+                onClick={() => setForm((f) => ({ ...f, harness: h.id }))}
+                disabled={saving || generating}
+                title={h.hint}
+              >
+                {h.label.split(' ')[0]}
+              </button>
+            ))}
+          </div>
           <small className="agent-profile-field-hint">
             {HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
           </small>
         </label>
         <label className="agent-profile-field">
           <span className="agent-profile-field-label">Prompt style</span>
-          <select
-            className="agent-profile-field-select"
-            value={form.promptStyle}
-            onChange={(e) => setForm((f) => ({ ...f, promptStyle: e.target.value }))}
-            disabled={saving || generating}
-            title={PROMPT_STYLE_OPTIONS.find((p) => p.id === form.promptStyle)?.hint || ''}
-          >
+          <div className="sandbox3-settings-providers">
             {PROMPT_STYLE_OPTIONS.map((p) => (
-              <option key={p.id} value={p.id} title={p.hint}>
-                {p.label}
-              </option>
+              <button
+                key={p.id}
+                type="button"
+                className={p.id === form.promptStyle ? 'on' : ''}
+                onClick={() => setForm((f) => ({ ...f, promptStyle: p.id }))}
+                disabled={saving || generating}
+                title={p.hint}
+              >
+                {p.label.split(' ')[0]}
+              </button>
             ))}
-          </select>
+          </div>
           <small className="agent-profile-field-hint">
             {PROMPT_STYLE_OPTIONS.find((p) => p.id === form.promptStyle)?.hint || ''}
           </small>
