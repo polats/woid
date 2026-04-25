@@ -15,8 +15,9 @@ test("factory: throws on unknown harness", () => {
   assert.throws(() => createHarness("bogus"), /unknown harness/);
 });
 
-test("factory: default is pi and is in KNOWN_HARNESSES", () => {
-  assert.equal(DEFAULT_HARNESS, "pi");
+test("factory: default is direct and is in KNOWN_HARNESSES", () => {
+  assert.equal(DEFAULT_HARNESS, "direct");
+  assert.ok(KNOWN_HARNESSES.includes("direct"));
   assert.ok(KNOWN_HARNESSES.includes("pi"));
 });
 

@@ -25,6 +25,7 @@ export async function generateJson({ provider, systemPrompt, messages, model, en
         apiKey: env.GEMINI_API_KEY || "",
       });
     case "nvidia":
+    case "nvidia-nim":
     case "nim":
       return openaiCompat.generateJson({
         endpoint: env.NVIDIA_NIM_BASE_URL || NIM_DEFAULT_ENDPOINT,
@@ -42,7 +43,7 @@ export async function generateJson({ provider, systemPrompt, messages, model, en
         model,
       });
     default:
-      throw new Error(`unknown provider "${provider}" (supported: google, nim, local)`);
+      throw new Error(`unknown provider "${provider}" (supported: google, nvidia-nim, local)`);
   }
 }
 
