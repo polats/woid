@@ -320,11 +320,9 @@ export default function Sandbox() {
                       // harness pill alone carries the signal).
                       const driver = runtime?.externalDriver || null
                       const m = isExternal ? driver : (runtime?.model || c.model)
-                      const ps = runtime?.promptStyle || c.promptStyle
-                      if (!m && !h && !ps) return null
+                      if (!m && !h) return null
                       // Trim long model ids: drop the org prefix and any
-                      // quantization suffix so each pill stays compact
-                      // and three pills fit on one card row.
+                      // quantization suffix so each pill stays compact.
                       const compactModel = !m
                         ? null
                         : isExternal
@@ -343,11 +341,6 @@ export default function Sandbox() {
                           {h && (
                             <span className="sandbox3-card-tag sandbox3-card-tag-harness" title={`brain: ${h}`}>
                               {h}
-                            </span>
-                          )}
-                          {ps && (
-                            <span className="sandbox3-card-tag sandbox3-card-tag-style" title={`prompt style: ${ps}`}>
-                              {ps}
                             </span>
                           )}
                         </div>
