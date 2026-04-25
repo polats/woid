@@ -421,6 +421,27 @@ async function rebaseStaleAvatarUrls() {
   }
 }
 
+// Publish a kind:3 contact list for `pubkey` from its manifest's
+// `follows` array. Empty follows → empty kind:3 (still useful as an
+// explicit "I have no follows" signal). Returns the published event.
+async function publishCharacterFollows(pubkey) {
+  const c = loadCharacter(pubkey);
+  if (!c) return null;
+  const tags = (Array.isArray(c.follows) ? c.follows : [])
+    .filter((p) => /^[0-9a-f]{64}$/.test(p))
+    .map((p) => ["p", p]);
+  const event = finalizeEvent(
+    {
+      kind: 3,
+      created_at: Math.floor(Date.now() / 1000),
+      tags,
+      content: "",
+    },
+    c.sk,
+  );
+  return publishSignedEvent(event, `char:follows:${c.name}`);
+}
+
 async function publishCharacterProfile(pubkey) {
   const c = loadCharacter(pubkey);
   if (!c) return null;
@@ -609,6 +630,12 @@ function createCharacter({ name } = {}) {
   writeFileSync(join(dir, ".pi", "identity"), pubkey, "utf-8");
   installSkills(dir);
   writeClaudeMd(dir, pubkey);
+  // Seed kind:3 follows: admin + every existing character (capped to
+  // keep the contact list event small). Gives the network view a real
+  // graph from the first character onwards instead of disconnected nodes.
+  const seedFollows = [admin.pubkey, ...listCharacters().map((c) => c.pubkey)]
+    .filter((pk) => pk && pk !== pubkey)
+    .slice(0, 50);
   const manifest = saveCharacterManifest(pubkey, {
     name: (name && String(name).trim()) || randomName(),
     // New characters get the call-my-ghost-style "dynamic" prompt by
@@ -617,9 +644,14 @@ function createCharacter({ name } = {}) {
     // A/B comparison until the user explicitly switches them.
     promptStyle: "dynamic",
     mood: { energy: 50, social: 50 },
+    follows: seedFollows,
     createdAt: Date.now(),
   });
-  console.log(`[char] created ${pubkey.slice(0, 12)}... name="${manifest.name}"`);
+  console.log(`[char] created ${pubkey.slice(0, 12)}... name="${manifest.name}" follows=${seedFollows.length}`);
+  // Fire-and-forget — relay publish failure shouldn't break creation.
+  publishCharacterFollows(pubkey).catch((err) =>
+    console.warn(`[char:follows] publish failed for ${manifest.name}:`, err?.message || err),
+  );
   return loadCharacter(pubkey);
 }
 
@@ -1998,6 +2030,72 @@ function readTurnsForCharacter(pubkey, harness, limit) {
   }
   return readSessionTurns(join(dir, "session.jsonl"), { limit });
 }
+
+// ── Follow lists (kind:3) ──
+//
+// GET returns the current persisted follow list for a character.
+// POST mutates it via { add?: [...], remove?: [...], follows?: [...] }
+// (replace mode if `follows` is present; otherwise additive). Each
+// successful mutation persists on the manifest AND publishes a fresh
+// kind:3 to the relay so external clients (Jumble, the woid network
+// view) reflect the change.
+
+app.get("/characters/:pubkey/follows", (req, res) => {
+  const c = loadCharacter(req.params.pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  res.json({ pubkey: c.pubkey, follows: Array.isArray(c.follows) ? c.follows : [] });
+});
+
+app.post("/characters/:pubkey/follows", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  const isHex = (s) => typeof s === "string" && /^[0-9a-f]{64}$/.test(s);
+  const current = Array.isArray(c.follows) ? c.follows : [];
+  const { add, remove, follows: replaceWith } = req.body || {};
+
+  let next;
+  if (Array.isArray(replaceWith)) {
+    next = replaceWith.filter(isHex);
+  } else {
+    const set = new Set(current);
+    if (Array.isArray(add)) for (const p of add) if (isHex(p) && p !== pubkey) set.add(p);
+    if (Array.isArray(remove)) for (const p of remove) set.delete(p);
+    next = [...set];
+  }
+  // Self-follow is meaningless; prune.
+  next = next.filter((p) => p !== pubkey);
+
+  saveCharacterManifest(pubkey, { follows: next });
+  let relayPublished = false;
+  let relayError = null;
+  try { relayPublished = !!(await publishCharacterFollows(pubkey)); }
+  catch (err) { relayError = err.message ?? String(err); }
+  res.json({ pubkey, follows: next, relayPublished, relayError });
+});
+
+// One-shot bulk seeder. For every character, set `follows` to every
+// other character's pubkey + admin, then republish kind:3. Useful when
+// onboarding existing characters that pre-date the follows feature, or
+// when the network view looks too sparse. Idempotent.
+app.post("/admin/seed-follows-all", async (_req, res) => {
+  const chars = listCharacters();
+  const allPubs = chars.map((c) => c.pubkey);
+  let updated = 0;
+  let failed = 0;
+  for (const c of chars) {
+    const next = [admin.pubkey, ...allPubs].filter((p) => p && p !== c.pubkey);
+    saveCharacterManifest(c.pubkey, { follows: next });
+    try {
+      await publishCharacterFollows(c.pubkey);
+      updated += 1;
+    } catch (err) {
+      console.warn(`[admin:seed-follows] ${c.name} failed:`, err?.message || err);
+      failed += 1;
+    }
+  }
+  res.json({ count: chars.length, updated, failed });
+});
 
 // Surface the system prompt the bridge would pass to the harness for
 // this character. Built fresh on each call so it reflects the current
