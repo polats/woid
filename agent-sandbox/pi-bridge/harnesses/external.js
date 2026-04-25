@@ -108,7 +108,10 @@ export function createExternalHarness(deps = {}) {
       history.push({ role: "user", content: userTurn });
       if (history.length > 40) history = history.slice(-40);
 
-      onEvent({ kind: "turn_start", data: { harness: "external", turn: turnCounter, turnId } });
+      // Capture the userTurn text on turn_start so the bridge's event
+      // buffer holds enough context for the Inspector's Context tab to
+      // reconstruct turns server-side. The Live tab also benefits.
+      onEvent({ kind: "turn_start", data: { harness: "external", turn: turnCounter, turnId, userTurn } });
 
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {

@@ -2036,9 +2036,60 @@ function readTurnsForCharacter(pubkey, harness, limit) {
     return readDirectTurns(join(dir, "turns.jsonl"), { limit });
   }
   if (harness === "external") {
-    return { turns: [], meta: { harness: "external", note: "external driver owns history" } };
+    return synthesizeExternalTurns(pubkey, limit);
   }
   return readSessionTurns(join(dir, "session.jsonl"), { limit });
+}
+
+// External harness: the external client owns the LLM history (token
+// usage, hidden chain-of-thought, etc.) and the bridge can't see it.
+// But the bridge DOES capture every turn_start / action / turn_end on
+// `rec.events.buf` from harness onEvent callbacks. Reshape that into
+// the turn structure the waterfall expects so the Context tab is
+// populated for external agents too — minus token counts and tool
+// results, which the bridge legitimately doesn't have.
+function synthesizeExternalTurns(pubkey, limit) {
+  const r = runtimeForCharacter(pubkey);
+  if (!r) return { turns: [], meta: { harness: "external", note: "no runtime; spawn the agent first" } };
+  const buf = r.rec.events?.buf ?? [];
+  const byId = new Map();
+  for (const ev of buf) {
+    if (ev?.kind === "turn_start" && ev.data?.turnId) {
+      byId.set(ev.data.turnId, {
+        turnId: ev.data.turnId,
+        startedAt: ev.ts,
+        durationMs: null,
+        user: { text: ev.data.userTurn ?? "" },
+        assistant: { text: "" },
+        actions: [],
+        usage: null,
+        model: r.rec.externalDriver ?? null,
+      });
+    } else if (ev?.kind === "action" && ev.data) {
+      // Actions arrive after turn_start. Find the most-recent open turn.
+      const open = [...byId.values()].reverse().find((t) => t.durationMs == null);
+      if (!open) continue;
+      open.actions.push(ev.data);
+      if (ev.data.type === "say" && typeof ev.data.text === "string") {
+        open.assistant.text = open.assistant.text
+          ? open.assistant.text + "\n" + ev.data.text
+          : ev.data.text;
+      }
+    } else if (ev?.kind === "turn_end" && ev.data?.turnId == null) {
+      // turn_end carries `turn` not `turnId`; close the most-recent open turn.
+      const open = [...byId.values()].reverse().find((t) => t.durationMs == null);
+      if (open) open.durationMs = Math.max(0, ev.ts - open.startedAt);
+    }
+  }
+  const turns = [...byId.values()].sort((a, b) => b.startedAt - a.startedAt).slice(0, limit);
+  return {
+    turns,
+    meta: {
+      harness: "external",
+      driver: r.rec.externalDriver ?? null,
+      note: "Reconstructed from the bridge's event buffer. Token counts and tool calls live with the external client and aren't visible here.",
+    },
+  };
 }
 
 // ── Follow lists (kind:3) ──
