@@ -182,13 +182,10 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
         setError(`Saved locally but relay publish failed: ${next.relayError ?? 'unknown error'}`)
         return
       }
-      // Success — clear the parent's dirty flag synchronously BEFORE
-      // calling onClose. Otherwise the drawer's dismiss() reads its
-      // dirtyRef as still-true (the useEffect that propagates isDirty
-      // hasn't fired yet) and shows a "discard changes?" prompt over
-      // a successful save.
+      // Success — clear the dirty flag and stay on the profile so the
+      // user can keep tweaking. The Save button's `dirty` styling drops
+      // and isDirty re-evaluates against the freshly-saved character.
       onDirtyChange?.(false)
-      onClose?.()
     } catch (err) {
       setError(err.message || String(err))
     } finally {
@@ -476,9 +473,22 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
 
       {/* Settings — applies on every spawn for this character. Brain
           is operational (which LLM drives the character), not
-          identity, so it lives outside the persona card. */}
-      <fieldset className="agent-profile-section">
-        <legend>Settings</legend>
+          identity, so it lives outside the persona card. Collapsed
+          by default; expand to override what the bridge would pick. */}
+      <details className="agent-profile-strip">
+        <summary>
+          <span className="agent-profile-strip-title">Settings</span>
+          <span className="agent-profile-strip-meta">
+            {(() => {
+              const parts = []
+              if (form.harness) parts.push(form.harness)
+              if (form.model) parts.push(form.model.split('/').pop().replace(/-(?:E?\d+B|Q\d+_K_M).*$/i, ''))
+              else parts.push('bridge default model')
+              return parts.join(' · ')
+            })()}
+          </span>
+        </summary>
+        <div className="agent-profile-strip-body">
         <label className="agent-profile-field">
           <span className="agent-profile-field-label">Provider</span>
           <div className="sandbox3-settings-providers">
@@ -560,7 +570,8 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
             {PROMPT_STYLE_OPTIONS.find((p) => p.id === form.promptStyle)?.hint || ''}
           </small>
         </label>
-      </fieldset>
+        </div>
+      </details>
 
       <form onSubmit={save} className="agent-profile-actions" noValidate>
         <span style={{ flex: 1 }} />

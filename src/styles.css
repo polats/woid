@@ -2681,20 +2681,24 @@ body {
   gap: var(--sp-2);
 }
 
-/* Persona generate strip — sits above the profile card. Open by
-   default for fresh characters (no bio); collapses to a one-line
-   strip once a persona exists so the card has more room. */
+/* Collapsible strip — used for Persona generator and Settings inside
+   the agent drawer. Open by default for fresh characters (Persona
+   with no bio); collapses to a one-line strip otherwise so the
+   actual content gets more room. Matched by both `.agent-profile-strip`
+   and the legacy `.agent-profile-generate-strip` class. */
+.agent-profile-strip,
 .agent-profile-generate-strip {
   border: 1.5px solid var(--ink);
   background: var(--paper-2);
   margin: 0 0 var(--sp-3);
 }
 .agent-profile-generate-strip.is-empty {
-  /* Subtle attention-grab on the unfilled state. */
+  /* Subtle attention-grab on the unfilled-persona state. */
   border-color: var(--transmit);
   background: var(--paper);
   box-shadow: 3px 3px 0 var(--ink);
 }
+.agent-profile-strip > summary,
 .agent-profile-generate-strip > summary {
   list-style: none;
   cursor: pointer;
@@ -2703,7 +2707,9 @@ body {
   align-items: center;
   gap: var(--sp-3);
 }
+.agent-profile-strip > summary::-webkit-details-marker,
 .agent-profile-generate-strip > summary::-webkit-details-marker { display: none; }
+.agent-profile-strip > summary::after,
 .agent-profile-generate-strip > summary::after {
   content: "▾";
   margin-left: auto;
@@ -2711,7 +2717,9 @@ body {
   color: var(--ink-muted);
   transition: transform 120ms;
 }
+.agent-profile-strip[open] > summary::after,
 .agent-profile-generate-strip[open] > summary::after { transform: rotate(180deg); }
+.agent-profile-strip-title,
 .agent-profile-generate-strip-title {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -2719,17 +2727,23 @@ body {
   text-transform: uppercase;
   font-weight: bold;
 }
+.agent-profile-strip-meta,
 .agent-profile-generate-strip-meta {
   font-size: 11px;
   color: var(--ink-muted);
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.agent-profile-strip-meta code,
 .agent-profile-generate-strip-meta code {
   font-size: 10px;
   color: var(--ink);
 }
+.agent-profile-strip-body,
 .agent-profile-generate-strip-body {
   padding: 0 var(--sp-3) var(--sp-3);
   display: flex;
