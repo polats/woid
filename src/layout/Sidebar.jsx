@@ -4,6 +4,7 @@ export default function Sidebar({
   config,
   route,
   docs,
+  research,
   diagrams,
   references,
   onNewDiagram,
@@ -12,6 +13,7 @@ export default function Sidebar({
   collapsed,
 }) {
   const linkClass = (active) => `sidebar-link${active ? ' active' : ''}`
+  const inResearch = route.view === 'doc' && (research ?? []).some((d) => d.name === route.name)
 
   return (
     <aside className="sidebar" aria-hidden={collapsed ? 'true' : 'false'}>
@@ -92,6 +94,24 @@ export default function Sidebar({
           </li>
         ))}
       </ul>
+
+      {research && research.length > 0 && (
+        <details className="sidebar-research" open={inResearch}>
+          <summary>Research</summary>
+          <ul>
+            {research.map((d) => (
+              <li key={d.name}>
+                <a
+                  href={`#/docs/${encodeURIComponent(d.name)}`}
+                  className={linkClass(route.view === 'doc' && route.name === d.name)}
+                >
+                  {d.name.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {/* Dev-only tooling (sprint board, testing sessions, diagrams,
           references). Collapsed by default — backed by a Vite dev API

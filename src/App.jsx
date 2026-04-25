@@ -12,11 +12,28 @@ import Doc from './views/Doc.jsx'
 import Personas from './views/Personas.jsx'
 import Network from './views/Network.jsx'
 
+// Top-level docs (Docs section).
 const modules = import.meta.glob('../docs/*.md', { query: '?raw', import: 'default', eager: true })
-
 const docs = Object.entries(modules)
   .map(([p, content]) => ({ name: p.split('/').pop().replace(/\.md$/, ''), content }))
   .sort((a, b) => a.name.localeCompare(b.name))
+
+// Research docs live in docs/research/. Surfaced under their own
+// collapsed section in the sidebar (alongside Dev) so the main Docs
+// list stays focused on user-facing setup + how-tos. Routing is the
+// same — every research file is reachable at #/docs/<filename>.
+const researchModules = import.meta.glob('../docs/research/*.md', { query: '?raw', import: 'default', eager: true })
+const research = Object.entries(researchModules)
+  .map(([p, content]) => ({ name: p.split('/').pop().replace(/\.md$/, ''), content }))
+  .sort((a, b) => {
+    // Keep `index` first, everything else alphabetical.
+    if (a.name === 'index') return -1
+    if (b.name === 'index') return 1
+    return a.name.localeCompare(b.name)
+  })
+
+// Combined lookup table the route resolver uses regardless of section.
+const allDocs = [...docs, ...research]
 
 const homeDoc = docs.find((d) => d.name === config.home) ?? docs[0] ?? null
 
@@ -95,7 +112,7 @@ export default function App() {
     window.location.hash = `#/references/${encodeURIComponent(id)}`
   }
 
-  const currentDoc = route.view === 'doc' ? docs.find((d) => d.name === route.name) : null
+  const currentDoc = route.view === 'doc' ? allDocs.find((d) => d.name === route.name) : null
 
   return (
     <div className={`app${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
@@ -103,6 +120,7 @@ export default function App() {
         config={config}
         route={route}
         docs={docs}
+        research={research}
         diagrams={diagrams}
         references={references}
         onNewDiagram={newDiagram}
