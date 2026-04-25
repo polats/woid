@@ -1,7 +1,7 @@
 ---
 name: Documentation pass — harness system + onboarding
 description: docs/ hasn't been touched since the harness abstraction landed. Add a "Choosing a brain" page so anyone new to the project understands pi vs direct vs external and when to pick each.
-status: todo
+status: done
 order: 195
 epic: agent-sandbox
 ---

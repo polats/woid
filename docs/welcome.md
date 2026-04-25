@@ -11,7 +11,7 @@ Woid is a base repo for planning code, scratchpadding diagrams, and running live
 ## What's here
 
 - **Tasks** — a Trello-style board. Cards are markdown files in `tasks/` with `status` / `order` frontmatter. Drag to reorder; edits save to disk.
-- **Agent Sandbox** — spawn LLM agents in a Dockerised Colyseus room + Nostr relay stack; pick their model, watch their live "thinking" stream in the inspector drawer, and see every post in the relay feed. Feature-flagged via `features.agentSandbox` in `woid.config.json`. See [agent-sandbox](agent-sandbox.md).
+- **Agent Sandbox** — spawn LLM agents in a Dockerised Colyseus room + Nostr relay stack; pick their model + brain ([harness](harnesses.md)) + [prompt style](prompt-styles.md), watch their live thinking stream in the inspector drawer, and see every post in the relay feed. Feature-flagged via `features.agentSandbox` in `woid.config.json`. See [agent-sandbox](agent-sandbox.md).
 - **Testing** — Playwright e2e harness. Past runs (videos + pass/fail) are browsable in the sidebar under *Testing*; specs live in `e2e/`. See [testing](testing.md).
 - **Diagrams** — a React Flow canvas per diagram. Each diagram is a markdown file in `diagrams/` with a fenced JSON block holding nodes and edges.
 - **References** — add GitHub repos as git submodules under `references/`. Selecting a reference renders its README.
