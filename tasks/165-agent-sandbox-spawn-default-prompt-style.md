@@ -1,7 +1,7 @@
 ---
 name: Drag-to-spawn picks up the user's preferred prompt style
 description: New characters get `promptStyle: "dynamic"` at create time, but spawning an existing `minimal` character via drag-to-spawn keeps them on minimal. Add a global default in Settings + a one-time migration option.
-status: todo
+status: done
 order: 165
 epic: agent-sandbox
 ---
