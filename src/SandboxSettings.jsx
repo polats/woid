@@ -2,10 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { useBridgeModels } from './hooks/useBridgeModels.js'
 
 /**
- * Settings panel mounted in the sandbox sidebar. Picks the default
- * provider + model used when a character without an explicit model
- * override is spawned. Defaults live in localStorage via
- * useSandboxSettings; this component is pure UI.
+ * Spawn defaults panel mounted in the sandbox sidebar. These four
+ * fields (provider, model, harness, prompt style) are applied at spawn
+ * time ONLY when the character's manifest has nothing of its own
+ * pinned for that field. Per-character values always win — this panel
+ * never silently overrides what a character was last spawned with.
+ *
+ * Settings live in localStorage via useSandboxSettings; this component
+ * is pure UI.
  */
 export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
   const { models, defaultProvider: serverDefaultProvider, defaultModel: serverDefaultModel } = useBridgeModels(bridgeUrl)
@@ -62,8 +66,8 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
     'local': 'Local',
   }
 
-  // Brain (harness) — applies to every spawn unless the character
-  // pins its own. Mirrors KNOWN_HARNESSES on the bridge.
+  // Brain (harness) — spawn default. Per-character manifest wins.
+  // Mirrors KNOWN_HARNESSES on the bridge.
   const HARNESS_OPTIONS = [
     { id: 'direct',   label: 'direct',   hint: 'In-process SDK call. JSON out. Default.' },
     { id: 'pi',       label: 'pi',       hint: 'Coding-agent subprocess. Bash/read/write tools.' },
@@ -71,32 +75,36 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
   ]
   const activeHarness = settings.harness || 'direct'
 
-  // Prompt style — global override applied to every spawn unless a
-  // character has its own promptStyle pinned on its manifest. The
-  // empty string means "leave it to the manifest" (today's behavior:
-  // legacy chars keep minimal, new chars keep dynamic).
+  // Prompt style — spawn default applied when the character has no
+  // promptStyle on its manifest. Empty string = no spawn default;
+  // every spawn falls back to the bridge's manifest field (legacy
+  // chars: minimal; new chars: dynamic).
   const PROMPT_STYLE_OPTIONS = [
-    { id: '',        label: 'per-character', hint: 'Use whatever is on the character manifest. Default.' },
-    { id: 'dynamic', label: 'dynamic',       hint: 'Anti-silence + one-action emphasis + numeric mood.' },
-    { id: 'minimal', label: 'minimal',       hint: 'Original short prompt. Useful as an A/B baseline.' },
+    { id: '',        label: '— none —', hint: 'No spawn default. Each character uses whatever is on its manifest.' },
+    { id: 'dynamic', label: 'dynamic',  hint: 'Anti-silence + one-action emphasis + numeric mood.' },
+    { id: 'minimal', label: 'minimal',  hint: 'Original short prompt. Useful as an A/B baseline.' },
   ]
   const activePromptStyle = settings.promptStyle ?? ''
 
   return (
     <details className="sandbox3-settings" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
-        <span className="sandbox3-settings-title">Settings</span>
+        <span className="sandbox3-settings-title">Spawn defaults</span>
         <span className="sandbox3-settings-current">
           {(() => {
             const head = settings.provider
               ? `${PROVIDER_LABELS[activeProvider] || activeProvider} · ${activeModel ? activeModel.split('/').pop() : '—'}`
-              : 'per-character'
+              : '—'
             const ps = activePromptStyle ? ` · ${activePromptStyle}` : ''
             return `${head} · ${activeHarness}${ps}`
           })()}
         </span>
       </summary>
       <div className="sandbox3-settings-body">
+        <p className="sandbox3-settings-blurb">
+          Used at spawn time only when the character has nothing pinned.
+          Per-character values always win.
+        </p>
         <label>
           <span>Provider</span>
           <div className="sandbox3-settings-providers">

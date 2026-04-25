@@ -116,8 +116,10 @@ body {
 /* Collapsed Dev section — lives at the bottom and groups dev-only
    tools (sprint board, testing sessions, diagrams, references) behind
    a toggleable <details>. Auto-opens when the active route is inside. */
-.sidebar-dev { margin-top: 18px; border-top: 1px dashed var(--ink-faint); padding-top: 6px; }
-.sidebar-dev > summary {
+.sidebar-dev,
+.sidebar-research { margin-top: 18px; border-top: 1px dashed var(--ink-faint); padding-top: 6px; }
+.sidebar-dev > summary,
+.sidebar-research > summary {
   list-style: none;
   cursor: pointer;
   padding: 8px 0 4px;
@@ -128,16 +130,21 @@ body {
   color: var(--ink-muted);
   user-select: none;
 }
-.sidebar-dev > summary::-webkit-details-marker { display: none; }
-.sidebar-dev > summary::before {
+.sidebar-dev > summary::-webkit-details-marker,
+.sidebar-research > summary::-webkit-details-marker { display: none; }
+.sidebar-dev > summary::before,
+.sidebar-research > summary::before {
   content: "▸ ";
   display: inline-block;
   transition: transform 120ms;
   margin-right: 4px;
 }
-.sidebar-dev[open] > summary::before { transform: rotate(90deg); }
-.sidebar-dev > summary:hover { color: var(--ink); }
-.sidebar-dev h2 { margin-top: 12px; }
+.sidebar-dev[open] > summary::before,
+.sidebar-research[open] > summary::before { transform: rotate(90deg); }
+.sidebar-dev > summary:hover,
+.sidebar-research > summary:hover { color: var(--ink); }
+.sidebar-dev h2,
+.sidebar-research h2 { margin-top: 12px; }
 .sidebar-link {
   display: block;
   padding: 5px 8px;
@@ -3031,6 +3038,13 @@ body {
   font-size: 10px;
   color: var(--ink-muted);
   line-height: 1.4;
+}
+.sandbox3-settings-blurb {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  line-height: 1.45;
+  font-style: italic;
 }
 .sandbox3-settings-hint code {
   font-size: 10px;

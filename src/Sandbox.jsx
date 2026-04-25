@@ -100,33 +100,28 @@ export default function Sandbox() {
     }
   }
 
-  // Pick a coherent (provider, model) pair for a spawn. Priority:
-  //   1. Sidebar Settings — the recent explicit expression of intent.
-  //   2. Per-character c.model — only if Settings has no provider set.
-  //   3. Nothing — server falls back to PI_MODEL / PI_DEFAULT_PROVIDER.
+  // Resolve the (provider, model, harness, promptStyle) tuple for a
+  // spawn. Same priority for all four: per-character manifest wins;
+  // sidebar settings is the spawn default applied only when the
+  // character has nothing pinned. Server fills in its own defaults if
+  // both sides are empty.
   //
-  // We trust settings as-is without cross-validating against /models,
-  // because the catalog fetch can lag the first spawn on page load.
-  // The server re-validates and falls back to its own default if the
-  // pair is invalid.
+  // (We don't cross-validate model against /models here because the
+  // catalog fetch can lag the first spawn on page load. The bridge
+  // re-validates and falls back to its own default if the pair is
+  // invalid.)
   function spawnBody(c, extra = {}) {
     let model, provider
-    if (settings.provider && settings.model) {
-      provider = settings.provider
-      model = settings.model
-    } else if (c.model) {
+    if (c.model) {
       const hit = models.find((m) => m.id === c.model)
       model = c.model
       if (hit) provider = hit.provider
+    } else if (settings.provider && settings.model) {
+      provider = settings.provider
+      model = settings.model
     }
-    // Per-character harness override wins; otherwise the global
-    // settings.harness applies to every spawn that doesn't pin one.
-    // Server defaults to DEFAULT_HARNESS=direct if neither is set.
-    const harness = c.harness || settings.harness;
-    // Same priority for promptStyle: per-character > global setting >
-    // server fallback (manifest field, defaulting to 'minimal' for
-    // legacy characters and 'dynamic' for new spawns).
-    const promptStyle = c.promptStyle || settings.promptStyle;
+    const harness = c.harness || settings.harness
+    const promptStyle = c.promptStyle || settings.promptStyle
     return {
       pubkey: c.pubkey,
       roomName: cfg.defaultRoom || 'sandbox',
