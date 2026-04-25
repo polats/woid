@@ -135,10 +135,19 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
       onUpdated?.(next)
       if (next.relayPublished === false) {
         // Relay rejected the publish — show the error, don't close.
+        // The form values still match `next` so isDirty will read false
+        // on the next render, but call the parent explicitly so the
+        // Save button picks up its 'Saved' label without waiting.
+        onDirtyChange?.(false)
         setError(`Saved locally but relay publish failed: ${next.relayError ?? 'unknown error'}`)
         return
       }
-      // Success — close the modal.
+      // Success — clear the parent's dirty flag synchronously BEFORE
+      // calling onClose. Otherwise the drawer's dismiss() reads its
+      // dirtyRef as still-true (the useEffect that propagates isDirty
+      // hasn't fired yet) and shows a "discard changes?" prompt over
+      // a successful save.
+      onDirtyChange?.(false)
       onClose?.()
     } catch (err) {
       setError(err.message || String(err))
