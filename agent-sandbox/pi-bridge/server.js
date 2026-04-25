@@ -1033,7 +1033,8 @@ function runtimeSnapshot(pubkey) {
 // Game Master — single chokepoint for committing harness-emitted
 // actions. See gm.js for the verb registry and dispatch logic.
 const gm = createGM({
-  publishKind1,
+  roomSay,
+  relayPost,
   moveAgent,
   saveCharacterManifest,
   loadCharacter,
@@ -1473,7 +1474,47 @@ setInterval(() => {
   }
 }, 30_000).unref();
 
-// ── Relay publishing ──
+// ── Room + relay publishing ──
+//
+// Today these are split into three helpers:
+//   roomSay(agentId, content)      — Colyseus room broadcast only.
+//                                    Used by the `say` / `say_to` verbs.
+//                                    Speech is private to the scene.
+//   relayPost(agentId, content)    — Nostr kind:1 publish only. Used by
+//                                    the `post` verb. Public social media.
+//   publishKind1(agentId, content) — combined: room + relay. Kept for
+//                                    pi's /internal/post endpoint and
+//                                    any other legacy callers.
+//
+// The split is what implements the Nostr decoupling from #225: in-scene
+// speech no longer hits the relay; only deliberate `post` actions do.
+
+function roomSay(agentId, content) {
+  sendSay(agentId, content);
+}
+
+async function relayPost(agentId, content, modelTag) {
+  const rec = agents.get(agentId);
+  if (!rec) throw new Error("unknown agent");
+  const tags = [];
+  if (modelTag) tags.push(["model", modelTag]);
+  const event = finalizeEvent(
+    {
+      kind: 1,
+      created_at: Math.floor(Date.now() / 1000),
+      tags,
+      content: String(content),
+    },
+    rec.sk,
+  );
+  // Fire-and-forget — log failures but don't propagate. Small local
+  // models were failing entire turns when the relay round-trip hiccupped.
+  Promise.allSettled(pool.publish([RELAY_URL], event)).then((results) => {
+    const ok = results.some((r) => r.status === "fulfilled");
+    if (!ok) console.warn(`[relay:${agentId}] kind:1 publish failed on all relays`);
+  });
+  return event;
+}
 
 async function publishKind1(agentId, content, modelTag) {
   const rec = agents.get(agentId);

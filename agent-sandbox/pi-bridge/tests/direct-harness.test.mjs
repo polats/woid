@@ -9,16 +9,16 @@ import assert from "node:assert/strict";
 
 import { createDirectHarness, _parseActions } from "../harnesses/direct.js";
 
-// ── parser ──
+// ── parser — legacy keyed shape (still emitted by older characters) ──
 
-test("parse: well-formed JSON produces all three actions", () => {
+test("parse legacy: keyed JSON produces all three actions in new shape", () => {
   const raw = JSON.stringify({ thinking: "x", say: "hi", move: { x: 1, y: 2 }, state: "curious" });
   const r = _parseActions(raw);
   assert.equal(r.thinking, "x");
   assert.equal(r.actions.length, 3);
-  assert.ok(r.actions.find((a) => a.type === "say" && a.text === "hi"));
-  assert.ok(r.actions.find((a) => a.type === "move" && a.x === 1 && a.y === 2));
-  assert.ok(r.actions.find((a) => a.type === "state" && a.value === "curious"));
+  assert.ok(r.actions.find((a) => a.verb === "say" && a.args.text === "hi"));
+  assert.ok(r.actions.find((a) => a.verb === "move" && a.args.x === 1 && a.args.y === 2));
+  assert.ok(r.actions.find((a) => a.verb === "set_state" && a.args.value === "curious"));
 });
 
 test("parse: empty object yields no actions and no error", () => {
@@ -28,18 +28,19 @@ test("parse: empty object yields no actions and no error", () => {
   assert.equal(r.thinking, undefined);
 });
 
-test("parse: markdown-fenced JSON is tolerated", () => {
+test("parse legacy: markdown-fenced JSON is tolerated", () => {
   const raw = "```json\n{\"say\":\"hello\"}\n```";
   const r = _parseActions(raw);
   assert.equal(r.actions.length, 1);
-  assert.equal(r.actions[0].text, "hello");
+  assert.equal(r.actions[0].verb, "say");
+  assert.equal(r.actions[0].args.text, "hello");
 });
 
 test("parse: extracts JSON from prose-surrounded response", () => {
   const raw = "Sure! Here you go:\n{\"say\": \"howdy\"}\nThanks.";
   const r = _parseActions(raw);
   assert.equal(r.actions.length, 1);
-  assert.equal(r.actions[0].text, "howdy");
+  assert.equal(r.actions[0].args.text, "howdy");
 });
 
 test("parse: bad JSON returns error", () => {
@@ -53,50 +54,117 @@ test("parse: empty string returns error", () => {
   assert.ok(r.error);
 });
 
-test("parse: move with non-numeric coords is dropped", () => {
+test("parse legacy: move with non-numeric coords is dropped", () => {
   const r = _parseActions(JSON.stringify({ move: { x: "a", y: 3 } }));
   assert.equal(r.actions.length, 0);
 });
 
-test("parse: say is truncated to 1000 chars", () => {
+test("parse legacy: say is truncated to 1000 chars", () => {
   const long = "a".repeat(2000);
   const r = _parseActions(JSON.stringify({ say: long }));
-  assert.equal(r.actions[0].text.length, 1000);
+  assert.equal(r.actions[0].args.text.length, 1000);
 });
 
-test("parse: strings are trimmed", () => {
+test("parse legacy: strings are trimmed", () => {
   const r = _parseActions(JSON.stringify({ say: "  hi  " }));
-  assert.equal(r.actions[0].text, "hi");
+  assert.equal(r.actions[0].args.text, "hi");
 });
 
 test("parse: nested quotes don't break extraction", () => {
   const raw = '{"say": "she said \\"hello\\""}';
   const r = _parseActions(raw);
-  assert.equal(r.actions[0].text, 'she said "hello"');
+  assert.equal(r.actions[0].args.text, 'she said "hello"');
 });
 
-test("parse: mood lever parsed and clamped to 0–100", () => {
+test("parse legacy: mood lever parsed and clamped to 0–100", () => {
   const r = _parseActions(JSON.stringify({ mood: { energy: 75, social: 40 } }));
-  const mood = r.actions.find((a) => a.type === "mood");
-  assert.ok(mood);
-  assert.deepEqual(mood.value, { energy: 75, social: 40 });
+  const m = r.actions.find((a) => a.verb === "set_mood");
+  assert.ok(m);
+  assert.deepEqual(m.args, { energy: 75, social: 40 });
 });
 
-test("parse: mood out-of-range values clamp to bounds", () => {
+test("parse legacy: mood out-of-range values clamp to bounds", () => {
   const r = _parseActions(JSON.stringify({ mood: { energy: 200, social: -50 } }));
-  const mood = r.actions.find((a) => a.type === "mood");
-  assert.deepEqual(mood.value, { energy: 100, social: 0 });
+  const m = r.actions.find((a) => a.verb === "set_mood");
+  assert.deepEqual(m.args, { energy: 100, social: 0 });
 });
 
-test("parse: mood with one key only includes that key", () => {
+test("parse legacy: mood with one key only includes that key", () => {
   const r = _parseActions(JSON.stringify({ mood: { energy: 30 } }));
-  const mood = r.actions.find((a) => a.type === "mood");
-  assert.deepEqual(mood.value, { energy: 30 });
+  const m = r.actions.find((a) => a.verb === "set_mood");
+  assert.deepEqual(m.args, { energy: 30 });
 });
 
-test("parse: mood with no numeric values yields no mood action", () => {
+test("parse legacy: mood with no numeric values yields no mood action", () => {
   const r = _parseActions(JSON.stringify({ mood: { energy: "high", social: null } }));
-  assert.equal(r.actions.find((a) => a.type === "mood"), undefined);
+  assert.equal(r.actions.find((a) => a.verb === "set_mood"), undefined);
+});
+
+// ── parser — new {actions: [{verb, args}, ...]} shape ──
+
+test("parse new: structured actions array passes through", () => {
+  const raw = JSON.stringify({
+    thinking: "weighing options",
+    actions: [
+      { verb: "say", args: { text: "hi" } },
+      { verb: "post", args: { text: "morning, internet" } },
+      { verb: "move", args: { x: 4, y: 5 } },
+    ],
+  });
+  const r = _parseActions(raw);
+  assert.equal(r.thinking, "weighing options");
+  assert.equal(r.actions.length, 3);
+  assert.equal(r.actions[0].verb, "say");
+  assert.equal(r.actions[0].args.text, "hi");
+  assert.equal(r.actions[1].verb, "post");
+  assert.equal(r.actions[1].args.text, "morning, internet");
+  assert.equal(r.actions[2].verb, "move");
+  assert.equal(r.actions[2].args.x, 4);
+});
+
+test("parse new: drops entries without a verb", () => {
+  const raw = JSON.stringify({
+    actions: [
+      { verb: "say", args: { text: "ok" } },
+      { args: { text: "missing verb" } },
+      { verb: "", args: { text: "empty verb" } },
+      "not an object",
+    ],
+  });
+  const r = _parseActions(raw);
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].verb, "say");
+});
+
+test("parse new: missing args becomes empty object", () => {
+  const raw = JSON.stringify({ actions: [{ verb: "idle" }] });
+  const r = _parseActions(raw);
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].verb, "idle");
+  assert.deepEqual(r.actions[0].args, {});
+});
+
+test("parse new: all ten verbs flow through unchanged", () => {
+  const verbs = ["say", "say_to", "move", "face", "wait", "emote", "set_state", "set_mood", "post", "idle"];
+  const raw = JSON.stringify({
+    actions: verbs.map((v) => ({ verb: v, args: { sample: "x" } })),
+  });
+  const r = _parseActions(raw);
+  assert.equal(r.actions.length, verbs.length);
+  for (const v of verbs) {
+    assert.ok(r.actions.find((a) => a.verb === v));
+  }
+});
+
+test("parse new: array shape takes precedence over keyed shape", () => {
+  // If both are present (transitional output), prefer the new shape.
+  const raw = JSON.stringify({
+    say: "from-keyed",
+    actions: [{ verb: "say", args: { text: "from-actions" } }],
+  });
+  const r = _parseActions(raw);
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].args.text, "from-actions");
 });
 
 // ── harness turn lifecycle ──
@@ -129,8 +197,8 @@ test("harness: start/turn/stop with stubbed provider", async () => {
 
   const r = await h.turn("ping");
   assert.equal(r.actions.length, 1);
-  assert.equal(r.actions[0].type, "say");
-  assert.equal(r.actions[0].text, "stub reply");
+  assert.equal(r.actions[0].verb, "say");
+  assert.equal(r.actions[0].args.text, "stub reply");
   assert.equal(r.thinking, "stub thought");
   assert.equal(r.usage.totalTokens, 70);
 

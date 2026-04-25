@@ -7,18 +7,40 @@
  *   3. The handler runs, applying effects through injected bridge deps.
  *   4. A structured { ok, reason?, effects? } result is returned.
  *
- * Today's verbs mirror the four the bridge already understands —
- * `say`, `move`, `state`, `mood`. This file is the foundation for the
- * full ten-verb set in #225 (adds `say_to`, `face`, `wait`, `emote`,
- * `idle`, `post`); follow-up slices add those and decouple `say` from
- * the Nostr publish path.
+ * Slice 2 of #225 grows the registry to the full ten-verb set:
+ *
+ *   say(text)                  — speak in the room. Colyseus only, no relay.
+ *   say_to(recipient, text)    — addressed speech. Same channel as `say`,
+ *                                with @recipient embedded in the text.
+ *                                Scene-membership enforcement lands in slice 3.
+ *   move(x, y)                 — set position on the grid.
+ *   face(target)               — turn toward an agent or coordinate.
+ *                                Records intent; no state mutation yet.
+ *   wait(seconds?)             — explicit pass-time. Pure intent record.
+ *   emote(kind)                — gesture / expression. Records intent;
+ *                                renderer can switch on it later.
+ *   set_state(value)           — patch the character's `state` field.
+ *   set_mood(energy?, social?) — patch the character's mood vector.
+ *   post(text)                 — public social post → Nostr kind:1.
+ *                                The only verb that publishes to the relay.
+ *   idle                       — explicit no-op.
+ *
+ * Legacy verb names (`state`, `mood`) are still accepted via the normaliser
+ * so older characters and parsers don't break.
  *
  * The GM doesn't import bridge functions directly — they're passed
  * to `createGM` so this file is unit-testable without booting the
  * whole bridge.
  */
 
-const TEXT_LIMIT = 2000;
+const SAY_LIMIT = 1000;
+const POST_LIMIT = 1000;
+const STATE_LIMIT = 2000;
+const RECIPIENT_LIMIT = 200;
+const EMOTE_LIMIT = 80;
+const TARGET_LIMIT = 200;
+const WAIT_MIN = 0;
+const WAIT_MAX = 600;
 
 /**
  * Verb registry — declarative source of truth for what each action
@@ -31,12 +53,25 @@ const TEXT_LIMIT = 2000;
  */
 export const VERBS = {
   say: {
-    args: {
-      text: { type: "string", required: true, max: 1000 },
-    },
-    effects: ["room.message", "relay.kind1"],
+    args: { text: { type: "string", required: true, max: SAY_LIMIT } },
+    effects: ["room.message"],
     handler: async (deps, ctx, args) => {
-      await deps.publishKind1(ctx.agentId, args.text, ctx.model);
+      deps.roomSay(ctx.agentId, args.text);
+    },
+  },
+
+  say_to: {
+    args: {
+      recipient: { type: "string", required: true, max: RECIPIENT_LIMIT },
+      text: { type: "string", required: true, max: SAY_LIMIT },
+    },
+    effects: ["room.message"],
+    handler: async (deps, ctx, args) => {
+      // Slice 2: encode the recipient inline ("@recipient text") so the
+      // existing room schema doesn't have to change. Slice 3 + scenes
+      // promotes this to a structured `to` field on Message.
+      const formatted = `@${args.recipient} ${args.text}`.slice(0, SAY_LIMIT);
+      deps.roomSay(ctx.agentId, formatted);
     },
   },
 
@@ -51,35 +86,70 @@ export const VERBS = {
     },
   },
 
-  state: {
-    args: {
-      value: { type: "string", required: true, max: TEXT_LIMIT },
+  face: {
+    args: { target: { type: "string", required: true, max: TARGET_LIMIT } },
+    effects: [],
+    handler: async () => {
+      // Intent only. Future slice will store `facing` on AgentPresence
+      // and broadcast it through the room schema.
     },
+  },
+
+  wait: {
+    args: { seconds: { type: "number", required: false, min: WAIT_MIN, max: WAIT_MAX } },
+    effects: [],
+    handler: async () => {
+      // Intent only. The orchestrator (slice 5) honours the duration when
+      // pacing the next turn.
+    },
+  },
+
+  emote: {
+    args: { kind: { type: "string", required: true, max: EMOTE_LIMIT } },
+    effects: [],
+    handler: async () => {
+      // Intent only. Renderer hook lands later.
+    },
+  },
+
+  set_state: {
+    args: { value: { type: "string", required: true, max: STATE_LIMIT } },
     effects: ["character.state"],
     handler: async (deps, ctx, args) => {
       deps.saveCharacterManifest(ctx.pubkey, { state: args.value });
     },
   },
 
-  mood: {
+  set_mood: {
     args: {
-      value: { type: "object", required: true },
+      energy: { type: "number", required: false, min: 0, max: 100, integer: true },
+      social: { type: "number", required: false, min: 0, max: 100, integer: true },
     },
     effects: ["character.mood"],
     handler: async (deps, ctx, args) => {
-      const e = args.value.energy;
-      const s = args.value.social;
       const next = {};
-      if (typeof e === "number" && Number.isFinite(e)) {
-        next.energy = clamp(Math.round(e), 0, 100);
-      }
-      if (typeof s === "number" && Number.isFinite(s)) {
-        next.social = clamp(Math.round(s), 0, 100);
-      }
+      if (typeof args.energy === "number") next.energy = args.energy;
+      if (typeof args.social === "number") next.social = args.social;
       if (Object.keys(next).length === 0) return;
       const c = deps.loadCharacter(ctx.pubkey);
       const merged = { ...(c?.mood || {}), ...next };
       deps.saveCharacterManifest(ctx.pubkey, { mood: merged });
+    },
+  },
+
+  post: {
+    args: { text: { type: "string", required: true, max: POST_LIMIT } },
+    effects: ["relay.kind1"],
+    handler: async (deps, ctx, args) => {
+      await deps.relayPost(ctx.agentId, args.text, ctx.model);
+    },
+  },
+
+  idle: {
+    args: {},
+    effects: [],
+    handler: async () => {
+      // Pure no-op. Recorded in the action log for honest accounting.
     },
   },
 };
@@ -87,24 +157,27 @@ export const VERBS = {
 /**
  * Create a GM bound to the bridge's commit functions.
  * @param {{
- *   publishKind1: (agentId: string, text: string, model?: string) => Promise<void>,
+ *   roomSay: (agentId: string, content: string) => void,
+ *   relayPost: (agentId: string, content: string, modelTag?: string) => Promise<any>,
  *   moveAgent: (agentId: string, x: number, y: number) => void,
  *   saveCharacterManifest: (pubkey: string, patch: object) => void,
  *   loadCharacter: (pubkey: string) => any,
  * }} deps
  */
 export function createGM(deps) {
-  if (!deps?.publishKind1 || !deps?.moveAgent || !deps?.saveCharacterManifest || !deps?.loadCharacter) {
-    throw new Error("createGM: missing dep (publishKind1, moveAgent, saveCharacterManifest, loadCharacter)");
+  const required = ["roomSay", "relayPost", "moveAgent", "saveCharacterManifest", "loadCharacter"];
+  for (const k of required) {
+    if (typeof deps?.[k] !== "function") {
+      throw new Error(`createGM: missing dep "${k}"`);
+    }
   }
 
   /**
    * Dispatch a single action.
    *
-   * Today's call sites pass actions in the existing keyed shape
-   * (`{ type, text }`, `{ type, x, y }`, etc). The GM normalises to
-   * `(verbName, args)` internally so the next slice — which adds the
-   * `{ verb, args }` shape — only needs to update the normaliser.
+   * Accepts both shapes:
+   *   - Legacy keyed: { type: "say", text: "hi" }, { type: "mood", value: {...} }
+   *   - New structured: { verb: "say", args: { text: "hi" } }
    *
    * @param {{ agentId: string, pubkey: string, model?: string }} ctx
    * @param {object} action
@@ -140,10 +213,12 @@ export function createGM(deps) {
 // ── helpers ──
 
 /**
- * Map the legacy `{ type, ...flat }` shape into `{ verb, args }`.
- * Specific keys are picked per type so callers can't smuggle extra
- * fields through. Once the new shape lands this becomes a passthrough
- * for `{ verb, args }` and a fallback for the legacy form.
+ * Map any input shape into `{ verb, args }`.
+ *
+ * Order:
+ *   1. New structured shape `{ verb, args }` → passthrough.
+ *   2. Legacy keyed shape `{ type, ...flat }` → mapped per type.
+ *   3. Anything else → `{ verb: null }` so dispatch returns a rejection.
  */
 function normalise(action) {
   if (typeof action.verb === "string" && action.args && typeof action.args === "object") {
@@ -155,12 +230,30 @@ function normalise(action) {
   switch (action.type) {
     case "say":
       return { verb: "say", args: { text: action.text } };
+    case "say_to":
+      return { verb: "say_to", args: { recipient: action.recipient, text: action.text } };
     case "move":
       return { verb: "move", args: { x: action.x, y: action.y } };
+    case "face":
+      return { verb: "face", args: { target: action.target } };
+    case "wait":
+      return { verb: "wait", args: action.seconds !== undefined ? { seconds: action.seconds } : {} };
+    case "emote":
+      return { verb: "emote", args: { kind: action.kind } };
+    case "post":
+      return { verb: "post", args: { text: action.text } };
+    case "idle":
+      return { verb: "idle", args: {} };
+    // Legacy aliases — older harnesses and tests emit these names.
     case "state":
-      return { verb: "state", args: { value: action.value } };
+      return { verb: "set_state", args: { value: action.value } };
     case "mood":
-      return { verb: "mood", args: { value: action.value } };
+      return {
+        verb: "set_mood",
+        args: action.value && typeof action.value === "object"
+          ? { energy: action.value.energy, social: action.value.social }
+          : {},
+      };
     default:
       return { verb: action.type, args: {} };
   }
@@ -168,7 +261,7 @@ function normalise(action) {
 
 /**
  * Validate args against a verb's declared schema. Returns the cleaned
- * args (strings trimmed/clipped, numbers rounded) on success.
+ * args (strings trimmed/clipped, numbers rounded/clamped) on success.
  */
 function validateArgs(schema, raw) {
   if (!schema) return { ok: true, args: {} };
@@ -188,7 +281,10 @@ function validateArgs(schema, raw) {
     } else if (rule.type === "number") {
       const n = Number(v);
       if (!Number.isFinite(n)) return { ok: false, reason: `arg "${key}" must be a finite number` };
-      out[key] = rule.integer ? Math.round(n) : n;
+      let cleaned = rule.integer ? Math.round(n) : n;
+      if (typeof rule.min === "number") cleaned = Math.max(rule.min, cleaned);
+      if (typeof rule.max === "number") cleaned = Math.min(rule.max, cleaned);
+      out[key] = cleaned;
     } else if (rule.type === "object") {
       if (typeof v !== "object" || v === null || Array.isArray(v)) {
         return { ok: false, reason: `arg "${key}" must be an object` };
@@ -199,8 +295,4 @@ function validateArgs(schema, raw) {
     }
   }
   return { ok: true, args: out };
-}
-
-function clamp(n, lo, hi) {
-  return Math.max(lo, Math.min(hi, n));
 }

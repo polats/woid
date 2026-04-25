@@ -111,50 +111,63 @@ export function buildSystemPrompt({
   // ── direct + external paths ──
 
   if (promptStyle === "dynamic") {
-    lines.push("Your actions are: SPEAK (room message), WALK (move to a grid tile), UPDATE STATE (your own mood/context note), ADJUST MOOD (two numeric levers).");
+    lines.push("Each turn you emit a list of grounded ACTIONS. Each action is a verb with args. The bridge validates and applies them.");
+    lines.push("");
+    lines.push("VERBS:");
+    lines.push("  say(text)                — speak in the room. Heard by anyone present. NOT broadcast publicly.");
+    lines.push("  say_to(recipient, text)  — addressed speech. Use when responding to someone specifically.");
+    lines.push("  move(x, y)               — walk to tile (x,y) within the room bounds.");
+    lines.push("  face(target)             — turn toward another character or position.");
+    lines.push("  wait(seconds?)           — pass time without speaking. Useful for letting silence sit.");
+    lines.push("  emote(kind)              — gesture or expression (e.g. shrug, nod, smile, sigh).");
+    lines.push("  set_state(value)         — update your own short mood/context note (private, persistent).");
+    lines.push("  set_mood(energy?, social?) — adjust your numeric mood levers (0–100 each).");
+    lines.push("  post(text)               — public social post. Goes to your followers' feeds. RARE and DELIBERATE — only when you have something genuinely worth broadcasting beyond the room.");
+    lines.push("  idle                     — explicit no-op. Use when you genuinely have nothing to do.");
     lines.push("");
     lines.push("RULES:");
     lines.push("- Pick the SINGLE most-important action this turn. Multiple actions are allowed but rarely the right call.");
     lines.push("- Stay in your own voice. Do NOT slip into a helpful-assistant register or narrate from outside the character.");
     lines.push("- Don't parrot what others said.");
-    lines.push("- ANTI-SILENCE: if anyone uses your name, replies to you, or is on/adjacent to your tile, you SHOULD respond. Pure silence is a last resort, only when alone with nothing happening.");
+    lines.push("- ANTI-SILENCE: if anyone uses your name, replies to you, or is on/adjacent to your tile, you SHOULD respond (`say` or `say_to`). Pure silence is a last resort, only when alone with nothing happening.");
     lines.push("- Short messages. One line in your character's voice. Banter and small talk fill the space.");
-    lines.push("- If your inner thinking has shifted (new intent, feeling, plan), update `state` to reflect it.");
+    lines.push("- `say` is for room presence (private to whoever's there). `post` is for public broadcast (rare). They are NOT interchangeable.");
+    lines.push("- If your inner thinking has shifted (new intent, feeling, plan), use `set_state`.");
     lines.push("");
-    lines.push("MOOD: a quantized read on your current vibe. Adjust as turns unfold; the bridge persists it across spawns.");
+    lines.push("MOOD: a quantized read on your current vibe. Adjust via `set_mood`; the bridge persists it across spawns.");
     lines.push("  energy 0–100 — 0=drained/quiet, 50=baseline, 100=wired/excited.");
     lines.push("  social 0–100 — 0=withdrawn/wary, 50=neutral, 100=chatty/curious.");
-    lines.push("Examples:");
-    lines.push("  - high social + room is silent → start a conversation. raise mood.social slightly.");
-    lines.push("  - low social + addressed by name → reply briefly, drop mood.social a notch.");
-    lines.push("  - low energy after lots of chatter → consider a move/state turn instead of more speech.");
     lines.push("");
     lines.push("OUTPUT CONTRACT");
     lines.push('Respond with ONLY a single JSON object, no prose, no markdown fences.');
-    lines.push('Shape: { "thinking"?: string, "say"?: string, "move"?: { "x": int, "y": int }, "state"?: string, "mood"?: { "energy": int, "social": int } }');
-    lines.push("Omit any key you don't want to act on. Do not invent new keys.");
+    lines.push('Shape: { "thinking"?: string, "actions": [ { "verb": "...", "args": { ... } }, ... ] }');
     lines.push("`thinking` is a private scratchpad — never visible in the room.");
-    lines.push("`say` is shown in the room as your character's message (≤ 200 chars).");
-    lines.push("`move` moves your character to tile (x,y) within the room bounds.");
-    lines.push("`state` updates your own short mood/context note (≤ 200 chars).");
-    lines.push("`mood` updates one or both of your numeric levers (0–100 each).");
-    lines.push("If you're alone and nothing demands action, return {} — but only after considering whether a brief `state` or `mood` adjustment fits.");
+    lines.push('Examples:');
+    lines.push('  { "thinking": "she said my name", "actions": [ { "verb": "say_to", "args": { "recipient": "Alice", "text": "yeah, what?" } } ] }');
+    lines.push('  { "actions": [ { "verb": "move", "args": { "x": 4, "y": 5 } }, { "verb": "set_mood", "args": { "energy": 30 } } ] }');
+    lines.push('  { "actions": [ { "verb": "post", "args": { "text": "first day in the new place. quieter than i thought." } } ] }');
+    lines.push('  { "actions": [ { "verb": "idle", "args": {} } ] }');
+    lines.push("If you genuinely have nothing to do, emit a single `idle` action.");
     return lines.join("\n");
   }
 
   // promptStyle === "minimal" (legacy default for existing characters)
-  lines.push(`Your actions are: SPEAK (room message), WALK (move to a grid tile), UPDATE STATE (your own mood/context note).`);
-  lines.push(`Keep messages short, one line, in your own voice. Don't parrot what others said. If you have nothing to say, do nothing.`);
-  lines.push(`Update state when your thinking shifts — new intent, feeling, or plan.`);
+  lines.push("Each turn you emit a list of grounded ACTIONS. Each action is a verb with args.");
+  lines.push("");
+  lines.push("VERBS:");
+  lines.push("  say(text)         — speak in the room (private to whoever's there).");
+  lines.push("  move(x, y)        — walk to tile (x,y).");
+  lines.push("  set_state(value)  — update your own mood/context note.");
+  lines.push("  post(text)        — public social post (rare; only when worth broadcasting).");
+  lines.push("  idle              — no-op.");
+  lines.push("");
+  lines.push("Keep messages short, one line, in your own voice. Don't parrot what others said.");
+  lines.push("If you have nothing to say, emit `idle`.");
   lines.push("");
   lines.push("OUTPUT CONTRACT");
   lines.push('Respond with ONLY a single JSON object, no prose, no markdown fences.');
-  lines.push('Shape: { "thinking"?: string, "say"?: string, "move"?: { "x": int, "y": int }, "state"?: string }');
-  lines.push("Omit any key you don't want to act on. Do not invent new keys.");
-  lines.push("`say` is shown in the room as your character's message.");
-  lines.push("`move` moves your character to tile (x,y) within the room bounds.");
-  lines.push("`state` updates your own short mood/context note (≤ 200 chars).");
-  lines.push("If you have nothing to say or do this turn, return {}");
+  lines.push('Shape: { "thinking"?: string, "actions": [ { "verb": "...", "args": { ... } }, ... ] }');
+  lines.push('Example: { "actions": [ { "verb": "say", "args": { "text": "hi" } } ] }');
   return lines.join("\n");
 }
 

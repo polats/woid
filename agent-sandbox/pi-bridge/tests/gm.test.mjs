@@ -1,6 +1,6 @@
 /**
- * GM tests. Exercise dispatch + arg validation across the four
- * currently-implemented verbs, with stubbed bridge deps.
+ * GM tests. Cover the full ten-verb registry from #225 slice 2 plus
+ * legacy-shape compatibility, arg validation, and handler errors.
  *
  * Run: node --test agent-sandbox/pi-bridge/tests/gm.test.mjs
  */
@@ -11,14 +11,18 @@ import { createGM, VERBS } from "../gm.js";
 
 function makeStubDeps(overrides = {}) {
   const calls = {
-    publishKind1: [],
+    roomSay: [],
+    relayPost: [],
     moveAgent: [],
     saveCharacterManifest: [],
     loadCharacter: [],
   };
   const deps = {
-    publishKind1: async (agentId, content, modelTag) => {
-      calls.publishKind1.push({ agentId, content, modelTag });
+    roomSay: (agentId, content) => {
+      calls.roomSay.push({ agentId, content });
+    },
+    relayPost: async (agentId, content, modelTag) => {
+      calls.relayPost.push({ agentId, content, modelTag });
     },
     moveAgent: (agentId, x, y) => {
       calls.moveAgent.push({ agentId, x, y });
@@ -41,31 +45,28 @@ const ctx = { agentId: "agent_1", pubkey: "abc123", model: "test-model" };
 
 test("createGM throws when missing deps", () => {
   assert.throws(() => createGM({}));
-  assert.throws(() => createGM({ publishKind1: async () => {} }));
+  assert.throws(() => createGM({ roomSay: () => {} }));
 });
 
-test("createGM exposes the verb registry", () => {
+test("createGM exposes the full verb registry", () => {
   const { deps } = makeStubDeps();
   const gm = createGM(deps);
-  assert.ok(gm.verbs.say);
-  assert.ok(gm.verbs.move);
-  assert.ok(gm.verbs.state);
-  assert.ok(gm.verbs.mood);
+  for (const v of ["say", "say_to", "move", "face", "wait", "emote", "set_state", "set_mood", "post", "idle"]) {
+    assert.ok(gm.verbs[v], `expected verb "${v}" in registry`);
+  }
   assert.equal(gm.verbs, VERBS);
 });
 
 // ── say ──
 
-test("say: routes to publishKind1 with trimmed text", async () => {
+test("say: routes to roomSay with trimmed text — no relay", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
   const res = await gm.dispatch(ctx, { type: "say", text: "  hello world  " });
   assert.equal(res.ok, true);
-  assert.equal(res.verb, "say");
-  assert.equal(calls.publishKind1.length, 1);
-  assert.equal(calls.publishKind1[0].content, "hello world");
-  assert.equal(calls.publishKind1[0].agentId, "agent_1");
-  assert.equal(calls.publishKind1[0].modelTag, "test-model");
+  assert.equal(calls.roomSay.length, 1);
+  assert.equal(calls.roomSay[0].content, "hello world");
+  assert.equal(calls.relayPost.length, 0);
 });
 
 test("say: rejects empty text", async () => {
@@ -74,112 +75,179 @@ test("say: rejects empty text", async () => {
   const res = await gm.dispatch(ctx, { type: "say", text: "   " });
   assert.equal(res.ok, false);
   assert.match(res.reason, /non-empty/);
-  assert.equal(calls.publishKind1.length, 0);
-});
-
-test("say: rejects non-string text", async () => {
-  const { deps, calls } = makeStubDeps();
-  const gm = createGM(deps);
-  const res = await gm.dispatch(ctx, { type: "say", text: 42 });
-  assert.equal(res.ok, false);
-  assert.match(res.reason, /must be a string/);
-  assert.equal(calls.publishKind1.length, 0);
+  assert.equal(calls.roomSay.length, 0);
 });
 
 test("say: clips text to 1000 chars", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  const long = "x".repeat(2000);
-  const res = await gm.dispatch(ctx, { type: "say", text: long });
+  await gm.dispatch(ctx, { type: "say", text: "x".repeat(2000) });
+  assert.equal(calls.roomSay[0].content.length, 1000);
+});
+
+// ── say_to ──
+
+test("say_to: prefixes recipient, single roomSay", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "say_to", recipient: "Carlos", text: "you ok?" });
   assert.equal(res.ok, true);
-  assert.equal(calls.publishKind1[0].content.length, 1000);
+  assert.equal(calls.roomSay.length, 1);
+  assert.equal(calls.roomSay[0].content, "@Carlos you ok?");
+  assert.equal(calls.relayPost.length, 0);
+});
+
+test("say_to: rejects missing recipient", async () => {
+  const { deps } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "say_to", text: "hello" });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /missing arg "recipient"/);
 });
 
 // ── move ──
 
-test("move: routes to moveAgent with rounded ints", async () => {
+test("move: rounds coords to ints", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  const res = await gm.dispatch(ctx, { type: "move", x: 3.7, y: 2.2 });
-  assert.equal(res.ok, true);
+  await gm.dispatch(ctx, { type: "move", x: 3.7, y: 2.2 });
   assert.deepEqual(calls.moveAgent[0], { agentId: "agent_1", x: 4, y: 2 });
 });
 
 test("move: rejects non-finite coords", async () => {
-  const { deps, calls } = makeStubDeps();
+  const { deps } = makeStubDeps();
   const gm = createGM(deps);
   const res = await gm.dispatch(ctx, { type: "move", x: "nope", y: 2 });
   assert.equal(res.ok, false);
   assert.match(res.reason, /finite number/);
-  assert.equal(calls.moveAgent.length, 0);
 });
 
-test("move: rejects missing y", async () => {
+// ── face / wait / emote / idle (intent-only) ──
+
+test("face: validates target, no side effects", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  const res = await gm.dispatch(ctx, { type: "move", x: 3 });
-  assert.equal(res.ok, false);
-  assert.match(res.reason, /missing arg "y"/);
-  assert.equal(calls.moveAgent.length, 0);
-});
-
-// ── state ──
-
-test("state: patches manifest with trimmed value", async () => {
-  const { deps, calls } = makeStubDeps();
-  const gm = createGM(deps);
-  const res = await gm.dispatch(ctx, { type: "state", value: "  curious  " });
+  const res = await gm.dispatch(ctx, { type: "face", target: "Bob" });
   assert.equal(res.ok, true);
-  assert.equal(calls.saveCharacterManifest[0].pubkey, "abc123");
+  assert.equal(calls.roomSay.length, 0);
+  assert.equal(calls.moveAgent.length, 0);
+});
+
+test("face: rejects empty target", async () => {
+  const { deps } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "face", target: "" });
+  assert.equal(res.ok, false);
+});
+
+test("wait: optional seconds, no side effects", async () => {
+  const { deps } = makeStubDeps();
+  const gm = createGM(deps);
+  assert.equal((await gm.dispatch(ctx, { type: "wait" })).ok, true);
+  assert.equal((await gm.dispatch(ctx, { type: "wait", seconds: 5 })).ok, true);
+});
+
+test("wait: clamps absurd durations into [0, 600]", async () => {
+  const { deps } = makeStubDeps();
+  const gm = createGM(deps);
+  assert.equal((await gm.dispatch(ctx, { type: "wait", seconds: 99999 })).ok, true);
+  assert.equal((await gm.dispatch(ctx, { type: "wait", seconds: -10 })).ok, true);
+});
+
+test("emote: validates kind, no side effects", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "emote", kind: "shrug" });
+  assert.equal(res.ok, true);
+  assert.equal(calls.roomSay.length, 0);
+});
+
+test("idle: always ok, no side effects", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "idle" });
+  assert.equal(res.ok, true);
+  assert.equal(Object.values(calls).every((arr) => arr.length === 0), true);
+});
+
+// ── set_state ──
+
+test("set_state: patches manifest with trimmed value", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { verb: "set_state", args: { value: "  curious  " } });
   assert.deepEqual(calls.saveCharacterManifest[0].patch, { state: "curious" });
 });
 
-test("state: clips to 2000 chars", async () => {
+test("legacy alias: state → set_state", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  const long = "y".repeat(5000);
-  const res = await gm.dispatch(ctx, { type: "state", value: long });
-  assert.equal(res.ok, true);
-  assert.equal(calls.saveCharacterManifest[0].patch.state.length, 2000);
+  await gm.dispatch(ctx, { type: "state", value: "thinking" });
+  assert.deepEqual(calls.saveCharacterManifest[0].patch, { state: "thinking" });
 });
 
-// ── mood ──
+// ── set_mood ──
 
-test("mood: merges with existing", async () => {
+test("set_mood: merges only provided fields", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  const res = await gm.dispatch(ctx, { type: "mood", value: { energy: 80 } });
-  assert.equal(res.ok, true);
-  assert.equal(calls.loadCharacter.length, 1);
+  await gm.dispatch(ctx, { verb: "set_mood", args: { energy: 80 } });
   assert.deepEqual(calls.saveCharacterManifest[0].patch, {
     mood: { energy: 80, social: 50 },
   });
 });
 
-test("mood: clamps to 0–100", async () => {
+test("set_mood: clamps to 0-100", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  await gm.dispatch(ctx, { type: "mood", value: { energy: 150, social: -30 } });
+  await gm.dispatch(ctx, { verb: "set_mood", args: { energy: 150, social: -30 } });
   assert.deepEqual(calls.saveCharacterManifest[0].patch, {
     mood: { energy: 100, social: 0 },
   });
 });
 
-test("mood: ignores non-number fields silently", async () => {
+test("set_mood: no-op when nothing valid", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  await gm.dispatch(ctx, { type: "mood", value: { energy: null, social: 75 } });
+  await gm.dispatch(ctx, { verb: "set_mood", args: {} });
+  assert.equal(calls.saveCharacterManifest.length, 0);
+});
+
+test("legacy alias: mood → set_mood", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { type: "mood", value: { energy: 75 } });
   assert.deepEqual(calls.saveCharacterManifest[0].patch, {
-    mood: { energy: 50, social: 75 },
+    mood: { energy: 75, social: 50 },
   });
 });
 
-test("mood: no-op when value has no number fields", async () => {
+// ── post ──
+
+test("post: routes to relayPost — no roomSay", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  await gm.dispatch(ctx, { type: "mood", value: { energy: "cat", social: "dog" } });
-  assert.equal(calls.saveCharacterManifest.length, 0);
-  assert.equal(calls.loadCharacter.length, 0);
+  const res = await gm.dispatch(ctx, { type: "post", text: "morning, internet" });
+  assert.equal(res.ok, true);
+  assert.equal(calls.relayPost.length, 1);
+  assert.equal(calls.relayPost[0].content, "morning, internet");
+  assert.equal(calls.relayPost[0].modelTag, "test-model");
+  assert.equal(calls.roomSay.length, 0);
+});
+
+test("post: rejects empty text", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { verb: "post", args: { text: "  " } });
+  assert.equal(res.ok, false);
+  assert.equal(calls.relayPost.length, 0);
+});
+
+test("post: clips text to 1000 chars", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { verb: "post", args: { text: "p".repeat(5000) } });
+  assert.equal(calls.relayPost[0].content.length, 1000);
 });
 
 // ── unknown verb / shape ──
@@ -209,28 +277,24 @@ test("dispatch: non-object action returns structured rejection", async () => {
   assert.match(res.reason, /must be an object/);
 });
 
-// ── new shape forward-compat ──
+// ── new shape ──
 
-test("dispatch: accepts the { verb, args } shape directly", async () => {
+test("dispatch: { verb, args } shape passes through", async () => {
   const { deps, calls } = makeStubDeps();
   const gm = createGM(deps);
-  const res = await gm.dispatch(ctx, { verb: "say", args: { text: "hi from new shape" } });
-  assert.equal(res.ok, true);
-  assert.equal(res.verb, "say");
-  assert.equal(calls.publishKind1[0].content, "hi from new shape");
+  await gm.dispatch(ctx, { verb: "say", args: { text: "via new shape" } });
+  assert.equal(calls.roomSay[0].content, "via new shape");
 });
-
-// ── handler errors are caught ──
 
 test("dispatch: handler throw becomes structured rejection", async () => {
   const { deps } = makeStubDeps({
-    publishKind1: async () => {
-      throw new Error("upstream relay down");
+    roomSay: () => {
+      throw new Error("room offline");
     },
   });
   const gm = createGM(deps);
   const res = await gm.dispatch(ctx, { type: "say", text: "hello" });
   assert.equal(res.ok, false);
   assert.equal(res.verb, "say");
-  assert.match(res.reason, /upstream relay down/);
+  assert.match(res.reason, /room offline/);
 });

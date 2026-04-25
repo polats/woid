@@ -211,6 +211,25 @@ function _appendJsonl(fs, path, entry) {
  * Tolerates whitespace, optional markdown fencing, and extra prose —
  * picks the first balanced {...} block. Invalid entries are dropped
  * with an error field preserved for the inspector.
+ *
+ * Two input shapes accepted (the parser normalises to the new one):
+ *
+ *   New (preferred, taught in updated prompts):
+ *     {
+ *       "thinking": "...",
+ *       "actions": [
+ *         { "verb": "say", "args": { "text": "hi" } },
+ *         { "verb": "move", "args": { "x": 4, "y": 5 } },
+ *         { "verb": "post", "args": { "text": "morning, internet" } }
+ *       ]
+ *     }
+ *
+ *   Legacy (still emitted by older characters):
+ *     { "thinking": "...", "say": "hi", "move": { "x": 4, "y": 5 }, "state": "...", "mood": {...} }
+ *
+ * Output is always an array of `{ verb, args }` objects in the new
+ * shape. The GM's normaliser tolerates both shapes anyway, but the
+ * parser emitting the canonical form keeps the inspector + logs clean.
  */
 export function _parseActions(raw) {
   const actions = [];
@@ -230,33 +249,46 @@ export function _parseActions(raw) {
   if (typeof obj.thinking === "string" && obj.thinking.trim()) {
     thinking = obj.thinking.trim();
   }
+
+  // New shape — pass through. Light validation only; the GM enforces
+  // schemas. We just keep junk out of the inspector.
+  if (Array.isArray(obj.actions)) {
+    for (const entry of obj.actions) {
+      if (!entry || typeof entry !== "object") continue;
+      if (typeof entry.verb !== "string" || entry.verb.trim() === "") continue;
+      const args = entry.args && typeof entry.args === "object" && !Array.isArray(entry.args)
+        ? entry.args
+        : {};
+      actions.push({ verb: entry.verb.trim(), args });
+    }
+    return { actions, thinking };
+  }
+
+  // Legacy keyed shape — translate each present key to a {verb,args}.
   if (typeof obj.say === "string" && obj.say.trim()) {
-    actions.push({ type: "say", text: obj.say.trim().slice(0, 1000) });
+    actions.push({ verb: "say", args: { text: obj.say.trim().slice(0, 1000) } });
   }
   if (obj.move && typeof obj.move === "object") {
     const x = Number(obj.move.x);
     const y = Number(obj.move.y);
     if (Number.isFinite(x) && Number.isFinite(y)) {
-      actions.push({ type: "move", x: Math.round(x), y: Math.round(y) });
+      actions.push({ verb: "move", args: { x: Math.round(x), y: Math.round(y) } });
     }
   }
   if (typeof obj.state === "string" && obj.state.trim()) {
-    actions.push({ type: "state", value: obj.state.trim().slice(0, 2000) });
+    actions.push({ verb: "set_state", args: { value: obj.state.trim().slice(0, 2000) } });
   }
-  // Dynamic-prompt mood lever. Both keys optional; clamp to 0–100.
-  // Reject null / undefined / non-number explicitly so junk values
-  // (e.g. `{ social: null }`) don't coerce to 0 via `Number(null)`.
   if (obj.mood && typeof obj.mood === "object") {
-    const mood = {};
+    const args = {};
     const e = obj.mood.energy;
     const s = obj.mood.social;
     if (typeof e === "number" && Number.isFinite(e)) {
-      mood.energy = Math.max(0, Math.min(100, Math.round(e)));
+      args.energy = Math.max(0, Math.min(100, Math.round(e)));
     }
     if (typeof s === "number" && Number.isFinite(s)) {
-      mood.social = Math.max(0, Math.min(100, Math.round(s)));
+      args.social = Math.max(0, Math.min(100, Math.round(s)));
     }
-    if (Object.keys(mood).length > 0) actions.push({ type: "mood", value: mood });
+    if (Object.keys(args).length > 0) actions.push({ verb: "set_mood", args });
   }
   return { actions, thinking };
 }

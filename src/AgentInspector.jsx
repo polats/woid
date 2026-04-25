@@ -93,6 +93,29 @@ function extractThinking(msg) {
   return parts.filter((p) => p?.type === 'thinking').map((p) => p.thinking || '').join('')
 }
 
+// Map either action shape to { verb, args }. The bridge emits the new
+// shape from #225 slice 2 onward; older session logs may still contain
+// the legacy { type, ...flat } form.
+function normaliseAction(a) {
+  if (a && typeof a.verb === 'string' && a.args && typeof a.args === 'object') {
+    return { verb: a.verb, args: a.args }
+  }
+  if (!a || typeof a.type !== 'string') return { verb: '?', args: {} }
+  switch (a.type) {
+    case 'say':     return { verb: 'say',     args: { text: a.text } }
+    case 'say_to':  return { verb: 'say_to',  args: { recipient: a.recipient, text: a.text } }
+    case 'move':    return { verb: 'move',    args: { x: a.x, y: a.y } }
+    case 'face':    return { verb: 'face',    args: { target: a.target } }
+    case 'wait':    return { verb: 'wait',    args: { seconds: a.seconds } }
+    case 'emote':   return { verb: 'emote',   args: { kind: a.kind } }
+    case 'state':   return { verb: 'set_state', args: { value: a.value } }
+    case 'mood':    return { verb: 'set_mood', args: a.value || {} }
+    case 'post':    return { verb: 'post',    args: { text: a.text } }
+    case 'idle':    return { verb: 'idle',    args: {} }
+    default:        return { verb: a.type,    args: a }
+  }
+}
+
 function EventRow({ ev }) {
   const { kind, data, text, code } = ev
 
@@ -134,22 +157,57 @@ function EventRow({ ev }) {
     )
   }
   if (kind === 'action') {
-    const a = data || {}
-    if (a.type === 'say') {
+    const { verb, args } = normaliseAction(data || {})
+    if (verb === 'say') {
       return (
         <div className="ai-row ai-row-assistant">
           <span className="ai-label">say</span>
-          <div className="ai-text">{a.text}</div>
+          <div className="ai-text">{args.text}</div>
         </div>
       )
     }
-    if (a.type === 'move') {
-      return <div className="ai-row ai-row-tool-call"><span className="ai-label">move</span><pre>{`(${a.x}, ${a.y})`}</pre></div>
+    if (verb === 'say_to') {
+      return (
+        <div className="ai-row ai-row-assistant">
+          <span className="ai-label">say → {args.recipient}</span>
+          <div className="ai-text">{args.text}</div>
+        </div>
+      )
     }
-    if (a.type === 'state') {
-      return <div className="ai-row ai-row-tool-call"><span className="ai-label">state</span><pre>{a.value}</pre></div>
+    if (verb === 'post') {
+      return (
+        <div className="ai-row ai-row-post">
+          <span className="ai-label">post</span>
+          <div className="ai-text">{args.text}</div>
+        </div>
+      )
     }
-    return <div className="ai-row ai-row-unknown">action: {a.type}</div>
+    if (verb === 'move') {
+      return <div className="ai-row ai-row-tool-call"><span className="ai-label">move</span><pre>{`(${args.x}, ${args.y})`}</pre></div>
+    }
+    if (verb === 'face') {
+      return <div className="ai-row ai-row-tool-call"><span className="ai-label">face</span><pre>{args.target}</pre></div>
+    }
+    if (verb === 'wait') {
+      return <div className="ai-row ai-row-meta">wait{args.seconds != null ? ` (${args.seconds}s)` : ''}</div>
+    }
+    if (verb === 'emote') {
+      return <div className="ai-row ai-row-tool-call"><span className="ai-label">emote</span><pre>{args.kind}</pre></div>
+    }
+    if (verb === 'idle') {
+      return <div className="ai-row ai-row-meta">idle</div>
+    }
+    if (verb === 'set_state' || verb === 'state') {
+      return <div className="ai-row ai-row-tool-call"><span className="ai-label">state</span><pre>{args.value ?? args.text}</pre></div>
+    }
+    if (verb === 'set_mood' || verb === 'mood') {
+      const mood = verb === 'mood' ? args.value : args
+      const parts = []
+      if (mood?.energy != null) parts.push(`energy ${mood.energy}`)
+      if (mood?.social != null) parts.push(`social ${mood.social}`)
+      return <div className="ai-row ai-row-tool-call"><span className="ai-label">mood</span><pre>{parts.join(' · ')}</pre></div>
+    }
+    return <div className="ai-row ai-row-unknown">action: {verb}</div>
   }
   if (kind === 'error' || kind === 'turn-error' || kind === 'action-error') {
     const msg = data?.message || data?.error || JSON.stringify(data || {}).slice(0, 200)

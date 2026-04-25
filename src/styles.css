@@ -1296,6 +1296,19 @@ body {
 }
 .agent-drawer-close:hover { background: var(--transmit); border-color: var(--transmit); }
 
+/* Drawer header npub — clicking opens the character's profile on
+   Jumble in a new tab. Inherits the header's text color so the link
+   is legible against the dark drawer header but still visibly tappable
+   via underline-on-hover. */
+.agent-drawer-npub-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+  opacity: 0.85;
+}
+.agent-drawer-npub-link:hover { opacity: 1; border-bottom-style: solid; }
+.agent-drawer-npub-link code { font: inherit; }
+
 /* Side-tabs — vertical rail attached to the right edge of the main
    panel. Tabs extend OUTWARD and visually merge with the panel (no
    left border; active tab shares panel background). Text reads
@@ -1504,6 +1517,10 @@ body {
 .ai-row-user { background: #dde6f0; border-left-color: var(--prussian); }
 .ai-row-assistant { background: #e1ecd3; border-left-color: var(--lime); }
 .ai-row-assistant .ai-text { white-space: pre-wrap; }
+/* Public Nostr post — visually distinct from in-room speech so the
+   relay-decoupling in #225 slice 2 is legible at a glance. */
+.ai-row-post { background: #d8e6f4; border-left-color: #3a7bd5; }
+.ai-row-post .ai-text { white-space: pre-wrap; font-style: italic; }
 .ai-row-tool-call { background: #f5e7c1; border-left-color: var(--amber); }
 .ai-row-tool-result { background: var(--paper-3); border-left-color: var(--ink-muted); }
 .ai-row-err { background: var(--bad-bg); border-left-color: var(--transmit); color: var(--bad-ink); }

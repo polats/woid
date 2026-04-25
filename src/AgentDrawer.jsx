@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import AgentProfile from './AgentProfile.jsx'
 import AgentInspector from './AgentInspector.jsx'
 import AgentSystemPrompt from './AgentSystemPrompt.jsx'
+import config from './config.js'
+import { profileUrl } from './lib/jumble.js'
+
+const cfg = config.agentSandbox || {}
 
 /**
  * Left-slide drawer with vertical side-tabs hosting:
@@ -168,7 +172,24 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
                   </span>
                 )}
               </div>
-              <code title={npub}>{npub ? npub.slice(0, 12) + '…' : ''}</code>
+              {npub ? (
+                (() => {
+                  const jumble = profileUrl(cfg.jumbleUrl, npub)
+                  return jumble ? (
+                    <a
+                      href={jumble}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`Open ${npub} on Jumble`}
+                      className="agent-drawer-npub-link"
+                    >
+                      <code>{npub.slice(0, 12) + '…'}</code>
+                    </a>
+                  ) : (
+                    <code title={npub}>{npub.slice(0, 12) + '…'}</code>
+                  )
+                })()
+              ) : null}
             </div>
             <button className="agent-drawer-close" onClick={dismiss} aria-label="close">×</button>
           </header>
