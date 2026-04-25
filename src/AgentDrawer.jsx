@@ -14,11 +14,14 @@ import AgentInspector from './AgentInspector.jsx'
  * any mousedown outside the aside. A `closing` state plays the
  * exit animation before we call parent `onClose`.
  */
-export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 'context', onClose, onDeleted, onUpdated }) {
+export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 'context', onClose, onDeleted, onUpdated, onDirtyChange }) {
   const [tab, setTab] = useState(initialTab)
   const [closing, setClosing] = useState(false)
+  const [profileDirty, setProfileDirty] = useState(false)
   const asideRef = useRef(null)
   const closingRef = useRef(false)
+  const dirtyRef = useRef(false)
+  dirtyRef.current = profileDirty
 
   const prevPubkeyRef = useRef(character?.pubkey)
   useEffect(() => {
@@ -28,21 +31,44 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
     }
   }, [character?.pubkey, initialTab])
 
+  // Bubble dirty state up to Sandbox so it can warn before swapping
+  // inspectedId (clicking a different card with unsaved changes).
+  useEffect(() => {
+    onDirtyChange?.(profileDirty)
+  }, [profileDirty, onDirtyChange])
+
   // Wraps the parent's onClose with a timed exit animation so the
-  // slide-out + fade actually show. `closing` triggers the .closing
-  // CSS class; after the animation completes we unmount by calling
-  // the parent's onClose which clears inspectedId.
+  // slide-out + fade actually show. Confirms first if the profile
+  // form has unsaved changes; the user can save explicitly before
+  // dismissing.
   const EXIT_MS = 180
   function dismiss() {
     if (closingRef.current) return
+    if (dirtyRef.current && !window.confirm('You have unsaved profile changes. Discard and close?')) {
+      return
+    }
     closingRef.current = true
     setClosing(true)
     setTimeout(() => onClose?.(), EXIT_MS)
   }
 
+  function handleTabChange(next) {
+    if (next === tab) return
+    if (tab === 'profile' && dirtyRef.current && next !== 'profile') {
+      if (!window.confirm('You have unsaved profile changes. Discard and switch tab?')) return
+      setProfileDirty(false)
+    }
+    setTab(next)
+  }
+
   const name = character?.name ?? agent?.name ?? '—'
   const npub = character?.npub ?? agent?.npub ?? ''
+  // Prefer the runtime values when this character is spawned (agent
+  // is set) — the user wants to see which model + harness are
+  // actually driving the character right now, not the manifest's
+  // saved defaults. Fall back to manifest for stopped characters.
   const model = agent?.model ?? character?.model ?? null
+  const harness = agent?.harness ?? character?.harness ?? null
 
   return (
     <>
@@ -55,7 +81,7 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
             className={`agent-drawer-sidetab${tab === 'profile' ? ' active' : ''}`}
             role="tab"
             aria-selected={tab === 'profile'}
-            onClick={() => setTab('profile')}
+            onClick={() => handleTabChange('profile')}
             title="Profile"
           >
             <IconProfile />
@@ -65,7 +91,7 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
             className={`agent-drawer-sidetab${tab === 'context' ? ' active' : ''}`}
             role="tab"
             aria-selected={tab === 'context'}
-            onClick={() => setTab('context')}
+            onClick={() => handleTabChange('context')}
             title="Context — turn history"
           >
             <IconContext />
@@ -75,7 +101,7 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
             className={`agent-drawer-sidetab${tab === 'live' ? ' active' : ''}`}
             role="tab"
             aria-selected={tab === 'live'}
-            onClick={() => setTab('live')}
+            onClick={() => handleTabChange('live')}
             title="Live — streaming events"
           >
             <IconLive />
@@ -95,7 +121,10 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
             <div className="agent-drawer-title">
               <strong>{name}</strong>
               {model && (
-                <span className="agent-model-badge" title={model}>{model.split('/').pop()}</span>
+                <span className="agent-model-badge" title={`model: ${model}${harness ? ` · brain: ${harness}` : ''}`}>
+                  {model.split('/').pop()}
+                  {harness && <span className="agent-harness-badge"> · {harness}</span>}
+                </span>
               )}
               <code title={npub}>{npub ? npub.slice(0, 12) + '…' : ''}</code>
             </div>
@@ -110,6 +139,7 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
                   onClose={dismiss}
                   onDeleted={onDeleted}
                   onUpdated={onUpdated}
+                  onDirtyChange={setProfileDirty}
                 />
               ) : (
                 <p className="muted" style={{ padding: 14 }}>No character loaded.</p>

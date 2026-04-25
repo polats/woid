@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import config from './config.js'
 
 const cfg = config.agentSandbox || {}
@@ -55,7 +55,7 @@ function extractLivePersona(raw) {
   }
 }
 
-export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) {
+export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, onDirtyChange }) {
   const [character, setCharacter] = useState(null)
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -89,6 +89,29 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
       })
       .catch((err) => setError(err.message || String(err)))
   }, [pubkey])
+
+  // Whether the form has unsaved changes vs the loaded character.
+  // Lifts to AgentDrawer + Sandbox via onDirtyChange so they can warn
+  // before navigating away (tab switch, dismiss, character change).
+  const isDirty = useMemo(() => {
+    if (!character || !form) return false
+    return (
+      form.name !== (character.name ?? '') ||
+      form.about !== (character.about ?? '') ||
+      form.state !== (character.state ?? '') ||
+      (form.model || null) !== (character.model || null) ||
+      (form.harness || 'direct') !== (character.harness || 'direct')
+    )
+  }, [character, form])
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+  }, [isDirty, onDirtyChange])
+
+  // Reset dirty flag in the parent on unmount so a stale "you have
+  // unsaved changes" warning doesn't follow the user to a different
+  // character or after a successful save.
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   async function save(e) {
     e.preventDefault()
@@ -252,142 +275,155 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
 
   return (
     <div className="agent-profile">
-      {/* Compact header card — mirrors .sandbox3-card: portrait + name +
-          about, with "Regenerate avatar" tucked directly beneath the
-          portrait so it's obvious what it applies to. */}
+      {/* Compact header card — portrait + name + about row on top,
+          persona generator full-width below. */}
       <div className="agent-profile-card">
-        <div className="agent-profile-card-portrait-col">
-          <div className="agent-profile-card-portrait">
-            {avatarLoading ? (
-              <div className="agent-profile-card-portrait-spinner" aria-label="Generating avatar">
-                <div className="spinner" />
-              </div>
-            ) : character.avatarUrl ? (
-              <img src={character.avatarUrl} alt={form.name || 'avatar'} />
-            ) : (
-              <div className="agent-profile-card-portrait-fallback">{initial}</div>
-            )}
+        <div className="agent-profile-card-top">
+          <div className="agent-profile-card-portrait-col">
+            <div className="agent-profile-card-portrait">
+              {avatarLoading ? (
+                <div className="agent-profile-card-portrait-spinner" aria-label="Generating avatar">
+                  <div className="spinner" />
+                </div>
+              ) : character.avatarUrl ? (
+                <img src={character.avatarUrl} alt={form.name || 'avatar'} />
+              ) : (
+                <div className="agent-profile-card-portrait-fallback">{initial}</div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={generateAvatar}
+              disabled={avatarLoading || generating}
+              className="agent-profile-avatar-btn"
+            >
+              {character.avatarUrl ? 'Regenerate avatar' : 'Generate avatar'}
+            </button>
           </div>
+          <div className="agent-profile-card-body">
+            <input
+              className="agent-profile-name"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              disabled={saving || generating}
+              placeholder="Name"
+              maxLength={80}
+            />
+            <textarea
+              className="agent-profile-about"
+              rows={4}
+              placeholder="Short bio. Published as the Nostr kind:0 about."
+              value={form.about}
+              onChange={(e) => setForm((f) => ({ ...f, about: e.target.value }))}
+              disabled={saving || generating}
+            />
+            <a
+              className="agent-profile-card-npub"
+              href={`${JUMBLE_URL}/${character.npub}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open ${character.name} on Jumble`}
+            >
+              {character.npub}
+            </a>
+          </div>
+        </div>
+
+        {/* Persona generator — full width of the card. Identity-
+            shaping action lives next to identity. Seed + model
+            tucked inside a collapsible to stay out of the way. */}
+        <fieldset className="agent-profile-generate">
+          <legend>Persona</legend>
           <button
             type="button"
-            onClick={generateAvatar}
-            disabled={avatarLoading || generating}
-            className="agent-profile-avatar-btn"
+            onClick={generate}
+            disabled={generating || saving}
+            className="agent-profile-generate-btn"
           >
-            {character.avatarUrl ? 'Regenerate avatar' : 'Generate avatar'}
+            {generating
+              ? 'Streaming…'
+              : (character.about && character.profileSource === 'ai')
+              ? 'Regenerate persona'
+              : 'Generate persona'}
           </button>
-        </div>
-        <div className="agent-profile-card-body">
-          <input
-            className="agent-profile-name"
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            disabled={saving || generating}
-            placeholder="Name"
-            maxLength={80}
-          />
-          <textarea
-            className="agent-profile-about"
-            rows={4}
-            placeholder="Short bio. Published as the Nostr kind:0 about."
-            value={form.about}
-            onChange={(e) => setForm((f) => ({ ...f, about: e.target.value }))}
-            disabled={saving || generating}
-          />
-          <label className="agent-profile-harness">
-            <span className="agent-profile-harness-label">Brain</span>
-            <select
-              className="agent-profile-harness-select"
-              value={form.harness}
-              onChange={(e) => setForm((f) => ({ ...f, harness: e.target.value }))}
-              disabled={saving || generating}
-              title={HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
-            >
-              {HARNESS_OPTIONS.map((h) => (
-                <option key={h.id} value={h.id} title={h.hint}>
-                  {h.label}
-                </option>
-              ))}
-            </select>
-            <small className="agent-profile-harness-hint">
-              {HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
-            </small>
-          </label>
-          <a
-            className="agent-profile-card-npub"
-            href={`${JUMBLE_URL}/${character.npub}`}
-            target="_blank"
-            rel="noreferrer"
-            title={`Open ${character.name} on Jumble`}
-          >
-            {character.npub}
-          </a>
-        </div>
+          {generating && streamModel ? (
+            <p className="agent-profile-generate-model">
+              <span className="spinner agent-profile-generate-spinner" />
+              Streaming from <code>{streamModel}</code>…
+            </p>
+          ) : character.profileModel && character.profileSource === 'ai' ? (
+            <p className="agent-profile-generate-model muted">
+              Last generated by <code>{character.profileModel}</code>
+            </p>
+          ) : null}
+          <details className="agent-profile-generate-options">
+            <summary>Options</summary>
+            <label>
+              Seed
+              <input
+                value={seed}
+                onChange={(e) => setSeed(e.target.value)}
+                placeholder="e.g. 'new kid this summer'"
+                disabled={generating}
+              />
+            </label>
+            <label>
+              Model
+              <select
+                value={genModel}
+                onChange={(e) => setGenModel(e.target.value)}
+                disabled={generating}
+              >
+                {GEN_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            </label>
+          </details>
+        </fieldset>
       </div>
 
       {error && <p className="agent-profile-error">{error}</p>}
       {avatarError && <p className="agent-profile-error">{avatarError}</p>}
 
+      {/* Settings — applies on every spawn unless overridden. Brain
+          is operational (which LLM drives the character), not
+          identity, so it lives outside the persona card. */}
+      <fieldset className="agent-profile-section">
+        <legend>Settings</legend>
+        <label className="agent-profile-field">
+          <span className="agent-profile-field-label">Brain</span>
+          <select
+            className="agent-profile-field-select"
+            value={form.harness}
+            onChange={(e) => setForm((f) => ({ ...f, harness: e.target.value }))}
+            disabled={saving || generating}
+            title={HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
+          >
+            {HARNESS_OPTIONS.map((h) => (
+              <option key={h.id} value={h.id} title={h.hint}>
+                {h.label}
+              </option>
+            ))}
+          </select>
+          <small className="agent-profile-field-hint">
+            {HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
+          </small>
+        </label>
+      </fieldset>
+
       <form onSubmit={save} className="agent-profile-actions" noValidate>
         <span style={{ flex: 1 }} />
-        <button type="submit" disabled={saving || generating} className="primary">
-          {saving ? 'Saving…' : 'Save'}
+        {isDirty && <span className="agent-profile-dirty-flag" title="Unsaved changes">●</span>}
+        <button
+          type="submit"
+          disabled={saving || generating || !isDirty}
+          className={`primary${isDirty ? ' dirty' : ''}`}
+          title={isDirty ? 'Save changes' : 'No changes to save'}
+        >
+          {saving ? 'Saving…' : isDirty ? 'Save *' : 'Saved'}
         </button>
       </form>
-
-      {/* Generate persona — the big obvious action. Seed + model are
-          tucked inside a collapsible to stay out of the way. Label
-          matches the avatar button's verb: Generate when empty,
-          Regenerate when we already have one. */}
-      <fieldset className="agent-profile-generate">
-        <legend>Persona</legend>
-        <button
-          type="button"
-          onClick={generate}
-          disabled={generating || saving}
-          className="agent-profile-generate-btn"
-        >
-          {generating
-            ? 'Streaming…'
-            : (character.about && character.profileSource === 'ai')
-            ? 'Regenerate persona'
-            : 'Generate persona'}
-        </button>
-        {generating && streamModel ? (
-          <p className="agent-profile-generate-model">
-            <span className="spinner agent-profile-generate-spinner" />
-            Streaming from <code>{streamModel}</code>…
-          </p>
-        ) : character.profileModel && character.profileSource === 'ai' ? (
-          <p className="agent-profile-generate-model muted">
-            Last generated by <code>{character.profileModel}</code>
-          </p>
-        ) : null}
-        <details className="agent-profile-generate-options">
-          <summary>Options</summary>
-          <label>
-            Seed
-            <input
-              value={seed}
-              onChange={(e) => setSeed(e.target.value)}
-              placeholder="e.g. 'new kid this summer'"
-              disabled={generating}
-            />
-          </label>
-          <label>
-            Model
-            <select
-              value={genModel}
-              onChange={(e) => setGenModel(e.target.value)}
-              disabled={generating}
-            >
-              {GEN_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </select>
-          </label>
-        </details>
-      </fieldset>
 
       {/* Destructive actions live at the bottom under an explicit
           header so they're hard to trigger by accident. */}

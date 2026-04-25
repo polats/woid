@@ -25,7 +25,27 @@ export default function Sandbox() {
   const [spawnError, setSpawnError] = useState(null)
   const [humanInfo, setHumanInfo] = useState(null)
   const [dropToast, setDropToast] = useState(null)
+  // Tracked profile-dirty flag from the drawer. We need it as a ref
+  // (not just state) so the click handlers in the card list see the
+  // current value at click time without re-binding on every re-render.
+  const profileDirtyRef = useRef(false)
   const chatlogRef = useRef(null)
+
+  // Wraps setInspectedId with a confirm prompt when the drawer's
+  // profile tab has unsaved changes. Used by every place that might
+  // swap the inspected character (card click, runtime click, etc).
+  function safelySetInspectedId(next, tab) {
+    if (
+      next !== inspectedId &&
+      profileDirtyRef.current &&
+      !window.confirm('You have unsaved profile changes. Discard and switch character?')
+    ) {
+      return
+    }
+    profileDirtyRef.current = false
+    setInspectedId(next)
+    if (tab) setDrawerTab(tab)
+  }
   const { settings, update: updateSettings } = useSandboxSettings()
   const { models } = useBridgeModels(cfg.bridgeUrl)
 
@@ -99,11 +119,16 @@ export default function Sandbox() {
       model = c.model
       if (hit) provider = hit.provider
     }
+    // Per-character harness override wins; otherwise the global
+    // settings.harness applies to every spawn that doesn't pin one.
+    // Server defaults to DEFAULT_HARNESS=direct if neither is set.
+    const harness = c.harness || settings.harness;
     return {
       pubkey: c.pubkey,
       roomName: cfg.defaultRoom || 'sandbox',
       ...(model ? { model } : {}),
       ...(provider ? { provider } : {}),
+      ...(harness ? { harness } : {}),
       ...extra,
     }
   }
@@ -271,9 +296,12 @@ export default function Sandbox() {
                   onClick={() => {
                     // Running → Context tab. Not running → Profile (only
                     // thing interesting about a stopped character is its
-                    // config).
-                    setInspectedId(runtime ? runtime.agentId : c.pubkey)
-                    setDrawerTab(runtime ? 'context' : 'profile')
+                    // config). Goes through safelySetInspectedId so we
+                    // confirm before discarding unsaved profile edits.
+                    safelySetInspectedId(
+                      runtime ? runtime.agentId : c.pubkey,
+                      runtime ? 'context' : 'profile',
+                    )
                   }}
                   role="button"
                   tabIndex={0}
@@ -298,11 +326,24 @@ export default function Sandbox() {
                         {thinking ? 'thinking…' : 'listening'} · {runtime.turns} turn{runtime.turns === 1 ? '' : 's'}
                       </div>
                     )}
-                    {(runtime?.model || c.model) && (
-                      <div className="sandbox3-card-model" title={runtime?.model || c.model}>
-                        {(runtime?.model || c.model).split('/').pop()}
-                      </div>
-                    )}
+                    {(() => {
+                      // What's actually running this character: prefer the
+                      // live runtime values; fall back to the manifest for
+                      // characters that aren't currently spawned. Show
+                      // "model · brain" so it's obvious which harness is
+                      // driving them.
+                      const m = runtime?.model || c.model
+                      const h = runtime?.harness || c.harness
+                      if (!m && !h) return null
+                      const mShort = m ? m.split('/').pop() : null
+                      const tooltip = [m && `model: ${m}`, h && `brain: ${h}`].filter(Boolean).join(' · ')
+                      return (
+                        <div className="sandbox3-card-model" title={tooltip}>
+                          {mShort || '—'}
+                          {h && <span className="sandbox3-card-harness"> · {h}</span>}
+                        </div>
+                      )
+                    })()}
                     {runtime?.lastUsage && (() => {
                       const total = runtime.lastUsage.totalTokens ?? 0
                       // Models in our catalog currently report contextWindow=131072;
@@ -369,8 +410,10 @@ export default function Sandbox() {
               const c = characters.find((x) => x.pubkey === pubkey)
               // If running: inspect by runtime id. Otherwise open by pubkey
               // so the drawer shows past turns from the session file.
-              setInspectedId(c?.runtime?.agentId || pubkey)
-              setDrawerTab(c?.runtime?.agentId ? 'context' : 'profile')
+              safelySetInspectedId(
+                c?.runtime?.agentId || pubkey,
+                c?.runtime?.agentId ? 'context' : 'profile',
+              )
             }}
           />
           {dropToast && <div className="sandbox3-toast">{dropToast.text}</div>}
@@ -412,7 +455,8 @@ export default function Sandbox() {
           character={inspectedCharacter}
           agent={inspectedAgent}
           initialTab={drawerTab}
-          onClose={() => setInspectedId(null)}
+          onDirtyChange={(d) => { profileDirtyRef.current = d }}
+          onClose={() => { profileDirtyRef.current = false; setInspectedId(null) }}
           onUpdated={() => refresh()}
           onDeleted={() => { setInspectedId(null); refresh() }}
         />

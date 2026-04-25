@@ -62,14 +62,23 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
     'local': 'Local',
   }
 
+  // Brain (harness) — applies to every spawn unless the character
+  // pins its own. Mirrors KNOWN_HARNESSES on the bridge.
+  const HARNESS_OPTIONS = [
+    { id: 'direct',   label: 'direct',   hint: 'In-process SDK call. JSON out. Default.' },
+    { id: 'pi',       label: 'pi',       hint: 'Coding-agent subprocess. Bash/read/write tools.' },
+    { id: 'external', label: 'external', hint: 'Remote driver via SSE + /act. See public/llms.txt.' },
+  ]
+  const activeHarness = settings.harness || 'direct'
+
   return (
     <details className="sandbox3-settings" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         <span className="sandbox3-settings-title">Settings</span>
         <span className="sandbox3-settings-current">
           {settings.provider
-            ? `${PROVIDER_LABELS[activeProvider] || activeProvider} · ${activeModel ? activeModel.split('/').pop() : '—'}`
-            : 'per-character'}
+            ? `${PROVIDER_LABELS[activeProvider] || activeProvider} · ${activeModel ? activeModel.split('/').pop() : '—'} · ${activeHarness}`
+            : `per-character · ${activeHarness}`}
         </span>
       </summary>
       <div className="sandbox3-settings-body">
@@ -106,6 +115,25 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
               </option>
             ))}
           </select>
+        </label>
+        <label>
+          <span>Brain</span>
+          <div className="sandbox3-settings-providers">
+            {HARNESS_OPTIONS.map((h) => (
+              <button
+                key={h.id}
+                type="button"
+                className={h.id === activeHarness ? 'on' : ''}
+                onClick={() => onChange({ harness: h.id })}
+                title={h.hint}
+              >
+                {h.label}
+              </button>
+            ))}
+          </div>
+          <small className="sandbox3-settings-hint">
+            {HARNESS_OPTIONS.find((h) => h.id === activeHarness)?.hint || ''}
+          </small>
         </label>
       </div>
     </details>
