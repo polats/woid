@@ -1020,6 +1020,7 @@ function runtimeSnapshot(pubkey) {
     turns: r.rec.turns ?? 0,
     model: r.rec.model ?? null,
     harness: r.rec.harness ?? null,
+    externalDriver: r.rec.externalDriver ?? null,
     promptStyle: r.rec.promptStyle ?? null,
     roomName: r.rec.roomName ?? null,
     exitedAt: r.rec.exitedAt ?? null,
@@ -1186,7 +1187,7 @@ const AGENT_MIN_TRIGGER_GAP_MS = Number(process.env.AGENT_MIN_TRIGGER_GAP_MS || 
 const AGENT_DEBOUNCE_MS = Number(process.env.AGENT_DEBOUNCE_MS || 1_500);
 const AGENT_IDLE_TIMEOUT_MS = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 5 * 60_000);
 
-async function createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, x, y }) {
+async function createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, externalDriver, x, y }) {
   // Resolve character: either provided by pubkey, or auto-create (back-compat).
   let character;
   if (pubkey) {
@@ -1256,6 +1257,14 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
     provider: provider || providerForModelId(chosenModel),
     harness: chosenHarness,
     promptStyle: chosenPromptStyle,
+    // For external harness: a free-form label for what's actually driving
+    // the turn loop (e.g. "claude-opus-4-7", "gpt-5", or just "claude").
+    // The bridge's `model` field is irrelevant for external — the external
+    // client's LLM does the thinking. Surfaced in /agents and /characters
+    // so the UI can show "external · claude" instead of the bridge default.
+    externalDriver: chosenHarness === "external" && typeof externalDriver === "string"
+      ? externalDriver.trim().slice(0, 60) || null
+      : null,
     harnessInstance: null,
     events,
     process: null,
@@ -1344,6 +1353,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
     name: resolvedName,
     harness: chosenHarness,
     promptStyle: chosenPromptStyle,
+    externalDriver: rec.externalDriver,
   };
 
   // Pre-start the harness BEFORE the seed turn fires — both to avoid
@@ -1751,9 +1761,9 @@ app.post("/human/say", async (req, res) => {
 
 app.post("/agents", async (req, res) => {
   try {
-    const { pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, x, y } = req.body || {};
+    const { pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, externalDriver, x, y } = req.body || {};
     if (!pubkey && !name) return res.status(400).json({ error: "pubkey or name required" });
-    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, x, y });
+    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, externalDriver, x, y });
     res.json(result);
   } catch (err) {
     const status = err.code === 400 ? 400 : err.code === 409 ? 409 : 500;
@@ -2548,6 +2558,7 @@ app.get("/agents", (_req, res) => {
     roomName: rec.roomName,
     model: rec.model,
     harness: rec.harness,
+    externalDriver: rec.externalDriver ?? null,
     promptStyle: rec.promptStyle,
     running: !!rec.listening,
     exitedAt: rec.exitedAt ?? null,

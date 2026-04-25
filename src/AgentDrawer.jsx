@@ -79,6 +79,11 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
   // saved defaults. Fall back to manifest for stopped characters.
   const model = agent?.model ?? character?.model ?? null
   const harness = agent?.harness ?? character?.harness ?? null
+  // For external harness, the bridge's `model` is irrelevant — the
+  // external client's own LLM does the thinking. Surface its self-
+  // declared driver instead so the drawer doesn't lie.
+  const externalDriver = agent?.externalDriver ?? character?.runtime?.externalDriver ?? null
+  const isExternal = harness === 'external'
 
   return (
     <>
@@ -141,10 +146,19 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
             <div className="agent-drawer-title">
               <strong>{name}</strong>
               <div className="agent-drawer-tags">
-                {model && (
-                  <span className="agent-model-badge" title={`model: ${model}`}>
-                    {model.split('/').pop()}
+                {isExternal ? (
+                  <span
+                    className="agent-model-badge"
+                    title={externalDriver ? `external driver: ${externalDriver}` : 'external client; driver not declared'}
+                  >
+                    {externalDriver || 'external'}
                   </span>
+                ) : (
+                  model && (
+                    <span className="agent-model-badge" title={`model: ${model}`}>
+                      {model.split('/').pop()}
+                    </span>
+                  )
                 )}
                 {harness && (
                   <span className="agent-harness-badge-pill" title={`brain: ${harness}`}>
