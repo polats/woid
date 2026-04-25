@@ -2417,6 +2417,235 @@ body {
 .relay-feed-jumble-link:hover { color: var(--ink); border-color: var(--ink); background: var(--paper-2); }
 .relay-feed-content { font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 
+/* ── Network view ─────────────────────────────────────────────────────── */
+.network-view {
+  padding: 24px 32px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+}
+.network-view header { margin-bottom: 14px; }
+.network-view h1 {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 26px;
+  letter-spacing: -0.01em;
+}
+.network-view-meta {
+  display: flex; gap: 14px; align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+.network-view-meta strong { color: var(--ink); font-weight: 600; }
+.network-view-meta code { font-size: 10px; text-transform: none; letter-spacing: 0; }
+
+.network-layout {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr 320px;
+  gap: 14px;
+}
+
+/* Directory column */
+.network-directory {
+  background: var(--paper-2);
+  border: 1.5px solid var(--ink);
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
+.network-directory-search {
+  padding: 8px 10px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper);
+}
+.network-directory-search input {
+  width: 100%;
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--card);
+  border: 1px solid var(--ink-faint);
+  color: var(--ink);
+}
+.network-directory-search input:focus {
+  outline: none;
+  border-color: var(--ink);
+  background: var(--paper);
+}
+.network-directory-list { flex: 1; overflow: auto; }
+.network-directory-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--paper-3);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+.network-directory-row:hover { background: var(--paper-3); }
+.network-directory-row.selected {
+  background: var(--ink); color: var(--paper);
+}
+.network-directory-row.selected .network-directory-meta { color: var(--paper-3); }
+.network-directory-avatar {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  object-fit: cover;
+  background: var(--paper-3);
+  border: 1px solid var(--ink-faint);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  overflow: hidden;
+}
+.network-directory-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.network-directory-info { min-width: 0; flex: 1; }
+.network-directory-name {
+  font-size: 13px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.network-directory-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+.network-directory-empty {
+  padding: 14px; font-size: 12px; color: var(--ink-muted);
+}
+
+/* Graph canvas column */
+.network-graph {
+  position: relative;
+  background: var(--card);
+  border: 1.5px solid var(--ink);
+  min-width: 0;
+  overflow: hidden;
+}
+.network-graph-empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.network-tooltip {
+  position: absolute; top: 10px; left: 10px;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: 8px 10px;
+  font-size: 12px;
+  max-width: 280px;
+  pointer-events: none;
+  box-shadow: var(--shadow-card);
+}
+.network-tooltip strong { font-family: var(--font-display); font-size: 14px; }
+.network-tooltip p { margin: 4px 0 0; line-height: 1.4; color: var(--ink-2); }
+.network-tooltip-meta {
+  display: block; margin-top: 4px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-muted);
+}
+
+/* Detail column */
+.network-detail {
+  background: var(--paper-2);
+  border: 1.5px solid var(--ink);
+  padding: 14px;
+  overflow: auto;
+  min-height: 0;
+}
+.network-detail-empty {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.network-detail-header {
+  display: flex; gap: 10px; align-items: center; margin-bottom: 10px;
+}
+.network-detail-avatar {
+  width: 56px; height: 56px; border-radius: 50%;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-3);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display); font-size: 22px; font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.network-detail-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.network-detail-name {
+  font-family: var(--font-display);
+  font-size: 18px; font-weight: 600;
+  line-height: 1.2;
+}
+.network-detail-pubkey {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+.network-detail-about {
+  font-size: 13px; line-height: 1.5;
+  margin: 0 0 12px;
+  color: var(--ink-2);
+}
+.network-jumble-link {
+  display: inline-block;
+  margin-bottom: 12px;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--paper);
+  background: var(--ink);
+  border: 1.5px solid var(--ink);
+}
+.network-jumble-link:hover { background: var(--transmit); border-color: var(--transmit); }
+.network-detail-section { margin-bottom: 12px; }
+.network-detail-section-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+}
+.network-detail-npub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  word-break: break-all;
+  color: var(--ink-3);
+}
+.network-chip-list {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.network-chip {
+  padding: 2px 8px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  background: var(--paper);
+  border: 1px solid var(--ink-faint);
+  color: var(--ink);
+  cursor: pointer;
+}
+.network-chip:hover { border-color: var(--ink); background: var(--paper-3); }
+
 /* Persona generator — on-brand block. The main "Generate" button is
    the obvious action; seed + model are tucked inside an expandable
    "Options" details. */

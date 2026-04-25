@@ -8,6 +8,19 @@ const ForceGraph2D = lazy(() => import('react-force-graph-2d'))
 
 const cfg = config.agentSandbox || {}
 
+// Brand palette pulled from styles.css :root tokens. Canvas paint can't
+// read CSS vars cheaply, so we mirror the values directly.
+const BRAND = {
+  paper: '#f3ebdc',
+  card: '#fbf6ea',
+  paperEdge: '#e2d6ba',
+  ink: '#141821',
+  inkMuted: '#6d6a5f',
+  inkFaint: '#8a8574',
+  transmit: '#d8271a',
+  prussian: '#0b2a4a',
+}
+
 function shortPubkey(pk) {
   return pk ? pk.slice(0, 8) + '…' + pk.slice(-4) : ''
 }
@@ -33,8 +46,8 @@ function fetchRelay({ url, kinds, limit, onEvent, onEose }) {
 }
 
 export default function Network() {
-  const [profiles, setProfiles] = useState({}) // pubkey -> { name, picture, about, _ts }
-  const [follows, setFollows] = useState({})   // pubkey -> { follows: [pk], _ts }
+  const [profiles, setProfiles] = useState({})
+  const [follows, setFollows] = useState({})
   const [loadStatus, setLoadStatus] = useState({ profiles: 'loading', follows: 'loading' })
   const [selectedPk, setSelectedPk] = useState(null)
   const [hoverNode, setHoverNode] = useState(null)
@@ -44,9 +57,6 @@ export default function Network() {
   const [dimensions, setDimensions] = useState({ width: 600, height: 500 })
   const imageCache = useRef({})
 
-  // Tune the force layout: stronger repulsion + collide radius keep
-  // followers from clumping on top of a heavily-followed admin node,
-  // and longer link distance gives names room to breathe.
   useEffect(() => {
     const g = graphRef.current
     if (!g) return
@@ -57,7 +67,6 @@ export default function Network() {
     g.d3ReheatSimulation()
   }, [graphRef.current, profiles, follows])
 
-  // Resize observer for the graph container.
   useEffect(() => {
     function measure() {
       if (!containerRef.current) return
@@ -69,7 +78,6 @@ export default function Network() {
     return () => window.removeEventListener('resize', measure)
   }, [])
 
-  // Fetch kind:0 (profiles) and kind:3 (follows) once on mount.
   useEffect(() => {
     if (!cfg.relayUrl) return
     const profMap = {}
@@ -91,7 +99,7 @@ export default function Network() {
               _ts: ev.created_at,
             }
           }
-        } catch { /* skip malformed kind:0 */ }
+        } catch { /* skip malformed */ }
       },
       onEose: () => {
         setProfiles({ ...profMap })
@@ -120,7 +128,6 @@ export default function Network() {
     return () => { stop0(); stop3() }
   }, [])
 
-  // Build nodes + edges for the graph.
   const graphData = useMemo(() => {
     const nodes = Object.entries(profiles).map(([pk, p]) => ({
       id: pk,
@@ -139,7 +146,6 @@ export default function Network() {
     return { nodes, links: edges }
   }, [profiles, follows])
 
-  // Avatar pre-cache for the canvas paint function.
   useEffect(() => {
     for (const node of graphData.nodes) {
       if (node.picture && !imageCache.current[node.picture]) {
@@ -152,8 +158,9 @@ export default function Network() {
   }, [graphData.nodes])
 
   function paintNode(node, ctx, globalScale) {
-    const r = 6 + Math.min(node.followCount, 8)
+    const r = 7 + Math.min(node.followCount, 8)
     const img = node.picture ? imageCache.current[node.picture] : null
+    const isSelected = node.id === selectedPk
     if (img && img.complete && img.naturalWidth > 0) {
       ctx.save()
       ctx.beginPath()
@@ -164,27 +171,31 @@ export default function Network() {
       ctx.restore()
       ctx.beginPath()
       ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
-      ctx.lineWidth = node.id === selectedPk ? 2 : 1
-      ctx.strokeStyle = node.id === selectedPk ? '#000' : 'rgba(0,0,0,0.3)'
+      ctx.lineWidth = isSelected ? 2.5 : 1.25
+      ctx.strokeStyle = isSelected ? BRAND.transmit : BRAND.ink
       ctx.stroke()
     } else {
-      ctx.fillStyle = node.id === selectedPk ? '#000' : '#888'
+      ctx.fillStyle = isSelected ? BRAND.transmit : BRAND.prussian
       ctx.beginPath()
       ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
       ctx.fill()
+      ctx.lineWidth = 1
+      ctx.strokeStyle = BRAND.ink
+      ctx.stroke()
     }
-    // Always render the name beneath the node, with a translucent
-    // pill behind it so labels stay legible over crossing links.
     const label = node.name || ''
     const fontSize = Math.max(10, 11 / Math.max(globalScale, 0.6))
-    ctx.font = `${fontSize}px sans-serif`
+    ctx.font = `500 ${fontSize}px "Space Grotesk", system-ui, sans-serif`
     const textW = ctx.measureText(label).width
-    const padX = 4
-    const padY = 2
+    const padX = 5
+    const padY = 3
     const labelY = node.y + r + 4
-    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.fillStyle = BRAND.paper
     ctx.fillRect(node.x - textW / 2 - padX, labelY, textW + padX * 2, fontSize + padY * 2)
-    ctx.fillStyle = '#000'
+    ctx.strokeStyle = BRAND.inkFaint
+    ctx.lineWidth = 0.6
+    ctx.strokeRect(node.x - textW / 2 - padX, labelY, textW + padX * 2, fontSize + padY * 2)
+    ctx.fillStyle = BRAND.ink
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
     ctx.fillText(label, node.x, labelY + padY)
@@ -215,83 +226,65 @@ export default function Network() {
     return filtered.sort((a, b) => b.followCount - a.followCount || a.name.localeCompare(b.name))
   }, [profiles, follows, search])
 
+  const ready = loadStatus.profiles === 'done' && loadStatus.follows === 'done'
+
   if (!cfg.relayUrl) {
     return <p style={{ padding: 32 }}>Relay URL not configured.</p>
   }
 
   return (
-    <div className="network-view" style={{ padding: 24, height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      <header style={{ marginBottom: 12 }}>
-        <h1 style={{ marginTop: 0, marginBottom: 4 }}>Network</h1>
-        <div style={{ display: 'flex', gap: 16, fontSize: 13, color: '#555' }}>
+    <div className="network-view">
+      <header>
+        <h1>Network</h1>
+        <div className="network-view-meta">
           <span><strong>{graphData.nodes.length}</strong> users</span>
           <span><strong>{graphData.links.length}</strong> follows</span>
-          <span style={{ opacity: 0.6 }}>
-            {loadStatus.profiles === 'done' && loadStatus.follows === 'done'
-              ? `via ${cfg.relayUrl}`
-              : 'loading…'}
-          </span>
+          <span>{ready ? <code>{cfg.relayUrl}</code> : 'loading…'}</span>
         </div>
       </header>
 
-      <div style={{ display: 'flex', gap: 16, flex: 1, minHeight: 0 }}>
-        <div style={{
-          width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column',
-          border: '1px solid #ddd', minHeight: 0,
-        }}>
-          <div style={{ padding: 8, borderBottom: '1px solid #eee' }}>
+      <div className="network-layout">
+        <div className="network-directory">
+          <div className="network-directory-search">
             <input
               type="text"
               placeholder={`Search ${directoryList.length} characters…`}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              style={{ width: '100%', padding: '4px 6px', fontSize: 12 }}
             />
           </div>
-          <div style={{ flex: 1, overflow: 'auto' }}>
+          <div className="network-directory-list">
             {directoryList.map((r) => (
               <button
                 key={r.pk}
                 type="button"
+                className={`network-directory-row${selectedPk === r.pk ? ' selected' : ''}`}
                 onClick={() => setSelectedPk(selectedPk === r.pk ? null : r.pk)}
-                style={{
-                  width: '100%',
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '6px 8px', fontSize: 12,
-                  border: 0, borderBottom: '1px solid #f0f0f0',
-                  background: selectedPk === r.pk ? '#eef' : 'white',
-                  textAlign: 'left', cursor: 'pointer',
-                }}
               >
-                {r.picture ? (
-                  <img src={r.picture} alt="" style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
-                ) : (
-                  <div style={{
-                    width: 24, height: 24, borderRadius: '50%',
-                    background: '#ddd', flexShrink: 0,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontWeight: 600,
-                  }}>{(r.name || '?').charAt(0).toUpperCase()}</div>
-                )}
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
-                  <div style={{ fontSize: 10, opacity: 0.6 }}>{r.followCount} following</div>
+                <div className="network-directory-avatar">
+                  {r.picture
+                    ? <img src={r.picture} alt="" />
+                    : <span>{(r.name || '?').charAt(0).toUpperCase()}</span>}
+                </div>
+                <div className="network-directory-info">
+                  <div className="network-directory-name">{r.name}</div>
+                  <div className="network-directory-meta">{r.followCount} following</div>
                 </div>
               </button>
             ))}
             {directoryList.length === 0 && (
-              <div style={{ padding: 12, fontSize: 12, opacity: 0.6 }}>No matches.</div>
+              <div className="network-directory-empty">No matches.</div>
             )}
           </div>
         </div>
 
-        <div ref={containerRef} style={{ flex: 1, minWidth: 0, position: 'relative', border: '1px solid #ddd', background: '#fafafa' }}>
+        <div className="network-graph" ref={containerRef}>
           {graphData.nodes.length === 0 && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888' }}>
-              {loadStatus.profiles === 'done' ? 'No characters published kind:0 yet.' : 'Loading…'}
+            <div className="network-graph-empty">
+              {ready ? 'No characters published kind:0 yet.' : 'Loading…'}
             </div>
           )}
-          <Suspense fallback={<div style={{ padding: 32 }}>Loading graph…</div>}>
+          <Suspense fallback={<div className="network-graph-empty">Loading graph…</div>}>
             <ForceGraph2D
               ref={graphRef}
               graphData={graphData}
@@ -300,13 +293,13 @@ export default function Network() {
               backgroundColor="rgba(0,0,0,0)"
               nodeCanvasObject={paintNode}
               nodePointerAreaPaint={(node, color, ctx) => {
-                const r = 6 + Math.min(node.followCount, 8)
+                const r = 7 + Math.min(node.followCount, 8)
                 ctx.fillStyle = color
                 ctx.beginPath()
                 ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
                 ctx.fill()
               }}
-              linkColor={() => 'rgba(0,0,0,0.18)'}
+              linkColor={() => 'rgba(20, 24, 33, 0.22)'}
               linkDirectionalArrowLength={3}
               linkDirectionalArrowRelPos={0.85}
               onNodeHover={(n) => setHoverNode(n || null)}
@@ -315,68 +308,53 @@ export default function Network() {
             />
           </Suspense>
           {hoverNode && hoverNode.id !== selectedPk && (
-            <div style={{
-              position: 'absolute', top: 8, left: 8,
-              background: 'white', border: '1px solid #ddd', padding: 8, fontSize: 12,
-              maxWidth: 280, pointerEvents: 'none',
-            }}>
+            <div className="network-tooltip">
               <strong>{hoverNode.name}</strong>
-              {hoverNode.about && <div style={{ marginTop: 4, opacity: 0.8 }}>{hoverNode.about}</div>}
-              <div style={{ marginTop: 4, opacity: 0.6 }}>{hoverNode.followCount} following</div>
+              {hoverNode.about && <p>{hoverNode.about}</p>}
+              <span className="network-tooltip-meta">{hoverNode.followCount} following</span>
             </div>
           )}
         </div>
 
-        <aside style={{ width: 320, flexShrink: 0, overflow: 'auto', borderLeft: '1px solid #ddd', paddingLeft: 16 }}>
+        <aside className="network-detail">
           {!selectedPk && (
-            <div style={{ fontSize: 13, opacity: 0.6 }}>
-              Click a node to inspect a character.
-            </div>
+            <div className="network-detail-empty">Click a node to inspect.</div>
           )}
           {selectedPk && selectedProfile && (
-            <div style={{ fontSize: 13 }}>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 }}>
-                {selectedProfile.picture && (
-                  <img
-                    src={selectedProfile.picture}
-                    alt=""
-                    style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover', border: '1px solid #ddd' }}
-                  />
-                )}
+            <div>
+              <div className="network-detail-header">
+                <div className="network-detail-avatar">
+                  {selectedProfile.picture
+                    ? <img src={selectedProfile.picture} alt="" />
+                    : <span>{(selectedProfile.name || '?').charAt(0).toUpperCase()}</span>}
+                </div>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 15 }}>{selectedProfile.name}</div>
-                  <div style={{ fontSize: 11, opacity: 0.6 }}>
-                    <code>{shortPubkey(selectedPk)}</code>
-                  </div>
+                  <div className="network-detail-name">{selectedProfile.name}</div>
+                  <div className="network-detail-pubkey">{shortPubkey(selectedPk)}</div>
                 </div>
               </div>
               {selectedProfile.about && (
-                <p style={{ marginTop: 0, marginBottom: 12 }}>{selectedProfile.about}</p>
+                <p className="network-detail-about">{selectedProfile.about}</p>
               )}
               {selectedJumbleUrl && (
-                <div style={{ marginBottom: 12 }}>
-                  <a href={selectedJumbleUrl} target="_blank" rel="noreferrer">View on Jumble →</a>
-                </div>
+                <a className="network-jumble-link" href={selectedJumbleUrl} target="_blank" rel="noreferrer">
+                  View on Jumble →
+                </a>
               )}
-              <div style={{ marginBottom: 12 }}>
-                <strong>npub:</strong>
-                <code style={{ display: 'block', fontSize: 10, marginTop: 2, wordBreak: 'break-all', opacity: 0.7 }}>
-                  {safeNpub(selectedPk)}
-                </code>
+              <div className="network-detail-section">
+                <span className="network-detail-section-label">npub</span>
+                <code className="network-detail-npub">{safeNpub(selectedPk)}</code>
               </div>
               {selectedFollows.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <strong>Following ({selectedFollows.length})</strong>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                <div className="network-detail-section">
+                  <span className="network-detail-section-label">Following ({selectedFollows.length})</span>
+                  <div className="network-chip-list">
                     {selectedFollows.map((pk) => (
                       <button
                         key={pk}
                         type="button"
+                        className="network-chip"
                         onClick={() => setSelectedPk(pk)}
-                        style={{
-                          fontSize: 11, padding: '2px 6px',
-                          border: '1px solid #ccc', background: 'white', cursor: 'pointer',
-                        }}
                       >
                         {profiles[pk].name}
                       </button>
@@ -385,18 +363,15 @@ export default function Network() {
                 </div>
               )}
               {selectedFollowedBy.length > 0 && (
-                <div>
-                  <strong>Followed by ({selectedFollowedBy.length})</strong>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                <div className="network-detail-section">
+                  <span className="network-detail-section-label">Followed by ({selectedFollowedBy.length})</span>
+                  <div className="network-chip-list">
                     {selectedFollowedBy.map((pk) => (
                       <button
                         key={pk}
                         type="button"
+                        className="network-chip"
                         onClick={() => setSelectedPk(pk)}
-                        style={{
-                          fontSize: 11, padding: '2px 6px',
-                          border: '1px solid #ccc', background: 'white', cursor: 'pointer',
-                        }}
                       >
                         {profiles[pk].name}
                       </button>
