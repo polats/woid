@@ -123,12 +123,17 @@ export default function Sandbox() {
     // settings.harness applies to every spawn that doesn't pin one.
     // Server defaults to DEFAULT_HARNESS=direct if neither is set.
     const harness = c.harness || settings.harness;
+    // Same priority for promptStyle: per-character > global setting >
+    // server fallback (manifest field, defaulting to 'minimal' for
+    // legacy characters and 'dynamic' for new spawns).
+    const promptStyle = c.promptStyle || settings.promptStyle;
     return {
       pubkey: c.pubkey,
       roomName: cfg.defaultRoom || 'sandbox',
       ...(model ? { model } : {}),
       ...(provider ? { provider } : {}),
       ...(harness ? { harness } : {}),
+      ...(promptStyle ? { promptStyle } : {}),
       ...extra,
     }
   }

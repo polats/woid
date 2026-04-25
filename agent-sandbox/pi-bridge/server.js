@@ -11,6 +11,8 @@ import crypto from "crypto";
 import * as s3 from "./s3.js";
 import * as piPool from "./pi-pool.js";
 import * as rateLimiter from "./rate-limiter.js";
+import * as apiQuota from "./api-quota.js";
+import * as personaLog from "./persona-log.js";
 import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/index.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
@@ -42,10 +44,13 @@ let LOCAL_LLM_BASE_URL = process.env.LOCAL_LLM_BASE_URL || "";
 // but kind:0 profiles need a URL external tools can resolve — default to
 // the host-mapped port.
 const PUBLIC_BRIDGE_URL = process.env.PUBLIC_BRIDGE_URL || "http://localhost:13457";
+const PUBLIC_JUMBLE_URL = process.env.PUBLIC_JUMBLE_URL || "";
 const SKILL_TEMPLATES_DIR = join(__dirname, "skill-templates");
 const DEFAULT_SKILLS = ["post", "room", "state"];
 
 mkdirSync(WORKSPACE, { recursive: true });
+apiQuota.init(WORKSPACE);
+personaLog.init(WORKSPACE);
 
 // ── Model catalog ──
 //
@@ -824,7 +829,10 @@ async function fluxOnce(prompt) {
   return b64;
 }
 
-async function generateAvatar({ pubkey, name, about, promptOverride }) {
+// Generate FLUX bytes for a name+about pair without persisting anywhere.
+// Used by both the character-bound flow (generateAvatar) and the
+// standalone public API.
+async function generateAvatarBytes({ name, about, promptOverride }) {
   if (!NVIDIA_NIM_API_KEY) throw new Error("NVIDIA_NIM_API_KEY not configured");
   const override = (promptOverride ?? "").trim().slice(0, 1800);
   const bio = (about ?? "").trim().slice(0, 600);
@@ -858,6 +866,11 @@ async function generateAvatar({ pubkey, name, about, promptOverride }) {
   const mime = sniffMime(b64);
   const ext = mime.split("/")[1] || "jpg";
   const buffer = Buffer.from(b64, "base64");
+  return { buffer, mime, ext, prompt };
+}
+
+async function generateAvatar({ pubkey, name, about, promptOverride }) {
+  const { buffer, mime, ext, prompt } = await generateAvatarBytes({ name, about, promptOverride });
   const filename = `avatar.${ext}`;
 
   // Prefer S3 when configured (prod). Local dev with no S3 env vars
@@ -975,6 +988,7 @@ function runtimeSnapshot(pubkey) {
     turns: r.rec.turns ?? 0,
     model: r.rec.model ?? null,
     harness: r.rec.harness ?? null,
+    promptStyle: r.rec.promptStyle ?? null,
     roomName: r.rec.roomName ?? null,
     exitedAt: r.rec.exitedAt ?? null,
     exitCode: r.rec.exitCode ?? null,
@@ -1076,7 +1090,7 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     roomWidth: snapshot.width,
     roomHeight: snapshot.height,
     harness: rec.harness,
-    promptStyle: character?.promptStyle || rec.promptStyle || "minimal",
+    promptStyle: rec.promptStyle || character?.promptStyle || "minimal",
   });
 
   const userTurn = buildUserTurn({
@@ -1140,7 +1154,7 @@ const AGENT_MIN_TRIGGER_GAP_MS = Number(process.env.AGENT_MIN_TRIGGER_GAP_MS || 
 const AGENT_DEBOUNCE_MS = Number(process.env.AGENT_DEBOUNCE_MS || 1_500);
 const AGENT_IDLE_TIMEOUT_MS = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 5 * 60_000);
 
-async function createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, x, y }) {
+async function createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, x, y }) {
   // Resolve character: either provided by pubkey, or auto-create (back-compat).
   let character;
   if (pubkey) {
@@ -1160,6 +1174,16 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
   const chosenHarness = harness || character.harness || DEFAULT_HARNESS;
   if (!KNOWN_HARNESSES.includes(chosenHarness)) {
     const err = new Error(`unknown harness "${chosenHarness}" (known: ${KNOWN_HARNESSES.join(", ")})`);
+    err.code = 400;
+    throw err;
+  }
+
+  // Prompt style: spawn-time override > character manifest > minimal.
+  // The same priority Brain uses, with the same fail-fast validation.
+  const ALLOWED_PROMPT_STYLES = ["minimal", "dynamic"];
+  const chosenPromptStyle = promptStyle || character.promptStyle || "minimal";
+  if (!ALLOWED_PROMPT_STYLES.includes(chosenPromptStyle)) {
+    const err = new Error(`unknown promptStyle "${chosenPromptStyle}" (allowed: ${ALLOWED_PROMPT_STYLES.join(", ")})`);
     err.code = 400;
     throw err;
   }
@@ -1199,6 +1223,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
     // catalog inference (which only checks id prefixes).
     provider: provider || providerForModelId(chosenModel),
     harness: chosenHarness,
+    promptStyle: chosenPromptStyle,
     harnessInstance: null,
     events,
     process: null,
@@ -1212,7 +1237,14 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
   };
   agents.set(agentId, rec);
 
-  saveCharacterManifest(character.pubkey, { model: chosenModel, harness: chosenHarness });
+  // Persist the chosen model + harness + promptStyle so the next spawn
+  // (drag-to-spawn etc) defaults to whatever the user just picked,
+  // unless they explicitly override at spawn time again.
+  saveCharacterManifest(character.pubkey, {
+    model: chosenModel,
+    harness: chosenHarness,
+    promptStyle: chosenPromptStyle,
+  });
 
   publishAdminWelcome({
     agentPubkey: character.pubkey,
@@ -1272,7 +1304,15 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
     try { unsubExtraMsg?.(); } catch {}
   };
 
-  const out = { agentId, npub: character.pubkey, pubkey: character.pubkey, model: chosenModel, name: resolvedName, harness: chosenHarness };
+  const out = {
+    agentId,
+    npub: character.pubkey,
+    pubkey: character.pubkey,
+    model: chosenModel,
+    name: resolvedName,
+    harness: chosenHarness,
+    promptStyle: chosenPromptStyle,
+  };
 
   // Pre-start the harness BEFORE the seed turn fires — both to avoid
   // a race between the async seed runPiTurn and the external pre-start
@@ -1291,7 +1331,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
       roomWidth: snapshot.width,
       roomHeight: snapshot.height,
       harness: chosenHarness,
-      promptStyle: character?.promptStyle || "minimal",
+      promptStyle: chosenPromptStyle,
     });
     try {
       await ensureHarness(rec, { systemPrompt });
@@ -1447,6 +1487,129 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// ── Public persona generation API ──
+//
+// Standalone wrapper around generatePersona() — does not require a
+// character. Quota-gated per IP + global daily cap. Every call is logged.
+// External agents can call this to get a persona without going through
+// the full onboarding flow; if they want it browsable on Jumble they
+// follow the existing 3-step character onboarding with the returned `about`.
+
+app.get("/v1/personas/status", (_req, res) => {
+  res.json({
+    quota: apiQuota.snapshot(),
+    providers: rateLimiter.snapshot(),
+    recent: personaLog.recentStats(),
+  });
+});
+
+app.get("/v1/personas/log", (req, res) => {
+  const limit = Number(req.query.limit) || 50;
+  const cursor = Number(req.query.cursor) || 0;
+  res.json(personaLog.list({ limit, cursor, redactAbout: true }));
+});
+
+app.get("/v1/personas/log/:id", (req, res) => {
+  const row = personaLog.getById(req.params.id);
+  if (!row) return res.status(404).json({ error: "not found" });
+  res.json(row);
+});
+
+function jumbleProfileUrl(pubkey) {
+  if (!PUBLIC_JUMBLE_URL) return null;
+  try { return `${PUBLIC_JUMBLE_URL.replace(/\/$/, "")}/${npubEncode(pubkey)}`; }
+  catch { return null; }
+}
+
+app.post("/v1/personas/generate", apiQuota.middleware, async (req, res) => {
+  const id = personaLog.newId();
+  const ip = apiQuota.clientIp(req);
+  const seed = typeof req.body?.seed === "string" ? req.body.seed : null;
+  const startedAt = Date.now();
+  let createdPubkey = null;
+  try {
+    const persona = await generatePersona({ seed });
+    // Mint a character so the persona is browsable on the relay (and Jumble).
+    const c = createCharacter({ name: persona.name });
+    createdPubkey = c.pubkey;
+    saveCharacterManifest(c.pubkey, {
+      about: persona.about ?? null,
+      profileSource: "ai",
+      profileModel: persona._model ?? null,
+    });
+
+    let imageUrl = null;
+    let imageError = null;
+    let imagePrompt = null;
+    try {
+      const av = await generateAvatar({
+        pubkey: c.pubkey,
+        name: c.name,
+        about: persona.about ?? "",
+      });
+      saveCharacterManifest(c.pubkey, { avatarUrl: av.avatarUrl });
+      imageUrl = av.avatarUrl;
+      imagePrompt = av.prompt;
+    } catch (err) {
+      imageError = err.message ?? String(err);
+      console.warn("[v1/personas/generate] image failed:", imageError);
+    }
+
+    // Publish kind:0 so Jumble can render the profile.
+    let relayPublished = false;
+    let relayError = null;
+    try { relayPublished = !!(await publishCharacterProfile(c.pubkey)); }
+    catch (err) { relayError = err.message ?? String(err); }
+
+    const after = loadCharacter(c.pubkey);
+    const npub = npubEncode(c.pubkey);
+    const jumbleUrl = jumbleProfileUrl(c.pubkey);
+    apiQuota.recordSuccess();
+    const durationMs = Date.now() - startedAt;
+    personaLog.append({
+      id, ip, ok: true, kind: "public",
+      pubkey: c.pubkey, npub, jumbleUrl,
+      seedHash: personaLog.hashSeed(seed),
+      model: persona._model ?? null,
+      durationMs,
+      name: after.name,
+      about: after.about ?? null,
+      imageUrl,
+      imageError,
+      imagePrompt,
+      relayPublished,
+      relayError,
+    });
+    res.json({
+      id,
+      pubkey: c.pubkey,
+      npub,
+      jumbleUrl,
+      name: after.name,
+      about: after.about ?? null,
+      model: persona._model ?? null,
+      imageUrl,
+      imageError,
+      relayPublished,
+      relayError,
+      durationMs,
+    });
+  } catch (err) {
+    apiQuota.refund();
+    const durationMs = Date.now() - startedAt;
+    personaLog.append({
+      id, ip, ok: false, kind: "public",
+      pubkey: createdPubkey,
+      seedHash: personaLog.hashSeed(seed),
+      model: null,
+      durationMs,
+      error: err.message ?? String(err),
+    });
+    console.error("[v1/personas/generate]", err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 app.get("/admin", (_req, res) => {
   res.json({
     pubkey: admin.pubkey,
@@ -1461,6 +1624,41 @@ app.get("/human", (_req, res) => {
     npub: npubEncode(human.pubkey),
     profile: HUMAN_PROFILE,
   });
+});
+
+// One-shot bulk migrate the prompt style on stored character
+// manifests. Useful after the dynamic/minimal A/B settles — flipping
+// every legacy `minimal` (or any character with no field) to
+// `dynamic` in a single call so users don't have to drawer-edit each
+// character. Body:
+//   { from?: 'minimal' | null, to: 'minimal' | 'dynamic' }
+// `from` matches both the explicit value and the missing-field case
+// when set to 'minimal' or omitted.
+app.post("/admin/migrate-prompt-style", (req, res) => {
+  const { from, to } = req.body || {};
+  const ALLOWED = ["minimal", "dynamic"];
+  if (!ALLOWED.includes(to)) {
+    return res.status(400).json({ error: `bad 'to': ${to} (allowed: ${ALLOWED.join(", ")})` });
+  }
+  if (from !== undefined && from !== null && !ALLOWED.includes(from)) {
+    return res.status(400).json({ error: `bad 'from': ${from}` });
+  }
+  const matchAll = from === undefined || from === null;
+  const wantFrom = matchAll ? null : from;
+  const rows = listCharacters();
+  let migrated = 0;
+  const skipped = [];
+  for (const c of rows) {
+    const cur = c.promptStyle || null;
+    const fromMatches = matchAll
+      ? (cur === null || cur === "minimal")
+      : (cur === wantFrom);
+    if (!fromMatches) { skipped.push({ pubkey: c.pubkey, reason: `current='${cur}'` }); continue; }
+    if (cur === to) { skipped.push({ pubkey: c.pubkey, reason: "already-target" }); continue; }
+    saveCharacterManifest(c.pubkey, { promptStyle: to });
+    migrated += 1;
+  }
+  res.json({ migrated, skipped: skipped.length, to, scanned: rows.length });
 });
 
 app.post("/human/move", async (req, res) => {
@@ -1521,9 +1719,9 @@ app.post("/human/say", async (req, res) => {
 
 app.post("/agents", async (req, res) => {
   try {
-    const { pubkey, name, seedMessage, roomName, model, provider, harness, x, y } = req.body || {};
+    const { pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, x, y } = req.body || {};
     if (!pubkey && !name) return res.status(400).json({ error: "pubkey or name required" });
-    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, x, y });
+    const result = await createAgent({ pubkey, name, seedMessage, roomName, model, provider, harness, promptStyle, x, y });
     res.json(result);
   } catch (err) {
     const status = err.code === 400 ? 400 : err.code === 409 ? 409 : 500;
@@ -1906,10 +2104,16 @@ app.get("/characters/:pubkey/avatar", async (req, res) => {
   res.status(404).json({ error: "no avatar" });
 });
 
-app.post("/characters/:pubkey/generate-avatar", async (req, res) => {
+app.post("/characters/:pubkey/generate-avatar", apiQuota.middleware, async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
-  if (!c) return res.status(404).json({ error: "not found" });
+  if (!c) {
+    apiQuota.refund();
+    return res.status(404).json({ error: "not found" });
+  }
+  const id = personaLog.newId();
+  const ip = apiQuota.clientIp(req);
+  const startedAt = Date.now();
   try {
     const { promptOverride } = req.body || {};
     const { avatarUrl, prompt } = await generateAvatar({
@@ -1920,8 +2124,24 @@ app.post("/characters/:pubkey/generate-avatar", async (req, res) => {
     });
     saveCharacterManifest(pubkey, { avatarUrl });
     publishCharacterProfile(pubkey).catch(() => {});
+    apiQuota.recordSuccess();
+    personaLog.append({
+      id, ip, ok: true, kind: "sandbox-avatar",
+      pubkey, npub: npubEncode(pubkey), jumbleUrl: jumbleProfileUrl(pubkey),
+      name: c.name,
+      durationMs: Date.now() - startedAt,
+      imageUrl: avatarUrl,
+      imagePrompt: prompt,
+    });
     res.json({ avatarUrl, prompt });
   } catch (err) {
+    apiQuota.refund();
+    personaLog.append({
+      id, ip, ok: false, kind: "sandbox-avatar",
+      pubkey,
+      durationMs: Date.now() - startedAt,
+      error: err.message ?? String(err),
+    });
     console.error("[char:avatar]", err.message);
     res.status(502).json({ error: err.message });
   }
@@ -1932,10 +2152,16 @@ app.post("/characters/:pubkey/generate-avatar", async (req, res) => {
 //   event: delta   data: {content}
 //   event: done    data: {name, about, _generator: {model}}
 //   event: error   data: {error}
-app.post("/characters/:pubkey/generate-profile/stream", async (req, res) => {
+app.post("/characters/:pubkey/generate-profile/stream", apiQuota.middleware, async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
-  if (!c) return res.status(404).json({ error: "not found" });
+  if (!c) {
+    apiQuota.refund();
+    return res.status(404).json({ error: "not found" });
+  }
+  const logId = personaLog.newId();
+  const logIp = apiQuota.clientIp(req);
+  const logStartedAt = Date.now();
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -2053,7 +2279,25 @@ app.post("/characters/:pubkey/generate-profile/stream", async (req, res) => {
       profileModel: after.profileModel ?? null,
       _generator: { model },
     });
+    apiQuota.recordSuccess();
+    personaLog.append({
+      id: logId, ip: logIp, ok: true, kind: "sandbox-bundle",
+      pubkey, npub: npubEncode(pubkey), jumbleUrl: jumbleProfileUrl(pubkey),
+      seedHash: personaLog.hashSeed(req.body?.seed),
+      model,
+      durationMs: Date.now() - logStartedAt,
+      name: after.name,
+      about: after.about ?? null,
+      imageUrl: after.avatarUrl ?? null,
+    });
   } catch (err) {
+    apiQuota.refund();
+    personaLog.append({
+      id: logId, ip: logIp, ok: false, kind: "sandbox-bundle",
+      pubkey,
+      durationMs: Date.now() - logStartedAt,
+      error: err.message ?? String(err),
+    });
     console.error("[char:generate-stream]", err.message);
     send("error", { error: err.message });
   } finally {
@@ -2061,10 +2305,16 @@ app.post("/characters/:pubkey/generate-profile/stream", async (req, res) => {
   }
 });
 
-app.post("/characters/:pubkey/generate-profile", async (req, res) => {
+app.post("/characters/:pubkey/generate-profile", apiQuota.middleware, async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
-  if (!c) return res.status(404).json({ error: "not found" });
+  if (!c) {
+    apiQuota.refund();
+    return res.status(404).json({ error: "not found" });
+  }
+  const logId = personaLog.newId();
+  const logIp = apiQuota.clientIp(req);
+  const logStartedAt = Date.now();
   try {
     const { seed, overwriteName } = req.body || {};
     const persona = await generatePersona({ seed });
@@ -2077,6 +2327,16 @@ app.post("/characters/:pubkey/generate-profile", async (req, res) => {
     if (overwriteName && persona.name) patch.name = persona.name;
     saveCharacterManifest(pubkey, patch);
     const next = loadCharacter(pubkey);
+    apiQuota.recordSuccess();
+    personaLog.append({
+      id: logId, ip: logIp, ok: true, kind: "sandbox-text",
+      pubkey, npub: npubEncode(pubkey), jumbleUrl: jumbleProfileUrl(pubkey),
+      seedHash: personaLog.hashSeed(seed),
+      model: persona._model ?? null,
+      durationMs: Date.now() - logStartedAt,
+      name: next.name,
+      about: next.about ?? null,
+    });
     res.json({
       pubkey: next.pubkey,
       npub: npubEncode(next.pubkey),
@@ -2089,6 +2349,13 @@ app.post("/characters/:pubkey/generate-profile", async (req, res) => {
       _generator: { model: persona._model },
     });
   } catch (err) {
+    apiQuota.refund();
+    personaLog.append({
+      id: logId, ip: logIp, ok: false, kind: "sandbox-text",
+      pubkey,
+      durationMs: Date.now() - logStartedAt,
+      error: err.message ?? String(err),
+    });
     console.error("[char:generate]", err.message);
     res.status(502).json({ error: err.message });
   }
@@ -2183,6 +2450,7 @@ app.get("/agents", (_req, res) => {
     roomName: rec.roomName,
     model: rec.model,
     harness: rec.harness,
+    promptStyle: rec.promptStyle,
     running: !!rec.listening,
     exitedAt: rec.exitedAt ?? null,
     exitCode: rec.exitCode ?? null,

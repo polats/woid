@@ -71,14 +71,29 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
   ]
   const activeHarness = settings.harness || 'direct'
 
+  // Prompt style — global override applied to every spawn unless a
+  // character has its own promptStyle pinned on its manifest. The
+  // empty string means "leave it to the manifest" (today's behavior:
+  // legacy chars keep minimal, new chars keep dynamic).
+  const PROMPT_STYLE_OPTIONS = [
+    { id: '',        label: 'per-character', hint: 'Use whatever is on the character manifest. Default.' },
+    { id: 'dynamic', label: 'dynamic',       hint: 'Anti-silence + one-action emphasis + numeric mood.' },
+    { id: 'minimal', label: 'minimal',       hint: 'Original short prompt. Useful as an A/B baseline.' },
+  ]
+  const activePromptStyle = settings.promptStyle ?? ''
+
   return (
     <details className="sandbox3-settings" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         <span className="sandbox3-settings-title">Settings</span>
         <span className="sandbox3-settings-current">
-          {settings.provider
-            ? `${PROVIDER_LABELS[activeProvider] || activeProvider} · ${activeModel ? activeModel.split('/').pop() : '—'} · ${activeHarness}`
-            : `per-character · ${activeHarness}`}
+          {(() => {
+            const head = settings.provider
+              ? `${PROVIDER_LABELS[activeProvider] || activeProvider} · ${activeModel ? activeModel.split('/').pop() : '—'}`
+              : 'per-character'
+            const ps = activePromptStyle ? ` · ${activePromptStyle}` : ''
+            return `${head} · ${activeHarness}${ps}`
+          })()}
         </span>
       </summary>
       <div className="sandbox3-settings-body">
@@ -133,6 +148,25 @@ export default function SandboxSettings({ bridgeUrl, settings, onChange }) {
           </div>
           <small className="sandbox3-settings-hint">
             {HARNESS_OPTIONS.find((h) => h.id === activeHarness)?.hint || ''}
+          </small>
+        </label>
+        <label>
+          <span>Prompt style</span>
+          <div className="sandbox3-settings-providers">
+            {PROMPT_STYLE_OPTIONS.map((p) => (
+              <button
+                key={p.id || 'per-character'}
+                type="button"
+                className={p.id === activePromptStyle ? 'on' : ''}
+                onClick={() => onChange({ promptStyle: p.id })}
+                title={p.hint}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <small className="sandbox3-settings-hint">
+            {PROMPT_STYLE_OPTIONS.find((p) => p.id === activePromptStyle)?.hint || ''}
           </small>
         </label>
       </div>
