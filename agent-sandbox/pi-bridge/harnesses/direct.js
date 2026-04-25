@@ -26,17 +26,11 @@ import * as providers from "../providers/index.js";
 // comparable budget for our shape. Tune via env.
 const MAX_HISTORY_TURNS = Number(process.env.DIRECT_HISTORY_TURNS || 20);
 
-export const DIRECT_SCHEMA_HINT = [
-  "",
-  "--- OUTPUT CONTRACT ---",
-  "Respond with ONLY a single JSON object, no prose, no markdown fences.",
-  "Shape: { \"thinking\"?: string, \"say\"?: string, \"move\"?: { \"x\": int, \"y\": int }, \"state\"?: string }",
-  "Omit any key you don't want to act on. Do not invent new keys.",
-  "`say` is shown in the room as your character's message.",
-  "`move` moves your character to tile (x,y) within the room bounds.",
-  "`state` updates your own short mood/context note (<=200 chars).",
-  "If you have nothing to say or do this turn, return {}",
-].join("\n");
+// The output contract / action schema is now built into the system
+// prompt by buildSystemPrompt itself, parameterised by promptStyle.
+// Kept exported as a no-op for back-compat with anything that still
+// imports it (the system-prompt endpoint stopped using it).
+export const DIRECT_SCHEMA_HINT = "";
 
 export function createDirectHarness(deps = {}) {
   const gen = deps.generateJson ?? providers.generateJson;
@@ -60,7 +54,7 @@ export function createDirectHarness(deps = {}) {
 
     async start(opts) {
       agentId = opts.agentId;
-      systemPrompt = opts.systemPrompt + DIRECT_SCHEMA_HINT;
+      systemPrompt = opts.systemPrompt;
       provider = opts.provider;
       model = opts.model;
       sessionPath = opts.sessionPath
@@ -74,7 +68,7 @@ export function createDirectHarness(deps = {}) {
     },
 
     updateSystemPrompt(next) {
-      systemPrompt = (next || "") + DIRECT_SCHEMA_HINT;
+      systemPrompt = next || "";
     },
 
     async turn(userTurn) {
@@ -248,6 +242,21 @@ export function _parseActions(raw) {
   }
   if (typeof obj.state === "string" && obj.state.trim()) {
     actions.push({ type: "state", value: obj.state.trim().slice(0, 2000) });
+  }
+  // Dynamic-prompt mood lever. Both keys optional; clamp to 0–100.
+  // Reject null / undefined / non-number explicitly so junk values
+  // (e.g. `{ social: null }`) don't coerce to 0 via `Number(null)`.
+  if (obj.mood && typeof obj.mood === "object") {
+    const mood = {};
+    const e = obj.mood.energy;
+    const s = obj.mood.social;
+    if (typeof e === "number" && Number.isFinite(e)) {
+      mood.energy = Math.max(0, Math.min(100, Math.round(e)));
+    }
+    if (typeof s === "number" && Number.isFinite(s)) {
+      mood.social = Math.max(0, Math.min(100, Math.round(s)));
+    }
+    if (Object.keys(mood).length > 0) actions.push({ type: "mood", value: mood });
   }
   return { actions, thinking };
 }

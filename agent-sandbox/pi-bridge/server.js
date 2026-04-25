@@ -12,7 +12,6 @@ import * as s3 from "./s3.js";
 import * as piPool from "./pi-pool.js";
 import * as rateLimiter from "./rate-limiter.js";
 import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/index.js";
-import { DIRECT_SCHEMA_HINT } from "./harnesses/direct.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -558,6 +557,8 @@ function listCharacters() {
         avatarUrl: c.avatarUrl ?? null,
         model: c.model ?? null,
         harness: c.harness ?? null,
+        promptStyle: c.promptStyle ?? null,
+        mood: c.mood ?? null,
         profileSource: c.profileSource ?? null,
         profileModel: c.profileModel ?? null,
         createdAt: c.createdAt ?? null,
@@ -605,6 +606,12 @@ function createCharacter({ name } = {}) {
   writeClaudeMd(dir, pubkey);
   const manifest = saveCharacterManifest(pubkey, {
     name: (name && String(name).trim()) || randomName(),
+    // New characters get the call-my-ghost-style "dynamic" prompt by
+    // default — anti-silence, one-action emphasis, numeric mood.
+    // Existing characters with no field stay on "minimal" for the
+    // A/B comparison until the user explicitly switches them.
+    promptStyle: "dynamic",
+    mood: { energy: 50, social: 50 },
     createdAt: Date.now(),
   });
   console.log(`[char] created ${pubkey.slice(0, 12)}... name="${manifest.name}"`);
@@ -990,6 +997,12 @@ async function executeActions(rec, actions) {
         moveAgent(rec.agentId, action.x, action.y);
       } else if (action.type === "state" && action.value != null) {
         saveCharacterManifest(rec.pubkey, { state: String(action.value).slice(0, 2000) });
+      } else if (action.type === "mood" && action.value && typeof action.value === "object") {
+        // Merge with the existing mood so an update of just `energy`
+        // doesn't blow away `social`.
+        const c = loadCharacter(rec.pubkey);
+        const next = { ...(c?.mood || {}), ...action.value };
+        saveCharacterManifest(rec.pubkey, { mood: next });
       }
     } catch (err) {
       console.error(`[actions:${rec.agentId}] ${action.type} failed:`, err?.message || err);
@@ -1063,6 +1076,7 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     roomWidth: snapshot.width,
     roomHeight: snapshot.height,
     harness: rec.harness,
+    promptStyle: character?.promptStyle || rec.promptStyle || "minimal",
   });
 
   const userTurn = buildUserTurn({
@@ -1277,6 +1291,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
       roomWidth: snapshot.width,
       roomHeight: snapshot.height,
       harness: chosenHarness,
+      promptStyle: character?.promptStyle || "minimal",
     });
     try {
       await ensureHarness(rec, { systemPrompt });
@@ -1757,6 +1772,8 @@ app.get("/characters/:pubkey", (req, res) => {
     avatarUrl: c.avatarUrl ?? null,
     model: c.model ?? null,
     harness: c.harness ?? null,
+    promptStyle: c.promptStyle ?? null,
+    mood: c.mood ?? null,
     profileSource: c.profileSource ?? null,
     profileModel: c.profileModel ?? null,
     createdAt: c.createdAt ?? null,
@@ -1799,7 +1816,8 @@ app.get("/characters/:pubkey/system-prompt", (req, res) => {
   const active = activeRuntimeForCharacter(pubkey);
   const snap = active ? roomSnapshot(active.id) : { width: 16, height: 12 };
   const harness = c.harness || DEFAULT_HARNESS;
-  const base = buildSystemPrompt({
+  const promptStyle = c.promptStyle || "minimal";
+  const systemPrompt = buildSystemPrompt({
     name: c.name,
     npub: pubkey,
     about: c.about,
@@ -1807,24 +1825,22 @@ app.get("/characters/:pubkey/system-prompt", (req, res) => {
     roomWidth: snap.width,
     roomHeight: snap.height,
     harness,
+    promptStyle,
   });
-  // Reproduce what each harness appends internally so the user sees
-  // the complete prompt the LLM actually receives. Pi consumes the
-  // base directly. Direct adds the JSON output contract. External
-  // streams the base verbatim to its SSE client (the remote driver
-  // is free to compose whatever schema it wants on top).
-  const systemPrompt = harness === "direct" ? base + DIRECT_SCHEMA_HINT : base;
   res.json({
     pubkey,
     harness,
+    promptStyle,
     systemPrompt,
     roomWidth: snap.width,
     roomHeight: snap.height,
     note: harness === "pi"
       ? "Pi consumes this prompt verbatim and uses its built-in bash tool to invoke the skill scripts referenced above."
-      : harness === "direct"
-        ? "DirectHarness appends an OUTPUT CONTRACT (the trailing block) so the LLM responds in the structured JSON shape the bridge can parse into actions."
-        : "ExternalHarness streams this prompt to your remote driver verbatim. Your client is free to add any output schema or tool definitions on top before calling its own LLM.",
+      : harness === "external"
+        ? "ExternalHarness streams this prompt to your remote driver verbatim. Your client is free to add output schemas or tool definitions on top before calling its own LLM."
+        : promptStyle === "dynamic"
+          ? "DirectHarness sends this prompt to the SDK as the system instruction. Compared to 'minimal', the dynamic style adds anti-silence guidance, a one-action-per-turn rule, and a numeric mood lever (energy + social, 0-100)."
+          : "DirectHarness sends this prompt to the SDK as the system instruction. Switch to 'dynamic' in the Profile drawer for the call-my-ghost-style enhancements (anti-silence, one-action emphasis, numeric mood).",
   });
 });
 
@@ -2082,7 +2098,7 @@ app.patch("/characters/:pubkey", async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
-  const { name, about, state, avatarUrl, model, harness } = req.body || {};
+  const { name, about, state, avatarUrl, model, harness, promptStyle, mood } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = String(name).trim() || c.name;
   if (about !== undefined) patch.about = about ? String(about) : null;
@@ -2098,6 +2114,23 @@ app.patch("/characters/:pubkey", async (req, res) => {
       return res.status(400).json({ error: `unknown harness "${harness}"` });
     }
     patch.harness = harness || null;
+  }
+  if (promptStyle !== undefined) {
+    const allowed = ["minimal", "dynamic"];
+    if (promptStyle && !allowed.includes(promptStyle)) {
+      return res.status(400).json({ error: `unknown promptStyle "${promptStyle}" (allowed: ${allowed.join(", ")})` });
+    }
+    patch.promptStyle = promptStyle || null;
+  }
+  if (mood !== undefined) {
+    if (mood === null) {
+      patch.mood = null;
+    } else if (typeof mood === "object") {
+      const next = {};
+      if (Number.isFinite(Number(mood.energy))) next.energy = Math.max(0, Math.min(100, Math.round(Number(mood.energy))));
+      if (Number.isFinite(Number(mood.social))) next.social = Math.max(0, Math.min(100, Math.round(Number(mood.social))));
+      patch.mood = { ...(c.mood || {}), ...next };
+    }
   }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
   saveCharacterManifest(pubkey, patch);
@@ -2121,6 +2154,8 @@ app.patch("/characters/:pubkey", async (req, res) => {
     avatarUrl: next.avatarUrl ?? null,
     model: next.model ?? null,
     harness: next.harness ?? null,
+    promptStyle: next.promptStyle ?? null,
+    mood: next.mood ?? null,
     profileSource: next.profileSource ?? null,
     profileModel: next.profileModel ?? null,
     createdAt: next.createdAt ?? null,

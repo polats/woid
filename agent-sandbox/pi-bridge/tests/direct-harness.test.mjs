@@ -75,6 +75,30 @@ test("parse: nested quotes don't break extraction", () => {
   assert.equal(r.actions[0].text, 'she said "hello"');
 });
 
+test("parse: mood lever parsed and clamped to 0–100", () => {
+  const r = _parseActions(JSON.stringify({ mood: { energy: 75, social: 40 } }));
+  const mood = r.actions.find((a) => a.type === "mood");
+  assert.ok(mood);
+  assert.deepEqual(mood.value, { energy: 75, social: 40 });
+});
+
+test("parse: mood out-of-range values clamp to bounds", () => {
+  const r = _parseActions(JSON.stringify({ mood: { energy: 200, social: -50 } }));
+  const mood = r.actions.find((a) => a.type === "mood");
+  assert.deepEqual(mood.value, { energy: 100, social: 0 });
+});
+
+test("parse: mood with one key only includes that key", () => {
+  const r = _parseActions(JSON.stringify({ mood: { energy: 30 } }));
+  const mood = r.actions.find((a) => a.type === "mood");
+  assert.deepEqual(mood.value, { energy: 30 });
+});
+
+test("parse: mood with no numeric values yields no mood action", () => {
+  const r = _parseActions(JSON.stringify({ mood: { energy: "high", social: null } }));
+  assert.equal(r.actions.find((a) => a.type === "mood"), undefined);
+});
+
 // ── harness turn lifecycle ──
 
 test("harness: start/turn/stop with stubbed provider", async () => {

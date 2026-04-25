@@ -15,6 +15,22 @@ const GEN_MODELS = [
   { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B' },
 ]
 
+// Prompt style — A/B testable. Surfaced in the Settings section
+// alongside Brain. New characters default to 'dynamic'; legacy
+// characters with no field stay on 'minimal' until the user opts in.
+const PROMPT_STYLE_OPTIONS = [
+  {
+    id: 'dynamic',
+    label: 'dynamic (recommended)',
+    hint: 'Anti-silence rule, one-action-per-turn emphasis, numeric mood lever (energy + social, 0–100). Adapted from call-my-ghost.',
+  },
+  {
+    id: 'minimal',
+    label: 'minimal (legacy)',
+    hint: 'Original short prompt: speak / walk / update state, no anti-silence guidance or mood. Useful as an A/B baseline.',
+  },
+]
+
 // Brain selector. Mirrors KNOWN_HARNESSES in agent-sandbox/pi-bridge/harnesses/index.js.
 // `direct` first because it's the default brain for new spawns.
 // Description is shown as a tooltip + a one-line hint under the select.
@@ -85,6 +101,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           state: c.state ?? '',
           model: c.model ?? '',
           harness: c.harness ?? 'direct',
+          promptStyle: c.promptStyle ?? 'minimal',
         })
       })
       .catch((err) => setError(err.message || String(err)))
@@ -100,7 +117,8 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
       form.about !== (character.about ?? '') ||
       form.state !== (character.state ?? '') ||
       (form.model || null) !== (character.model || null) ||
-      (form.harness || 'direct') !== (character.harness || 'direct')
+      (form.harness || 'direct') !== (character.harness || 'direct') ||
+      (form.promptStyle || 'minimal') !== (character.promptStyle || 'minimal')
     )
   }, [character, form])
 
@@ -127,6 +145,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           state: form.state.trim() || null,
           model: form.model || null,
           harness: form.harness || null,
+          promptStyle: form.promptStyle || null,
         }),
       })
       if (!r.ok) throw new Error(await r.text())
@@ -419,6 +438,35 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
             {HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
           </small>
         </label>
+        <label className="agent-profile-field">
+          <span className="agent-profile-field-label">Prompt style</span>
+          <select
+            className="agent-profile-field-select"
+            value={form.promptStyle}
+            onChange={(e) => setForm((f) => ({ ...f, promptStyle: e.target.value }))}
+            disabled={saving || generating}
+            title={PROMPT_STYLE_OPTIONS.find((p) => p.id === form.promptStyle)?.hint || ''}
+          >
+            {PROMPT_STYLE_OPTIONS.map((p) => (
+              <option key={p.id} value={p.id} title={p.hint}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <small className="agent-profile-field-hint">
+            {PROMPT_STYLE_OPTIONS.find((p) => p.id === form.promptStyle)?.hint || ''}
+          </small>
+        </label>
+        {character?.mood && (
+          <div className="agent-profile-mood">
+            <span className="agent-profile-field-label">Mood</span>
+            <span className="agent-profile-mood-pill">energy: {character.mood.energy ?? '—'}</span>
+            <span className="agent-profile-mood-pill">social: {character.mood.social ?? '—'}</span>
+            <small className="agent-profile-field-hint">
+              Live mood readings the agent maintains via the dynamic prompt. Updated as turns unfold.
+            </small>
+          </div>
+        )}
       </fieldset>
 
       <form onSubmit={save} className="agent-profile-actions" noValidate>

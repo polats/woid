@@ -2216,6 +2216,21 @@ body {
   color: var(--ink-muted);
   line-height: 1.3;
 }
+.agent-profile-mood {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.agent-profile-mood-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 
 /* Dirty form indicator + Save button highlight. */
 .agent-profile-dirty-flag {
