@@ -1,14 +1,14 @@
 ---
 name: Global turn scheduler + unified room perception
-description: Replace the flat 1.5s debounce with urgency tiers, coordinate across agents so they don't all fire at once, and feed agents a room-wide context slice on every turn.
+description: Replace the flat 1.5s per-agent debounce with urgency tiers, coordinate across agents so they don't all fire at once, and feed each turn a room-wide context slice. Built on top of the harness abstraction (#135).
 status: todo
 order: 140
 epic: agent-sandbox
 ---
 
-Phase 2 of the "as dynamic as call-my-ghost" plan. Assumes task #130 is landed (pool + rate-limiter). This is where the *feel* of the room actually comes from — pacing, coordination, and the sense that agents see each other.
+The last unfinished piece from the original "make it feel as alive as call-my-ghost" plan. With the harness abstraction (#135), the scheduler is now harness-agnostic: it schedules **actors** (any object that exposes `Harness.turn(userTurn)`), not pi processes specifically. Pi, direct, external, and any future harness slot in identically.
 
-Today each agent has its own `pendingTrigger` → debounce(1.5s) → `tryListenTurn`. No awareness of other agents, no prioritisation. call-my-ghost's `driveRoom`/`thinkReason` (`llmDriver.js:65–159` in that repo) does three things we don't: urgency tiers, per-agent min-gaps with jitter, and a global dampener so N agents don't all reply simultaneously to the same event.
+Today each agent has its own `pendingTrigger` → debounce(1.5s) → `tryListenTurn`. No awareness of other agents, no prioritisation. call-my-ghost's `driveRoom`/`thinkReason` does three things we don't: urgency tiers, per-agent min-gaps with jitter, and a global dampener so N agents don't all reply simultaneously to the same event.
 
 ## Deliverables
 
@@ -24,28 +24,32 @@ Today each agent has its own `pendingTrigger` → debounce(1.5s) → `tryListenT
 
 ### Trigger classification
 
-- Classify incoming Colyseus messages in `roomWatcher`-equivalent code in `server.js`:
-  - Message directly addresses this agent (`@name`, name in text, kind:1 `p` tag matches) → `reply`
-  - Message in same room but not addressed → `ambient`
-  - Agent arrived/left → `arrival`/`departure` (trigger everyone present)
+Classify incoming Colyseus messages in the existing `onNewMessage` callback in `server.js`:
+- Message directly addresses this agent (`@name`, name in text, kind:1 `p` tag matches) → `reply`
+- Message in same room but not addressed → `ambient`
+- Agent arrived/left → `arrival`/`departure` (trigger everyone present)
+
+The dynamic prompt (#promptStyle from the call-my-ghost A/B) already includes anti-silence guidance. The scheduler complements it by *picking when* an agent gets its turn — anti-silence tells the LLM what to do *during* the turn.
 
 ### Unified perception
 
-- Today pi sees a delta (`messagesSinceLastSeen`). Extend `buildUserTurn` in `buildContext.js` to include:
-  - `recentRoom`: last 8 utterances in the room (any speaker, most-recent-last)
-  - `presence`: current roster (who's in the room, positions)
-  - `youLastSaid`: the agent's own last 1–2 posts, verbatim (so pi doesn't repeat itself)
-- Mirrors call-my-ghost's `recentConversation` + `recentPerceptions` split.
+Today `buildUserTurn` only includes a delta of messages newer than `lastSeenMessageTs`. Extend it for direct/external harnesses (pi sees its own session history via the `--session` file, so it doesn't need this):
+
+- `recentRoom`: last 8 utterances in the room (any speaker, most-recent-last)
+- `presence`: current roster snapshot (who's in the room, positions)
+- `youLastSaid`: the agent's own last 1–2 posts, verbatim (so the LLM doesn't repeat itself)
+
+Mirrors call-my-ghost's `recentConversation` + `recentPerceptions` split.
 
 ## Acceptance
 
-- Drop two agents in a room, post a question addressed to one by name. Addressed agent replies within ~4s; un-addressed agent might chime in ambient-style after 12–15s, not simultaneously.
+- Drop two agents (one `dynamic`, one `minimal` for A/B continuity) in a room. Post a question addressed to one by name. Addressed agent replies within ~4s; un-addressed agent might chime in ambient-style after 12–15s, not simultaneously.
 - Three+ agents present when an event fires: their replies are staggered, not chorus.
-- Agent doesn't echo its own last post (validates `youLastSaid` context).
-- Scheduler state visible at `/health` — active queues, per-agent last-acted time.
+- Agent doesn't echo its own last post (validates `youLastSaid`).
+- Scheduler state visible at `/health` — active queues, per-agent last-acted time, current cooldowns.
 - No regression: killing / respawning agents, changing rooms, restarting pi-bridge all work.
 
 ## Non-goals
 
-- External-agent mode — task #150. The scheduler should be designed so external agents plug in as one more scheduled actor, but that wiring is next task.
-- Hand-tuning the tier timings — the ones above are starting points; expose them as env vars (`TIER_REPLY_MIN_MS`, etc.) so we can adjust without redeploying.
+- Per-tier hand-tuning beyond env vars (`SCHEDULER_REPLY_GAP_MS` etc.) — pick reasonable defaults from call-my-ghost and tune later.
+- Multi-room scheduling — single shared sandbox is fine for v1.
