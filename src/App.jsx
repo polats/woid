@@ -10,6 +10,7 @@ import RelayFeed from './RelayFeed.jsx'
 import Testing from './Testing.jsx'
 import Doc from './views/Doc.jsx'
 import Personas from './views/Personas.jsx'
+import Network from './views/Network.jsx'
 
 const modules = import.meta.glob('../docs/*.md', { query: '?raw', import: 'default', eager: true })
 
@@ -25,6 +26,7 @@ function parseHash() {
   if (h === 'agent-sandbox') return { view: 'agent-sandbox' }
   if (h === 'relay-feed') return { view: 'relay-feed' }
   if (h === 'personas') return { view: 'personas' }
+  if (h === 'network') return { view: 'network' }
   if (h === 'testing') return { view: 'testing' }
   if (h.startsWith('testing/')) return { view: 'testing', sessionName: decodeURIComponent(h.slice(8)) }
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
@@ -123,6 +125,7 @@ export default function App() {
         {route.view === 'agent-sandbox' && config.features?.agentSandbox && <Sandbox />}
         {route.view === 'relay-feed' && config.features?.agentSandbox && <RelayFeed />}
         {route.view === 'personas' && config.features?.agentSandbox && <Personas />}
+        {route.view === 'network' && config.features?.agentSandbox && <Network />}
         {route.view === 'testing' && <Testing initialSession={route.sessionName} />}
         {route.view === 'diagram' && <Diagram key={route.id} id={route.id} />}
         {route.view === 'reference' && <Reference key={route.id} id={route.id} />}

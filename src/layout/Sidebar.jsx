@@ -67,6 +67,14 @@ export default function Sidebar({
                 Feed
               </a>
             </li>
+            <li>
+              <a
+                href="#/network"
+                className={linkClass(route.view === 'network')}
+              >
+                Network
+              </a>
+            </li>
           </ul>
         </>
       )}
