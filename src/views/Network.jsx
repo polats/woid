@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
+import { forceCollide, forceManyBody } from 'd3-force'
 import config from '../config.js'
 import { profileUrl } from '../lib/jumble.js'
 
@@ -37,10 +38,24 @@ export default function Network() {
   const [loadStatus, setLoadStatus] = useState({ profiles: 'loading', follows: 'loading' })
   const [selectedPk, setSelectedPk] = useState(null)
   const [hoverNode, setHoverNode] = useState(null)
+  const [search, setSearch] = useState('')
   const containerRef = useRef(null)
   const graphRef = useRef(null)
   const [dimensions, setDimensions] = useState({ width: 600, height: 500 })
   const imageCache = useRef({})
+
+  // Tune the force layout: stronger repulsion + collide radius keep
+  // followers from clumping on top of a heavily-followed admin node,
+  // and longer link distance gives names room to breathe.
+  useEffect(() => {
+    const g = graphRef.current
+    if (!g) return
+    g.d3Force('charge', forceManyBody().strength(-220).distanceMax(420))
+    g.d3Force('collide', forceCollide((n) => 22 + Math.min(n.followCount || 0, 12)))
+    const link = g.d3Force('link')
+    if (link) { link.distance(120).strength(0.12) }
+    g.d3ReheatSimulation()
+  }, [graphRef.current, profiles, follows])
 
   // Resize observer for the graph container.
   useEffect(() => {
@@ -158,12 +173,21 @@ export default function Network() {
       ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
       ctx.fill()
     }
-    if (globalScale > 1.2) {
-      ctx.fillStyle = '#000'
-      ctx.font = `${Math.max(9, 10 / globalScale * 1.5)}px sans-serif`
-      ctx.textAlign = 'center'
-      ctx.fillText(node.name || '', node.x, node.y + r + 8)
-    }
+    // Always render the name beneath the node, with a translucent
+    // pill behind it so labels stay legible over crossing links.
+    const label = node.name || ''
+    const fontSize = Math.max(10, 11 / Math.max(globalScale, 0.6))
+    ctx.font = `${fontSize}px sans-serif`
+    const textW = ctx.measureText(label).width
+    const padX = 4
+    const padY = 2
+    const labelY = node.y + r + 4
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.fillRect(node.x - textW / 2 - padX, labelY, textW + padX * 2, fontSize + padY * 2)
+    ctx.fillStyle = '#000'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillText(label, node.x, labelY + padY)
   }
 
   const selectedProfile = selectedPk ? profiles[selectedPk] : null
@@ -178,6 +202,18 @@ export default function Network() {
   }, [selectedPk, follows, profiles])
 
   const selectedJumbleUrl = selectedPk ? profileUrl(cfg.jumbleUrl, selectedPk) : null
+
+  const directoryList = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    const rows = Object.entries(profiles).map(([pk, p]) => ({
+      pk,
+      name: p.name,
+      picture: p.picture,
+      followCount: follows[pk]?.follows?.filter((f) => profiles[f]).length || 0,
+    }))
+    const filtered = q ? rows.filter((r) => r.name.toLowerCase().includes(q)) : rows
+    return filtered.sort((a, b) => b.followCount - a.followCount || a.name.localeCompare(b.name))
+  }, [profiles, follows, search])
 
   if (!cfg.relayUrl) {
     return <p style={{ padding: 32 }}>Relay URL not configured.</p>
@@ -199,6 +235,56 @@ export default function Network() {
       </header>
 
       <div style={{ display: 'flex', gap: 16, flex: 1, minHeight: 0 }}>
+        <div style={{
+          width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column',
+          border: '1px solid #ddd', minHeight: 0,
+        }}>
+          <div style={{ padding: 8, borderBottom: '1px solid #eee' }}>
+            <input
+              type="text"
+              placeholder={`Search ${directoryList.length} characters…`}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ width: '100%', padding: '4px 6px', fontSize: 12 }}
+            />
+          </div>
+          <div style={{ flex: 1, overflow: 'auto' }}>
+            {directoryList.map((r) => (
+              <button
+                key={r.pk}
+                type="button"
+                onClick={() => setSelectedPk(selectedPk === r.pk ? null : r.pk)}
+                style={{
+                  width: '100%',
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '6px 8px', fontSize: 12,
+                  border: 0, borderBottom: '1px solid #f0f0f0',
+                  background: selectedPk === r.pk ? '#eef' : 'white',
+                  textAlign: 'left', cursor: 'pointer',
+                }}
+              >
+                {r.picture ? (
+                  <img src={r.picture} alt="" style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+                ) : (
+                  <div style={{
+                    width: 24, height: 24, borderRadius: '50%',
+                    background: '#ddd', flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontWeight: 600,
+                  }}>{(r.name || '?').charAt(0).toUpperCase()}</div>
+                )}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                  <div style={{ fontSize: 10, opacity: 0.6 }}>{r.followCount} following</div>
+                </div>
+              </button>
+            ))}
+            {directoryList.length === 0 && (
+              <div style={{ padding: 12, fontSize: 12, opacity: 0.6 }}>No matches.</div>
+            )}
+          </div>
+        </div>
+
         <div ref={containerRef} style={{ flex: 1, minWidth: 0, position: 'relative', border: '1px solid #ddd', background: '#fafafa' }}>
           {graphData.nodes.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888' }}>
