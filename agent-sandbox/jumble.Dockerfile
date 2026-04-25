@@ -15,6 +15,12 @@ RUN apk add --no-cache git
 WORKDIR /app
 RUN git clone https://github.com/CodyTseng/jumble.git . \
  && git checkout ${JUMBLE_REV}
+# Jumble's profile fetcher hits a hardcoded list of "big relays" (Damus,
+# nos.lol, primal, offchain) BEFORE falling back to community relays. Our
+# personas live only on our local strfry, so those upstream queries waste
+# several seconds per profile load before the fallback kicks in. Rewrite
+# the list to our community relay so profile lookups land on the first try.
+RUN node -e 'const fs=require("fs"); const p="src/constants.ts"; const url=process.env.VITE_COMMUNITY_RELAYS; if(!url){console.error("VITE_COMMUNITY_RELAYS not set"); process.exit(1)} const before=fs.readFileSync(p,"utf8"); const after=before.replace(/export const BIG_RELAY_URLS = \[[\s\S]*?\]/, "export const BIG_RELAY_URLS = [\"" + url + "\"]"); if(before===after){console.error("BIG_RELAY_URLS pattern not found"); process.exit(1)} fs.writeFileSync(p,after); console.log("[jumble-patch] BIG_RELAY_URLS ->", url);'
 RUN npm ci
 RUN npm run build
 
