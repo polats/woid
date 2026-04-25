@@ -88,3 +88,207 @@ Lesson: hidden continuous mood variables are hard for players to read. A coarse 
 - [The Cutting Room Floor — Tomodachi Life](https://tcrf.net/Tomodachi_Life)
 - [Tomodachi Life Wiki](https://tomodachi.fandom.com/wiki/Tomodachi_Life_Wiki)
 - Nintendo *Iwata Asks* — *Tomodachi Collection* (predecessor)
+
+---
+
+# Addendum — FTUE thought experiment for a Tomodachi-shape woid MVP
+
+> **Status: exploratory.** This is a walked-through first-time experience for a hypothetical woid MVP that takes Tomodachi Life's shape and applies woid's strengths (LLM characters, persistent Nostr identities, the relay as a chronicle). **No part of this is committed.** It exists to make the design choices concrete enough to argue with.
+
+## The pitch being explored
+
+> A 2D dollhouse cross-section of a small apartment building, populated by LLM characters who live their daily routines. The player is a curator (not a resident) who introduces characters, gives them things, approves their requests, and unlocks new objects/activities as days pass. The fun is watching them be themselves and bumping them into each other.
+
+Five player verbs total: **Introduce**, **Gift**, **Approve / Decline**, **Buy**, **Inspect**. Everything else is initiated by the characters.
+
+## Walked-through first 30 minutes
+
+### 0:00 — Opening
+
+Title card: *"woid — a tiny building, full of tiny lives."* One **Begin** button. No login wall, no tutorial. The relay mints a session npub on first click; the player can claim it later.
+
+### 0:10 — The empty building
+
+A 2×2 apartment grid, all empty. Text: *"Apartment 1A is open. Who lives here?"* One text input. Placeholder examples: *"a retired sea captain who collects bottle caps"* / *"a graduate student who's always running late"*. **Move in** button.
+
+> **Design choice:** persona generation IS the onboarding. No "create account" first. One prompt, one button. Showcases the persona pipeline as the very first interaction.
+
+### 0:35 — The persona resolves
+
+3-4 second loading. Portrait fades up tile-by-tile, name resolves, kind:0 publishes to relay. **Marisol Vega**, beekeeper. Walks across the building exterior and into 1A. First LLM call fires on a "first-arrival" trigger: speech bubble *"new place. quieter than I thought."*
+
+> **Latency:** under 2 seconds for that first LLM line, hard. Anything longer feels frozen.
+
+### 1:10 — Watching her live
+
+Marisol sits at the table. After ~30 seconds: *"I should put my journal somewhere."* Walks across, places a journal. Chronicle button lights up *(1)*. Player clicks; sees two relay entries timestamped in real time.
+
+> **Beat:** the player notices the chronicle is real Nostr. Public. Anyone could subscribe. This is a small but important "wait, what" — differentiates woid from a closed sim.
+
+### 2:20 — Inviting the second resident
+
+*"Apartment 1B is open."* Same prompt, with a small hint: *"a contrast often makes for better stories."* The player types a contrasting persona. **Carlos Reyes**, ex-startup-founder, moves into 1B and flops on the bed: *"god this place has no fiber"*.
+
+Marisol's window faces the hallway. Her bubble: *"new neighbor. heard them through the wall."*
+
+### 4:45 — The first verb the player learns
+
+After a couple minutes of watching, the **Introduce** button pulses once in the toolbar. Tooltip: *"bring two residents into the hallway together."* Click → pick two avatars → confirm.
+
+Both apartment views show characters rising. The view zooms out to the **hallway** (a horizontal strip between apartments, previously dim, now lit).
+
+### 5:00 — The first conversation
+
+Real-time, ~5 turns. Each line typed character-by-character. Total wall-clock ~25-40s. Sample exchange:
+
+```
+Marisol:  "hi. i moved in a couple hours ago."
+Carlos:   "yeah i heard you closing cabinets. i'm carlos."
+Marisol:  "marisol. what brings you here?"
+Carlos:   "...i was running a company. wasn't a good run.
+           needed somewhere with no skyline."
+Marisol:  "we have stars at night. helps."
+Carlos:   "that's the most reassuring thing anyone's said
+           to me in six months."
+```
+
+Notification: *"Marisol and Carlos are now Acquaintances. Marisol's mood: calm → curious. Carlos's mood: low → quietly hopeful."*
+
+> **Failure mode:** if any LLM call exceeds ~8s, the conversation feels broken. Need aggressive timeouts and fallback lines (`"..."` or a `move_to`). Don't let dead air kill it.
+
+### 6:30 — The first request
+
+Carlos in his apartment: *"i should eat something. i don't have food."* Toolbar **Requests (1)** lights up. Click:
+
+> **Carlos asks:** "Can I order delivery? It's been a long day."
+> [ Approve ]   [ Decline ]   [ ... ignore ]
+
+Approve → delivery box appears, Carlos eats, mood ticks up.
+
+> **Pedagogy:** the player learns "characters ask, I decide." First request is deliberately low-stakes (food) so Approve feels obvious. Future requests escalate (confessions, fights, moves).
+
+### 8:15 — The first wait
+
+Quiet stretch. **⏩ Skip to morning** appears in the toolbar. Click → 3-second sun-rises animation. Two notifications during the skip:
+
+```
+Marisol journaled tonight: "carlos is a strange one. tired.
+i think he's running from something. i wonder what color
+his soul is."
+```
+
+```
+Day 1 complete. Welcome to the shop.
+```
+
+> **Pacing choice:** time advances on player demand. The skip-to-morning is the only progression verb. Auto-tick (for "leave it running, come back later") is a settings option that appears later.
+
+### 9:00 — The shop opens
+
+```
+TODAY'S NEW ARRIVALS
+─────────────────────────────────────
+🍳  Cookbook (¤ 2)  — characters can cook for each other
+🎵  Vinyl player (¤ 3) — music in shared spaces
+🪴  Houseplant (¤ 1) — characters comment on plant care
+
+[ ¤ 5 available — earned from Day 1 ]
+```
+
+> **Design choice:** currency is automatic, earned by playing — not by performing well. Each unlock isn't content, it's a **new interaction type**. Cookbook = unlocks "cook for X" verb. Vinyl player = music affordance in shared space.
+
+A request lights up immediately:
+
+> **Marisol asks:** "Can I bake something for the new neighbor?"
+
+> **The rhythm the player just learned:** buy → use → emerge.
+
+### 11:30 — Day 2 — the texture deepens
+
+Marisol bakes, brings bread to Carlos in the hallway. Conversation:
+
+```
+Marisol:  "i made too much bread. take some."
+Carlos:   "you didn't have to —"
+Marisol:  "i know."
+Carlos:   "...thank you. seriously. thank you."
+```
+
+```
+Marisol and Carlos are now Friends.
+A new request type is unlocked: "deeper conversation"
+```
+
+> **Mechanical beat:** the relationship state machine just transitioned. The unlock message tells the player in passing that "deeper conversation" is now possible — a new request type gated by the relationship edge.
+
+### 15:00 — A small twist
+
+A third apartment slot unlocks. Instead of forcing creation, a soft notification: *"A character requested to move in. View?"* The system surfaces a system-generated stranger (Tomek, poker player) tied to a recent post by an existing resident.
+
+Three options: **Welcome them** / **Pass — try someone else** / **Wait, I want to make my own**.
+
+> **Design choice:** the third slot teaches that residents don't all have to be hand-authored. Player still has full control to override. Seeds the eventual "the building has its own gravity" feel.
+
+By minute 20: three residents, three relationship state machines, five purchasable items, ~tripled combinatorial space.
+
+### 22:00 — The first emergent moment the player didn't engineer
+
+The new resident (a music teacher) plays the vinyl player loud at 11pm. Marisol's window faces his. She journals: *"the music. my god. who is this man."*
+
+Request appears: *"Can I knock on his door?"*
+
+Approve → hallway scene. They argue, then laugh, then exchange names. *Strangers → uneasy acquaintances*. Long chronicle entry.
+
+> **The retention beat.** This wasn't engineered by the player. It happened because the system put two characters in proximity, gave one a noisy object, and let the LLMs play. The player was a witness.
+
+### 26:00 — Pacing back
+
+Skip to morning. Day 4 unlocks one more apartment + two shop items. Chronicle has filled out — each character has 8-12 entries. Reading them in order feels like three short stories in parallel.
+
+The player closes the tab.
+
+The relay continues. When they come back next morning, the chronicle has *kept going* — Marisol journaled twice overnight, Carlos posted an apology (for what?), the music teacher had a quiet day. Day 5 has begun.
+
+> **Killer retention feature.** The world doesn't pause when the player leaves. Real-time tick continues at reduced cadence (~1 sim-hour per real-hour while idle). Coming back the next day is a small joy of "what happened?"
+
+> **Failure mode:** cost. NPCs posting overnight is LLM calls. Without an LOD throttle, this design is fiscally untenable. Idle-tier NPCs post once per real-hour at most, only on need or event triggers.
+
+## What the FTUE proves
+
+**Eight verbs taught in 30 minutes, in order:** Create resident → Watch → Skip time → Introduce → Approve → Decline → Buy → Inspect chronicle. Each through a moment that demanded it. None taught via tooltip alone.
+
+**Magic moments at:** 0:35 (persona resolves), 5:00 (first conversation), 11:30 (first relationship transition), 22:00 (first emergent moment). Roughly one every 5-7 minutes.
+
+**Latency budget the engine must hit:**
+
+| Surface | Budget |
+|---|---|
+| Persona generation | <5s end-to-end |
+| Per-conversation-turn LLM call | <8s, hard fail to fallback |
+| Time-skip animation | <3s |
+| Shop / chronicle / request UI | <100ms |
+
+**What MUST work that isn't currently shipping:**
+
+1. Two-character conversation runner (5-turn LLM-gated exchange, scene start/end logic).
+2. Request system (LLM emits a structured "request to player"; player decision routes back into LLM context).
+3. Shop + currency + unlock-routing-into-affordance.
+4. Chronicle view as a themed feed of structured events.
+5. Grid-of-apartments UI.
+6. Time-skip with offscreen tick + LOD throttle for idle-mode posting.
+
+**What we're already 80%+ on:** persona generation, direct + external harnesses, relay infra, character bibles, per-character mood/state.
+
+## Open questions surfaced by the walk-through
+
+These are the design choices the FTUE made implicitly that are worth questioning before committing:
+
+1. **Persona generation as the literal first interaction.** It's the strongest woid-specific moment, but it commits the entire FTUE to "you create them." Alternative: hand-authored first resident (Marisol), persona generation for resident #2.
+2. **The conversation-runner contract.** Each turn one LLM call. Does the *room* get its own meta-LLM deciding when the scene ends? Or does each character emit an `end_scene` verb? Or a deterministic gate (3-7 turn random length + sentiment check)?
+3. **What happens overnight.** The world keeps running at reduced cadence — retention hook AND cost risk. Need LOD throttle (#265) earlier than originally planned, OR a simpler tier-0 rule like "1 sim-hour per real-hour while no one is watching."
+4. **Public chronicle.** Every character's posts hit the public Nostr relay. This is a big feature for woid's "anyone can watch" property and a discomfort vector if a player wants their building private. Per-building privacy toggle? Default public with opt-out?
+5. **Currency model.** Auto-accumulating ¤ per sim-day removes grinding but also removes earned satisfaction. Alternative: ¤ earned by approving requests / hitting relationship milestones. Tradeoff between flow-state and reward-loop.
+
+## Status
+
+Captured here for reference. Not part of any committed roadmap. Phase cards (#225–#265) remain as filed; this addendum is one possible MVP shape we may or may not pursue.
