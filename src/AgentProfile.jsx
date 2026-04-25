@@ -435,6 +435,38 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
       {error && <p className="agent-profile-error">{error}</p>}
       {avatarError && <p className="agent-profile-error">{avatarError}</p>}
 
+      {/* State — the live, agent-managed runtime fields. Distinct
+          from Settings (config that bites at spawn time). State
+          updates as turns unfold; Settings only changes when you
+          edit + respawn. */}
+      <fieldset className="agent-profile-section">
+        <legend>State</legend>
+        <label className="agent-profile-field">
+          <span className="agent-profile-field-label">State note</span>
+          <textarea
+            className="agent-profile-field-textarea"
+            value={form.state}
+            onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
+            placeholder="(empty — the agent updates this between turns under the dynamic prompt)"
+            rows={2}
+            disabled={saving || generating}
+          />
+          <small className="agent-profile-field-hint">
+            The agent's own short scratch-pad. It rewrites this between turns; you can edit it here to nudge them.
+          </small>
+        </label>
+        {character?.mood && (
+          <div className="agent-profile-mood">
+            <span className="agent-profile-field-label">Mood</span>
+            <span className="agent-profile-mood-pill">energy: {character.mood.energy ?? '—'}</span>
+            <span className="agent-profile-mood-pill">social: {character.mood.social ?? '—'}</span>
+            <small className="agent-profile-field-hint">
+              Live mood readings the agent maintains via the dynamic prompt. Updated as turns unfold.
+            </small>
+          </div>
+        )}
+      </fieldset>
+
       {/* Settings — applies on every spawn for this character. Brain
           is operational (which LLM drives the character), not
           identity, so it lives outside the persona card. */}
@@ -521,16 +553,6 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
             {PROMPT_STYLE_OPTIONS.find((p) => p.id === form.promptStyle)?.hint || ''}
           </small>
         </label>
-        {character?.mood && (
-          <div className="agent-profile-mood">
-            <span className="agent-profile-field-label">Mood</span>
-            <span className="agent-profile-mood-pill">energy: {character.mood.energy ?? '—'}</span>
-            <span className="agent-profile-mood-pill">social: {character.mood.social ?? '—'}</span>
-            <small className="agent-profile-field-hint">
-              Live mood readings the agent maintains via the dynamic prompt. Updated as turns unfold.
-            </small>
-          </div>
-        )}
       </fieldset>
 
       <form onSubmit={save} className="agent-profile-actions" noValidate>

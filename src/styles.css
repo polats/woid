@@ -2241,6 +2241,21 @@ body {
   cursor: pointer;
 }
 .agent-profile-field-select:hover { border-color: var(--ink-muted); }
+.agent-profile-field-textarea {
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid var(--ink-faint);
+  background: var(--paper);
+  resize: vertical;
+  min-height: 38px;
+  line-height: 1.4;
+}
+.agent-profile-field-textarea:focus {
+  outline: none;
+  border-color: var(--ink);
+  background: var(--card);
+}
 .agent-profile-field-hint {
   font-size: 11px;
   color: var(--ink-muted);
