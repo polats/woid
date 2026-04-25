@@ -1055,6 +1055,7 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     state: character?.state,
     roomWidth: snapshot.width,
     roomHeight: snapshot.height,
+    harness: rec.harness,
   });
 
   const userTurn = buildUserTurn({
@@ -1268,6 +1269,7 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
       state: character?.state,
       roomWidth: snapshot.width,
       roomHeight: snapshot.height,
+      harness: chosenHarness,
     });
     try {
       await ensureHarness(rec, { systemPrompt });
@@ -2015,7 +2017,7 @@ app.patch("/characters/:pubkey", async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
-  const { name, about, state, avatarUrl, model } = req.body || {};
+  const { name, about, state, avatarUrl, model, harness } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = String(name).trim() || c.name;
   if (about !== undefined) patch.about = about ? String(about) : null;
@@ -2025,6 +2027,12 @@ app.patch("/characters/:pubkey", async (req, res) => {
     const validIds = new Set(availableModels().map((m) => m.id));
     if (model && !validIds.has(model)) return res.status(400).json({ error: "unknown model" });
     patch.model = model || null;
+  }
+  if (harness !== undefined) {
+    if (harness && !KNOWN_HARNESSES.includes(harness)) {
+      return res.status(400).json({ error: `unknown harness "${harness}"` });
+    }
+    patch.harness = harness || null;
   }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
   saveCharacterManifest(pubkey, patch);

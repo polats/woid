@@ -15,6 +15,26 @@ const GEN_MODELS = [
   { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B' },
 ]
 
+// Brain selector. Mirrors KNOWN_HARNESSES in agent-sandbox/pi-bridge/harnesses/index.js.
+// Description is shown as a tooltip + a one-line hint under the select.
+const HARNESS_OPTIONS = [
+  {
+    id: 'pi',
+    label: 'pi (coding agent)',
+    hint: 'Subprocess with bash/read/write tools. Use when the agent needs file/shell access.',
+  },
+  {
+    id: 'direct',
+    label: 'direct (in-process SDK)',
+    hint: 'One LLM call per turn, JSON out. Faster and simpler — recommended for most characters.',
+  },
+  {
+    id: 'external',
+    label: 'external (you drive it)',
+    hint: 'Bridge runs no LLM. Connect a remote driver via SSE + /act. See public/llms.txt.',
+  },
+]
+
 // Best-effort partial-JSON extraction so we can write the growing fields
 // back to the form as the stream arrives. Handles the case where the
 // closing `"` or `}` hasn't landed yet by falling back to "everything
@@ -63,6 +83,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
           about: c.about ?? '',
           state: c.state ?? '',
           model: c.model ?? '',
+          harness: c.harness ?? 'pi',
         })
       })
       .catch((err) => setError(err.message || String(err)))
@@ -81,6 +102,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
           about: form.about.trim() || null,
           state: form.state.trim() || null,
           model: form.model || null,
+          harness: form.harness || null,
         }),
       })
       if (!r.ok) throw new Error(await r.text())
@@ -271,6 +293,25 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
             onChange={(e) => setForm((f) => ({ ...f, about: e.target.value }))}
             disabled={saving || generating}
           />
+          <label className="agent-profile-harness">
+            <span className="agent-profile-harness-label">Brain</span>
+            <select
+              className="agent-profile-harness-select"
+              value={form.harness}
+              onChange={(e) => setForm((f) => ({ ...f, harness: e.target.value }))}
+              disabled={saving || generating}
+              title={HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
+            >
+              {HARNESS_OPTIONS.map((h) => (
+                <option key={h.id} value={h.id} title={h.hint}>
+                  {h.label}
+                </option>
+              ))}
+            </select>
+            <small className="agent-profile-harness-hint">
+              {HARNESS_OPTIONS.find((h) => h.id === form.harness)?.hint || ''}
+            </small>
+          </label>
           <a
             className="agent-profile-card-npub"
             href={`${JUMBLE_URL}/${character.npub}`}

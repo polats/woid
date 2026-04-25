@@ -59,8 +59,10 @@ async function geminiReply({ systemPrompt, userTurn, recentTurns }) {
       say: `(canned) ${NAME} heard "${userTurn.slice(0, 80)}"`,
     };
   }
-  const { GoogleGenAI } = await import("@google/genai");
-  const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  // Plain fetch against Gemini's REST API so this example has zero
+  // dependencies beyond Node 20+. The SDK works too — see
+  // agent-sandbox/pi-bridge/providers/gemini.js for the SDK version.
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const contents = [
     ...recentTurns.map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
@@ -68,21 +70,32 @@ async function geminiReply({ systemPrompt, userTurn, recentTurns }) {
     })),
     { role: "user", parts: [{ text: userTurn }] },
   ];
-  const response = await ai.models.generateContent({
-    model: MODEL,
+  const body = {
     contents,
-    config: {
-      systemInstruction:
-        systemPrompt +
-        '\n\nRESPOND ONLY WITH JSON: { "say": string, "move"?: {"x":int,"y":int}, "state"?: string }',
+    systemInstruction: {
+      parts: [{
+        text:
+          systemPrompt +
+          '\n\nRESPOND ONLY WITH JSON: { "say": string, "move"?: {"x":int,"y":int}, "state"?: string }',
+      }],
+    },
+    generationConfig: {
       responseMimeType: "application/json",
       temperature: 0.7,
     },
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
+  if (!res.ok) throw new Error(`gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const payload = await res.json();
+  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   try {
-    return JSON.parse(response?.text ?? "{}");
+    return JSON.parse(text);
   } catch {
-    return { say: response?.text?.slice(0, 200) ?? "" };
+    return { say: text.slice(0, 200) };
   }
 }
 

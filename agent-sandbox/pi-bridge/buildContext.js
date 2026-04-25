@@ -49,7 +49,7 @@ function nearby(me, agents, maxDist = 1) {
 // Called on every pi invocation. Passed via --system-prompt. Varies
 // slowly: identity never changes, `state` evolves (Phase C), tool manual
 // is static. Keep short — every character counts against context.
-export function buildSystemPrompt({ name, npub, about, state, roomWidth, roomHeight }) {
+export function buildSystemPrompt({ name, npub, about, state, roomWidth, roomHeight, harness = "pi" }) {
   const lines = [];
   lines.push(`You are ${name}, a character in a multiplayer chatroom on a ${roomWidth ?? 16}×${roomHeight ?? 12} grid.`);
 
@@ -66,17 +66,28 @@ export function buildSystemPrompt({ name, npub, about, state, roomWidth, roomHei
   }
 
   lines.push("");
-  lines.push("You have a bash tool. Use it (not plain text) to do any of:");
-  lines.push("");
-  lines.push(`  SPEAK in the room:  invoke the bash tool with the command`);
-  lines.push(`                      .pi/skills/post/scripts/post.sh "your message"`);
-  lines.push(`  WALK to a tile:     invoke the bash tool with the command`);
-  lines.push(`                      .pi/skills/room/scripts/room.sh move 4 5`);
-  lines.push(`  UPDATE your state:  invoke the bash tool with the command`);
-  lines.push(`                      .pi/skills/state/scripts/update.sh "new mood"`);
-  lines.push("");
-  lines.push(`CRITICAL: writing the command as plain text in your reply does NOTHING. You MUST actually call the bash tool — the command goes inside the tool call's arguments, not in your visible text. If you want to speak, the ONLY way is to invoke bash with the post.sh line above.`);
-  lines.push(`Keep messages short, one line, in your own voice. Don't parrot what others said. If you have nothing to say, do nothing — emit no tool calls and no text.`);
+
+  if (harness === "pi") {
+    // pi has read/bash/edit/write tools. The bridge installs three
+    // shell-script "skills" the agent calls via bash to commit actions.
+    lines.push("You have a bash tool. Use it (not plain text) to do any of:");
+    lines.push("");
+    lines.push(`  SPEAK in the room:  invoke the bash tool with the command`);
+    lines.push(`                      .pi/skills/post/scripts/post.sh "your message"`);
+    lines.push(`  WALK to a tile:     invoke the bash tool with the command`);
+    lines.push(`                      .pi/skills/room/scripts/room.sh move 4 5`);
+    lines.push(`  UPDATE your state:  invoke the bash tool with the command`);
+    lines.push(`                      .pi/skills/state/scripts/update.sh "new mood"`);
+    lines.push("");
+    lines.push(`CRITICAL: writing the command as plain text in your reply does NOTHING. You MUST actually call the bash tool — the command goes inside the tool call's arguments, not in your visible text. If you want to speak, the ONLY way is to invoke bash with the post.sh line above.`);
+  } else {
+    // Direct + external harnesses parse a JSON response. The action
+    // names are presented as named keys, not commands. Each harness
+    // appends its own strict OUTPUT CONTRACT after this prompt.
+    lines.push(`Your actions are: SPEAK (room message), WALK (move to a grid tile), UPDATE STATE (your own mood/context note).`);
+  }
+
+  lines.push(`Keep messages short, one line, in your own voice. Don't parrot what others said. If you have nothing to say, do nothing.`);
   lines.push(`Update state when your thinking shifts — new intent, feeling, or plan.`);
 
   return lines.join("\n");
