@@ -83,7 +83,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated }) 
           about: c.about ?? '',
           state: c.state ?? '',
           model: c.model ?? '',
-          harness: c.harness ?? 'pi',
+          harness: c.harness ?? 'direct',
         })
       })
       .catch((err) => setError(err.message || String(err)))
