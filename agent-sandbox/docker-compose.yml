@@ -47,6 +47,10 @@ services:
       # ExternalHarness HMAC secret — required to spawn agents with
       # harness: "external". Generate once: openssl rand -hex 32.
       AGENT_TOKEN_SECRET: "${AGENT_TOKEN_SECRET:-}"
+      # Public Jumble URL (host-reachable). Used to build profile links
+      # in persona-API responses and the generation log. Match the host
+      # port mapped by the `jumble` service below.
+      PUBLIC_JUMBLE_URL: "${PUBLIC_JUMBLE_URL:-http://localhost:18089}"
     volumes:
       - pi-workspace:/workspace
     # Let the bridge reach a llama.cpp server running on the host via

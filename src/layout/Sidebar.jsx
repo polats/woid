@@ -1,3 +1,5 @@
+import PersonaApiStatus from './PersonaApiStatus.jsx'
+
 export default function Sidebar({
   config,
   route,
@@ -42,6 +44,16 @@ export default function Sidebar({
               >
                 Agent Sandbox
               </a>
+            </li>
+          </ul>
+
+          <h2>Persona API</h2>
+          <ul>
+            <li>
+              <PersonaApiStatus
+                bridgeUrl={config.agentSandbox?.bridgeUrl}
+                active={route.view === 'personas'}
+              />
             </li>
           </ul>
 

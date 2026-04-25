@@ -170,6 +170,24 @@ body {
 }
 .sidebar-action:hover { background: var(--ink); color: var(--paper); border-style: solid; }
 
+.persona-api-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.persona-api-label { flex: 1; }
+.persona-api-usage { font-size: 11px; opacity: 0.7; }
+.persona-api-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #888;
+  flex-shrink: 0;
+}
+.persona-api-dot-green { background: #2da14a; }
+.persona-api-dot-amber { background: #d09b1c; }
+.persona-api-dot-red { background: #c83b3b; }
+
 .github-status { margin-bottom: 16px; }
 .login-btn {
   width: 100%;
