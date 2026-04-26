@@ -98,6 +98,57 @@ test("tickAll: needs clamp at 0", () => {
   }
 });
 
+// ── threshold crossings (slice 2) ──
+
+test("tickAll: emits crossing when axis dips below lowThreshold", () => {
+  const clock = fakeClock();
+  // Seed energy at 31 so a single tick of decay (0.3 × 30 sim-min = 9
+  // points lost) drops it to 22 — past the default threshold of 30.
+  const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000 });
+  tracker.register("alice", { needs: { energy: 31, social: 80, curiosity: 80 } });
+  clock.advance(30_000);
+  const out = tracker.tickAll(clock.now());
+  const me = out.find((r) => r.pubkey === "alice");
+  assert.equal(me.crossings.length, 1);
+  assert.equal(me.crossings[0].axis, "energy");
+  assert.equal(me.crossings[0].level, "low");
+  assert.ok(me.crossings[0].from >= 30 && me.crossings[0].to < 30);
+});
+
+test("tickAll: no crossing when axis was already below threshold", () => {
+  const clock = fakeClock();
+  const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000 });
+  // Already at 25 — under the threshold. Decay continues but no
+  // re-fire (it didn't *cross* anything this tick).
+  tracker.register("alice", { needs: { energy: 25, social: 80, curiosity: 80 } });
+  clock.advance(30_000);
+  const out = tracker.tickAll(clock.now());
+  const me = out.find((r) => r.pubkey === "alice");
+  assert.equal(me.crossings.length, 0);
+});
+
+test("tickAll: multiple axes can cross in the same tick", () => {
+  const clock = fakeClock();
+  const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000 });
+  tracker.register("alice", { needs: { energy: 31, social: 31, curiosity: 80 } });
+  clock.advance(60_000);
+  const out = tracker.tickAll(clock.now());
+  const me = out.find((r) => r.pubkey === "alice");
+  // energy 31 → ~13, social 31 → ~1. Both cross.
+  assert.equal(me.crossings.length, 2);
+  assert.deepEqual(me.crossings.map((c) => c.axis).sort(), ["energy", "social"]);
+});
+
+test("tickAll: custom lowThreshold respected", () => {
+  const clock = fakeClock();
+  const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000, lowThreshold: 50 });
+  tracker.register("alice", { needs: { energy: 51, social: 80, curiosity: 80 } });
+  clock.advance(20_000);
+  const out = tracker.tickAll(clock.now());
+  assert.equal(out[0].crossings.length, 1);
+  assert.equal(out[0].crossings[0].axis, "energy");
+});
+
 test("tickAll: returns decay summaries", () => {
   const clock = fakeClock();
   const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000 });

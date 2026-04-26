@@ -181,6 +181,27 @@ test("format: action_rejected mentions verb + reason", () => {
   assert.match(out, /your attempt to say_to was rejected: recipient not in scene/);
 });
 
+test("format: need_low rendered with axis and value + flavor", () => {
+  const out = formatPerceptionEvents([
+    { kind: "need_low", axis: "energy", value: 22 },
+  ]);
+  assert.match(out, /your energy just dropped \(22\) — feeling drained/);
+});
+
+test("format: need_low for social uses social-specific flavor", () => {
+  const out = formatPerceptionEvents([
+    { kind: "need_low", axis: "social", value: 18 },
+  ]);
+  assert.match(out, /feeling withdrawn/);
+});
+
+test("format: need_low for curiosity reads as bored/restless", () => {
+  const out = formatPerceptionEvents([
+    { kind: "need_low", axis: "curiosity", value: 5 },
+  ]);
+  assert.match(out, /feeling bored, restless/);
+});
+
 test("format: long speech truncated with ellipsis", () => {
   const long = "x".repeat(500);
   const out = formatPerceptionEvents([

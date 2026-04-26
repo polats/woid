@@ -180,10 +180,21 @@ function formatOne(ev, selfPubkey) {
       const reasonText = SCENE_CLOSE_REASONS[ev.reason] || `closed (${ev.reason || "?"})`;
       return `(scene with ${who} ${reasonText})`;
     }
+    case "need_low": {
+      const flavor = NEED_LOW_FLAVOR[ev.axis] || `low on ${ev.axis}`;
+      const v = typeof ev.value === "number" ? ` (${ev.value})` : "";
+      return `(your ${ev.axis} just dropped${v} — ${flavor})`;
+    }
     default:
       return null;
   }
 }
+
+const NEED_LOW_FLAVOR = {
+  energy: "feeling drained",
+  social: "feeling withdrawn",
+  curiosity: "feeling bored, restless",
+};
 
 const SCENE_CLOSE_REASONS = {
   budget: "ended naturally — give them space for a few minutes",

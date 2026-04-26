@@ -42,6 +42,11 @@ export const DEFAULTS = {
   simMinutePerRealMs: 1000,
   // Initial value for any axis on first registration.
   initialValue: 75,
+  // Threshold at which an axis is considered "low" — crossing from
+  // above to below fires a one-shot perception event so the LLM is
+  // notified ("you're feeling drained") on its next turn. Slice 2 of
+  // #235's need-interrupt mechanism.
+  lowThreshold: 30,
   // Wellbeing bands. Worst-axis-value drives the level; ties broken by
   // ordering (higher band wins). Keep band names short and stable —
   // they appear in prompts, the inspector, and the map badge.
@@ -64,6 +69,7 @@ export function createNeedsTracker(opts = {}) {
     decayPerMin: { ...DEFAULTS.decayPerMin, ...(cleaned.decayPerMin || {}) },
     simMinutePerRealMs: cleaned.simMinutePerRealMs ?? DEFAULTS.simMinutePerRealMs,
     initialValue: cleaned.initialValue ?? DEFAULTS.initialValue,
+    lowThreshold: cleaned.lowThreshold ?? DEFAULTS.lowThreshold,
   };
   const now = opts.now ?? (() => Date.now());
 
@@ -110,7 +116,16 @@ export function createNeedsTracker(opts = {}) {
         rec.needs[axis] = clamp(rec.needs[axis] - drop);
       }
       rec.lastTickAt = nowMs;
-      results.push({ pubkey, before, after: { ...rec.needs }, simMin });
+      // Detect threshold crossings — axes that were >= lowThreshold
+      // before this tick and < lowThreshold after. These produce
+      // perception events the LLM sees on its next turn.
+      const crossings = [];
+      for (const axis of NEED_AXES) {
+        if (before[axis] >= cfg.lowThreshold && rec.needs[axis] < cfg.lowThreshold) {
+          crossings.push({ axis, from: before[axis], to: rec.needs[axis], level: "low" });
+        }
+      }
+      results.push({ pubkey, before, after: { ...rec.needs }, simMin, crossings });
     }
     return results;
   }

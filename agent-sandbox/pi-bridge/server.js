@@ -1088,6 +1088,16 @@ setInterval(() => {
           needsFlushedAt.set(d.pubkey, { ...d.after });
         } catch {}
       }
+      // Need-interrupt — emit a perception event for any axis that
+      // crossed below lowThreshold this tick. The LLM sees it on its
+      // next turn and can react ("ok, I'm bored, let me move").
+      for (const c of d.crossings ?? []) {
+        perception.appendOne(d.pubkey, {
+          kind: "need_low",
+          axis: c.axis,
+          value: Math.round(c.to),
+        });
+      }
     }
   } catch (err) {
     console.error("[needs] tick failed:", err?.message || err);
