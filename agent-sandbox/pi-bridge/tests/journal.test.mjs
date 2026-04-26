@@ -225,6 +225,51 @@ test("getScene: unknown id returns null", () => {
   assert.equal(j.getScene("ghost"), null);
 });
 
+// ── recentScenesBetween ──
+
+test("recentScenesBetween: returns scenes containing both pubkeys, newest first", () => {
+  const fs = inMemoryFs();
+  const j = createJournal({ workspacePath: "/tmp/ws", fs });
+  // 3 scenes total: alice<>bob, alice<>carol, alice<>bob (newer)
+  j.openScene({ sceneId: "ab1", participants: ["alice", "bob"], startedAt: 1000 });
+  j.closeScene({ sceneId: "ab1", endedAt: 1500, endReason: "budget" });
+  j.openScene({ sceneId: "ac1", participants: ["alice", "carol"], startedAt: 2000 });
+  j.closeScene({ sceneId: "ac1", endedAt: 2500, endReason: "budget" });
+  j.openScene({ sceneId: "ab2", participants: ["alice", "bob"], startedAt: 3000 });
+  j.closeScene({ sceneId: "ab2", endedAt: 3500, endReason: "budget" });
+
+  const ab = j.recentScenesBetween("alice", "bob");
+  assert.equal(ab.length, 2);
+  assert.equal(ab[0].scene_id, "ab2");
+  assert.equal(ab[1].scene_id, "ab1");
+});
+
+test("recentScenesBetween: order-independent (a, b vs b, a)", () => {
+  const fs = inMemoryFs();
+  const j = createJournal({ workspacePath: "/tmp/ws", fs });
+  j.openScene({ sceneId: "ab1", participants: ["alice", "bob"], startedAt: 1000 });
+  j.closeScene({ sceneId: "ab1", endedAt: 1500, endReason: "budget" });
+  assert.equal(j.recentScenesBetween("alice", "bob").length, 1);
+  assert.equal(j.recentScenesBetween("bob", "alice").length, 1);
+});
+
+test("recentScenesBetween: limit caps the result", () => {
+  const fs = inMemoryFs();
+  const j = createJournal({ workspacePath: "/tmp/ws", fs });
+  for (let i = 0; i < 5; i++) {
+    j.openScene({ sceneId: `s${i}`, participants: ["alice", "bob"], startedAt: 1000 + i });
+    j.closeScene({ sceneId: `s${i}`, endedAt: 1500 + i, endReason: "budget" });
+  }
+  assert.equal(j.recentScenesBetween("alice", "bob", { limit: 2 }).length, 2);
+});
+
+test("recentScenesBetween: same pubkey or empty returns []", () => {
+  const j = createJournal({ workspacePath: "/tmp/ws", fs: inMemoryFs() });
+  assert.deepEqual(j.recentScenesBetween("alice", "alice"), []);
+  assert.deepEqual(j.recentScenesBetween("alice", null), []);
+  assert.deepEqual(j.recentScenesBetween(null, "alice"), []);
+});
+
 // ── resilience ──
 
 test("listScenes tolerates malformed lines", () => {

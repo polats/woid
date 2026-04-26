@@ -193,6 +193,7 @@ export function buildUserTurn({
   roomSnapshot,
   lastSeenMessageTs,
   perceptionEvents,
+  memoryBlock,
   seedMessage,
 }) {
   const lines = [];
@@ -257,6 +258,14 @@ export function buildUserTurn({
       lines.push("");
       lines.push(block);
     }
+  }
+
+  // Memory block — past dialogue with current scene-mates, raw turns
+  // injected verbatim (no summarization). See memory.js. Skips when
+  // empty so first-encounter prompts stay terse.
+  if (typeof memoryBlock === "string" && memoryBlock.trim() !== "") {
+    lines.push("");
+    lines.push(memoryBlock);
   }
 
   // Seed message — only used on the very first turn (spawn trigger) or

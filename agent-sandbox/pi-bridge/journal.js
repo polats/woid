@@ -128,6 +128,31 @@ export function createJournal({ workspacePath, fs, now } = {}) {
     return readAll().find((s) => s.scene_id === sceneId) ?? null;
   }
 
+  /**
+   * Return the most recent CLOSED scenes that included both pubkeys.
+   * Newest-first. Used by slice 7's memory injection — when characters
+   * re-encounter, the LLM reads its own past dialogue verbatim.
+   *
+   * @param {string} pubkeyA
+   * @param {string} pubkeyB
+   * @param {{ limit?: number }} [opts]
+   * @returns {Array<object>}
+   */
+  function recentScenesBetween(pubkeyA, pubkeyB, opts = {}) {
+    if (!pubkeyA || !pubkeyB || pubkeyA === pubkeyB) return [];
+    const all = readAll();
+    const between = all.filter((s) =>
+      Array.isArray(s.participants) &&
+      s.participants.includes(pubkeyA) &&
+      s.participants.includes(pubkeyB),
+    );
+    between.sort((a, b) => (b.ts_end ?? b.ts_start ?? 0) - (a.ts_end ?? a.ts_start ?? 0));
+    if (typeof opts.limit === "number" && opts.limit > 0) {
+      return between.slice(0, opts.limit);
+    }
+    return between;
+  }
+
   /** Snapshot of currently-open (in-flight) scenes. */
   function openSnapshot() {
     return [...open.values()].map((s) => ({
@@ -163,6 +188,7 @@ export function createJournal({ workspacePath, fs, now } = {}) {
     closeScene,
     listScenes,
     getScene,
+    recentScenesBetween,
     openSnapshot,
     clearOpen,
     /** internal — exposed for tests */

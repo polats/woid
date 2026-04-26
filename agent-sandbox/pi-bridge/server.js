@@ -19,6 +19,7 @@ import { createPerception, formatPerceptionEvents } from "./perception.js";
 import { createScheduler } from "./scheduler.js";
 import { createSceneTracker } from "./scene-tracker.js";
 import { createJournal } from "./journal.js";
+import { buildMemoryBlock } from "./memory.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -1252,6 +1253,21 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
   // mid-turn crash doesn't drop events.
   const perceptionEvents = perception.eventsSince(rec.pubkey, rec.lastSeenEventTs);
 
+  // Build the memory block — past closed scenes between this actor
+  // and any current scene-mates. The LLM reads its own past dialogue
+  // verbatim; drift over time emerges from the accumulating record.
+  const sceneMatePubkeys = sceneTracker.effectiveSceneMatesOf(snapshot, rec.pubkey);
+  const sceneMates = sceneMatePubkeys.map((pk) => {
+    const a = (snapshot.agents ?? []).find((x) => x.npub === pk);
+    return { pubkey: pk, name: a?.name };
+  });
+  const memoryBlock = buildMemoryBlock({
+    selfPubkey: rec.pubkey,
+    selfName: rec.name,
+    sceneMates,
+    recentScenesBetween: (a, b, opts) => journal.recentScenesBetween(a, b, opts),
+  });
+
   const userTurn = buildUserTurn({
     character: { pubkey: rec.pubkey, x: myPresence.x ?? 0, y: myPresence.y ?? 0 },
     trigger,
@@ -1259,6 +1275,7 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     roomSnapshot: snapshot,
     lastSeenMessageTs: rec.lastSeenMessageTs,
     perceptionEvents,
+    memoryBlock,
     seedMessage,
   });
 
