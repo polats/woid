@@ -1,0 +1,28 @@
+# Build-context excludes for the pi-bridge image.
+#
+# Keep this list minimal — anything NOT listed here lands in the image
+# and is reachable from server.js. The image's purpose is "run the
+# bridge"; tests and local dev artifacts shouldn't bloat it.
+
+# Local dependencies — re-installed inside the image via npm install
+node_modules/
+
+# Tests — production image doesn't run them
+tests/
+
+# Local dev / editor / VCS noise
+.git/
+.gitignore
+.env
+.env.*
+*.log
+*.local
+
+# Local workspace state (volume-mounted in compose anyway)
+workspace/
+.workspace/
+
+# Editors
+.DS_Store
+.vscode/
+.idea/

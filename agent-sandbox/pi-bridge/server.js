@@ -18,6 +18,7 @@ import { createGM } from "./gm.js";
 import { createPerception, formatPerceptionEvents } from "./perception.js";
 import { createScheduler } from "./scheduler.js";
 import { createSceneTracker } from "./scene-tracker.js";
+import { createJournal } from "./journal.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -1049,6 +1050,11 @@ const sceneTracker = createSceneTracker({
   softStopRun: Number(process.env.SCENE_SOFT_STOP_RUN) || undefined,
 });
 
+// Scene journal — append-only record of every scene's full turn log.
+// Lifecycle is driven by the scene tracker's open/close events and
+// the post-dispatch turn record. Persisted as JSONL under $WORKSPACE.
+const journal = createJournal({ workspacePath: WORKSPACE });
+
 // Game Master — single chokepoint for committing harness-emitted
 // actions. See gm.js for the verb registry and dispatch logic.
 // The tracker's effective scene helpers are injected so cooldowns
@@ -1115,6 +1121,15 @@ async function executeActions(rec, actions) {
         reason: result.reason,
       });
     } else {
+      // Append the committed turn to the journal for every active
+      // scene this actor is in. Done BEFORE recordAction so the turn
+      // is captured even if the scene closes on this same action.
+      journal.appendTurnForActor(rec.pubkey, {
+        actor_pubkey: rec.pubkey,
+        actor_name: rec.name,
+        verb: result.verb,
+        args: result.args,
+      });
       // Record the committed action with the tracker so budget /
       // soft-stop / hard-cap can fire. Closes scenes that exceeded
       // their gate; participants see the close event next turn.
@@ -1127,9 +1142,16 @@ async function executeActions(rec, actions) {
 }
 
 // Surface scene_open / scene_close in each participant's perception
-// stream so the LLM is aware of state transitions on its next turn.
+// stream so the LLM is aware of state transitions on its next turn,
+// and mirror the lifecycle into the persistent journal.
 function emitSceneTransitionEvents(transitions) {
   for (const scene of transitions.opened || []) {
+    journal.openScene({
+      sceneId: scene.sceneId,
+      participants: scene.participants,
+      startedAt: scene.startedAt,
+      budget: scene.budget,
+    });
     perception.broadcastTo(scene.participants, {
       kind: "scene_open",
       sceneId: scene.sceneId,
@@ -1142,6 +1164,12 @@ function emitSceneTransitionEvents(transitions) {
 }
 
 function emitSceneCloseEvent(scene) {
+  // Finalise the journal record before broadcasting so a follow-up
+  // GET /scenes/:id can fetch the persisted form immediately.
+  journal.closeScene({
+    sceneId: scene.sceneId,
+    endReason: scene.reason,
+  });
   perception.broadcastTo(scene.participants, {
     kind: "scene_close",
     sceneId: scene.sceneId,
@@ -1689,6 +1717,30 @@ app.get("/health", (_req, res) => {
 // remaining), pair cooldowns, and per-character quiet-action runs.
 app.get("/health/scenes", (_req, res) => {
   res.json(sceneTracker.snapshot());
+});
+
+// ── Scene journal ──
+//
+// Read-back of closed scene transcripts. Open scenes (in-flight) are
+// reachable via /scenes/:id but do not appear in the list view; pull
+// them from /health/scenes if you want live state.
+
+app.get("/scenes", (req, res) => {
+  const limit = req.query.limit ? Math.max(1, Math.min(200, Number(req.query.limit))) : 50;
+  const before = req.query.before ? Number(req.query.before) : undefined;
+  const participant = typeof req.query.participant === "string" ? req.query.participant : undefined;
+  try {
+    const scenes = journal.listScenes({ limit, before, participant });
+    res.json({ scenes });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.get("/scenes/:id", (req, res) => {
+  const scene = journal.getScene(req.params.id);
+  if (!scene) return res.status(404).json({ error: "scene not found" });
+  res.json(scene);
 });
 
 // ── Public persona generation API ──

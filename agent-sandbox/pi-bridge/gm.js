@@ -270,7 +270,9 @@ export function createGM(deps) {
     }
     try {
       await def.handler(deps, ctx, validation.args);
-      return { ok: true, verb };
+      // Return the cleaned args alongside the verb so callers (journal,
+      // turn log) can record the canonical post-validation form.
+      return { ok: true, verb, args: validation.args };
     } catch (err) {
       return { ok: false, verb, reason: err?.message || String(err) };
     }

@@ -11,10 +11,10 @@ RUN npm install -g @mariozechner/pi-coding-agent
 COPY package.json package-lock.json* /app/bridge/
 RUN cd /app/bridge && npm install --production
 
-COPY server.js prompt-builder.js buildContext.js sessionReader.js room-client.js s3.js pi-pool.js rate-limiter.js api-quota.js persona-log.js gm.js perception.js scenes.js scheduler.js scene-tracker.js nim-catalog.json gemini-catalog.json local-catalog.json /app/bridge/
-COPY skill-templates/ /app/bridge/skill-templates/
-COPY harnesses/ /app/bridge/harnesses/
-COPY providers/ /app/bridge/providers/
+# Copy the rest of the bridge source. .dockerignore keeps node_modules,
+# tests, .git, .env, etc. out of the image so adding a new module is
+# zero-config — drop the file in this directory and rebuild.
+COPY . /app/bridge/
 
 RUN mkdir -p /workspace
 
