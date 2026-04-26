@@ -47,6 +47,14 @@ export default function Sidebar({
                 Agent Sandbox
               </a>
             </li>
+            <li>
+              <a
+                href="#/journal"
+                className={linkClass(route.view === 'journal')}
+              >
+                Journal
+              </a>
+            </li>
           </ul>
 
           <h2>Persona API</h2>

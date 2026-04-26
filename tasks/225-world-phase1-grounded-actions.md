@@ -1,7 +1,7 @@
 ---
 name: World phase 1 — autonomous two-agent sandbox (verb set + GM + scenes + journal)
 description: Foundation for everything later. Drop two LLM characters in a room, walk away, come back later, find that something interesting happened. Verb registry + Game Master + scene awareness + persistent scene transcripts (journal) + Nostr decoupled into deliberate `post` verb only.
-status: todo
+status: done
 order: 225
 epic: world
 ---

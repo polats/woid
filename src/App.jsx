@@ -11,6 +11,7 @@ import Testing from './Testing.jsx'
 import Doc from './views/Doc.jsx'
 import Personas from './views/Personas.jsx'
 import Network from './views/Network.jsx'
+import Journal from './views/Journal.jsx'
 
 // Top-level docs (Docs section).
 const modules = import.meta.glob('../docs/*.md', { query: '?raw', import: 'default', eager: true })
@@ -44,6 +45,7 @@ function parseHash() {
   if (h === 'relay-feed') return { view: 'relay-feed' }
   if (h === 'personas') return { view: 'personas' }
   if (h === 'network') return { view: 'network' }
+  if (h === 'journal') return { view: 'journal' }
   if (h === 'testing') return { view: 'testing' }
   if (h.startsWith('testing/')) return { view: 'testing', sessionName: decodeURIComponent(h.slice(8)) }
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
@@ -144,6 +146,7 @@ export default function App() {
         {route.view === 'relay-feed' && config.features?.agentSandbox && <RelayFeed />}
         {route.view === 'personas' && config.features?.agentSandbox && <Personas />}
         {route.view === 'network' && config.features?.agentSandbox && <Network />}
+        {route.view === 'journal' && config.features?.agentSandbox && <Journal />}
         {route.view === 'testing' && <Testing initialSession={route.sessionName} />}
         {route.view === 'diagram' && <Diagram key={route.id} id={route.id} />}
         {route.view === 'reference' && <Reference key={route.id} id={route.id} />}
