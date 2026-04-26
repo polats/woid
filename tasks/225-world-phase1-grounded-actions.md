@@ -160,7 +160,7 @@ New view at `#/agent-sandbox/journal`. Scrollable feed of scene cards:
 
 Click expand → inline expansion shows the full play-script transcript. Filterable by participant: `?participant=<pubkey>` returns one character's history — readable as an emergent autobiography.
 
-**"Since you were last here" divider:** localStorage tracks the most recent `scene_id` the player has seen. New scenes since then get a `— while you were away —` divider. Sidebar shows a count badge.
+The journal is just a chronological log of scenes — readable in a single session as much as across sessions. No special markers for "while you were away"; players can scroll to whatever timestamp they want.
 
 API on the bridge:
 
@@ -196,7 +196,7 @@ Three small additions:
 3. Conversations bounded by gate: 4-12 turns, ends naturally, no runaway, no token explosion.
 4. **Re-encounters reference past scenes.** Their second scene shows verbatim or paraphrased callbacks to earlier dialogue (because the LLM is reading its own past output as memory). No state machine, no relationship type — drift emerges from injected transcript.
 5. Characters occasionally emit `post` verbs. The Nostr feed shows these and *only* these. The relay becomes meaningful per-post rather than constant chatter.
-6. Player closes the tab. Returns ~2 hours later. Journal shows new scene cards under a "while you were away" divider; Nostr feed shows ~3-5 deliberate posts in that window.
+6. Journal shows scenes in chronological order, viewable any time during or between sessions. Player can scroll history freely. Nostr feed shows ~3-5 deliberate posts per simulated hour.
 7. Reading the full journal of one character feels like reading a play script of their week.
 8. All three harnesses (pi / direct / external) pass "emits valid verb JSON" tests against the existing test character.
 9. Per-action token cost drops measurably vs. free-form (capture before/after via #185 dashboard).

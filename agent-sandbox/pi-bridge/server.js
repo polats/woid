@@ -15,6 +15,8 @@ import * as apiQuota from "./api-quota.js";
 import * as personaLog from "./persona-log.js";
 import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/index.js";
 import { createGM } from "./gm.js";
+import { createPerception, formatPerceptionEvents } from "./perception.js";
+import { createScheduler } from "./scheduler.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -1030,6 +1032,10 @@ function runtimeSnapshot(pubkey) {
   };
 }
 
+// Per-character perception event buffer — feeds the "Recent events:"
+// block injected into each turn's user prompt. See perception.js.
+const perception = createPerception();
+
 // Game Master — single chokepoint for committing harness-emitted
 // actions. See gm.js for the verb registry and dispatch logic.
 const gm = createGM({
@@ -1038,6 +1044,18 @@ const gm = createGM({
   moveAgent,
   saveCharacterManifest,
   loadCharacter,
+  perception,
+});
+
+// Heartbeat scheduler — drives autonomous turns at a scene-aware
+// cadence so characters keep thinking even with no incoming events.
+// See scheduler.js. Reactive triggers (message_received / arrival)
+// still fire through the existing tryListenTurn debounce path; this
+// is a backstop for the "nothing's happening, what would you do" case.
+// `runPiTurn` is hoisted via its function declaration further down.
+const scheduler = createScheduler({
+  getSnapshot: (agentId) => roomSnapshot(agentId),
+  runTurn: (rec, opts) => runPiTurn(rec, opts),
 });
 
 // Execute actions returned by a harness turn. Each action is a
@@ -1048,14 +1066,30 @@ const gm = createGM({
 async function executeActions(rec, actions) {
   if (!Array.isArray(actions) || actions.length === 0) return;
   for (const action of actions) {
+    // Fresh snapshot per action — earlier actions in the same turn may
+    // have already moved the actor, and later actions need to see
+    // post-move scene composition.
+    const snapshot = roomSnapshot(rec.agentId);
     const result = await gm.dispatch(
-      { agentId: rec.agentId, pubkey: rec.pubkey, model: rec.model },
+      {
+        agentId: rec.agentId,
+        pubkey: rec.pubkey,
+        name: rec.name,
+        model: rec.model,
+        snapshot,
+      },
       action,
     );
     if (!result.ok) {
       const verb = result.verb || action?.type || "?";
       console.error(`[actions:${rec.agentId}] ${verb} rejected: ${result.reason}`);
       rec.events.push({ kind: "action-error", action: verb, error: result.reason });
+      // The actor sees their own rejection on the next perception turn.
+      perception.appendOne(rec.pubkey, {
+        kind: "action_rejected",
+        verb,
+        reason: result.reason,
+      });
     }
   }
 }
@@ -1128,12 +1162,18 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     promptStyle: rec.promptStyle || character?.promptStyle || "minimal",
   });
 
+  // Drain perception events the GM has buffered for this character
+  // since their last turn. Bumped after the harness call (below) so a
+  // mid-turn crash doesn't drop events.
+  const perceptionEvents = perception.eventsSince(rec.pubkey, rec.lastSeenEventTs);
+
   const userTurn = buildUserTurn({
     character: { pubkey: rec.pubkey, x: myPresence.x ?? 0, y: myPresence.y ?? 0 },
     trigger,
     triggerContext,
     roomSnapshot: snapshot,
     lastSeenMessageTs: rec.lastSeenMessageTs,
+    perceptionEvents,
     seedMessage,
   });
 
@@ -1168,6 +1208,12 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
       ? Math.max(...snapshot.messages.map((m) => m.ts ?? 0))
       : rec.lastSeenMessageTs ?? 0;
     rec.lastSeenMessageTs = latest;
+    // Mark all perception events delivered this turn as seen. Use the
+    // newest event's ts; if there were no events, leave the watermark.
+    const latestEventTs = perceptionEvents.length
+      ? Math.max(...perceptionEvents.map((e) => e.ts ?? 0))
+      : rec.lastSeenEventTs ?? 0;
+    rec.lastSeenEventTs = latestEventTs;
     return result;
   } catch (err) {
     const wasRateLimit = rateLimiter.recordError(provider, err);
@@ -1411,6 +1457,10 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
     fireSeed();
   }
 
+  // Hand the agent over to the heartbeat scheduler so it keeps
+  // thinking when no reactive events arrive.
+  scheduler.attach(rec);
+
   return out;
 }
 
@@ -1454,6 +1504,10 @@ async function stopAgent(agentId) {
   rec.thinking = false;
   rec.exitedAt = Date.now();
   rec.events.push({ kind: "exit", code: "stopped", turns: rec.turns });
+  // Stop heartbeat ticks for this agent; drop any buffered perception
+  // events. The next spawn starts with a clean slate.
+  scheduler.detach(rec);
+  perception.clear(rec.pubkey);
   await leaveRoom(agentId);
   // Record stays around briefly so the inspector drawer remains readable;
   // reaper (below) purges after REAP_AFTER_MS.

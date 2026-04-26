@@ -1379,6 +1379,10 @@ body {
 
 .room-tile-avatar.selectable { cursor: pointer; }
 .room-tile-avatar.selectable:hover { outline: 2px solid var(--transmit); outline-offset: 1px; }
+/* Draggable on-board characters get the grab cursor; once mid-drag,
+   the browser swaps to grabbing on its own. */
+.room-tile-avatar.draggable { cursor: grab; }
+.room-tile-avatar.draggable:active { cursor: grabbing; }
 
 /* Legacy inspector class kept for back-compat callers — embedded now. */
 .agent-inspector {

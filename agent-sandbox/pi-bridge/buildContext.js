@@ -15,6 +15,9 @@
  * run so pi's --session-backed history sees it as a normal user message.
  */
 
+import { formatPerceptionEvents } from "./perception.js";
+import { sceneMatesOf, SCENE_RADIUS } from "./scenes.js";
+
 const TRIGGER_MAP = {
   spawn: () => `You just stepped into the room.`,
   message_received: (ctx) =>
@@ -115,7 +118,7 @@ export function buildSystemPrompt({
     lines.push("");
     lines.push("VERBS:");
     lines.push("  say(text)                — speak in the room. Heard by anyone present. NOT broadcast publicly.");
-    lines.push("  say_to(recipient, text)  — addressed speech. Use when responding to someone specifically.");
+    lines.push("  say_to(recipient, text)  — addressed speech. ONLY works for someone in scene with you (within 3 tiles). If they're farther away, use `move` to get closer first, or `say` (which everyone in the room hears).");
     lines.push("  move(x, y)               — walk to tile (x,y) within the room bounds.");
     lines.push("  face(target)             — turn toward another character or position.");
     lines.push("  wait(seconds?)           — pass time without speaking. Useful for letting silence sit.");
@@ -156,6 +159,7 @@ export function buildSystemPrompt({
   lines.push("");
   lines.push("VERBS:");
   lines.push("  say(text)         — speak in the room (private to whoever's there).");
+  lines.push("  say_to(recipient, text) — addressed speech, ONLY for someone within 3 tiles of you.");
   lines.push("  move(x, y)        — walk to tile (x,y).");
   lines.push("  set_state(value)  — update your own mood/context note.");
   lines.push("  post(text)        — public social post (rare; only when worth broadcasting).");
@@ -178,6 +182,7 @@ export function buildSystemPrompt({
 //   - Current position + nearby agents
 //   - Roster with positions
 //   - Messages since last turn (pi sees older ones via its --session history)
+//   - Perception events (typed log of what was observed since last turn)
 //
 // In --no-session mode this would replicate the full recent chat each turn.
 // In --session mode (Phase A.5), we only include the delta since lastSeenMessageTs.
@@ -187,6 +192,7 @@ export function buildUserTurn({
   triggerContext = {},
   roomSnapshot,
   lastSeenMessageTs,
+  perceptionEvents,
   seedMessage,
 }) {
   const lines = [];
@@ -203,18 +209,27 @@ export function buildUserTurn({
   };
   lines.push(`You are at (${me.x}, ${me.y}).`);
 
-  const adj = nearby(me, roomSnapshot?.agents ?? []);
-  if (adj.length > 0) {
-    const names = adj.map((a) => `${a.name} (${a.x}, ${a.y})`).join(", ");
-    lines.push(`Also on your tile or adjacent: ${names}.`);
+  // Scene-mates — characters within SCENE_RADIUS tiles. These are who
+  // you can `say_to` directly. Surfaced separately from the wider
+  // roster so the LLM doesn't try to address someone across the room.
+  const sceneMatePks = sceneMatesOf(roomSnapshot, me.pubkey);
+  const allAgents = roomSnapshot?.agents ?? [];
+  const sceneMates = allAgents.filter((a) => sceneMatePks.includes(a.npub));
+  if (sceneMates.length > 0) {
+    const names = sceneMates.map((a) => `${a.name} (${a.x}, ${a.y})`).join(", ");
+    lines.push(`In scene with you (within ${SCENE_RADIUS} tiles — you can say_to them): ${names}.`);
+  } else {
+    lines.push("Nobody is in scene with you right now.");
   }
 
-  // Roster
-  const others = (roomSnapshot?.agents ?? []).filter((a) => a.npub !== me.pubkey);
-  if (others.length > 0) {
+  // Roster of everyone else in the room (not in scene). Visible but
+  // not directly addressable — the LLM should `move` closer first or
+  // use `say` (which everyone in the room hears).
+  const farOthers = allAgents.filter((a) => a.npub !== me.pubkey && !sceneMatePks.includes(a.npub));
+  if (farOthers.length > 0) {
     lines.push("");
-    lines.push("Others in the room:");
-    for (const a of others.slice(0, 20)) lines.push(`  - ${a.name} (${a.x}, ${a.y})`);
+    lines.push("Others in the room (NOT in scene — too far for say_to):");
+    for (const a of farOthers.slice(0, 20)) lines.push(`  - ${a.name} (${a.x}, ${a.y})`);
   }
 
   // New messages since last turn. Pi's session history carries anything
@@ -230,6 +245,18 @@ export function buildUserTurn({
     lines.push("");
     lines.push("New in the room since your last turn:");
     for (const m of msgs) lines.push(`  ${m.from}: "${(m.text ?? "").slice(0, 200)}"`);
+  }
+
+  // Perception events — typed log of speech / movement / presence /
+  // own-action-rejections since the last turn. Lives alongside the raw
+  // room-message delta above; the two will eventually consolidate when
+  // scenes (slice 4+) gate which speech events the LLM sees in detail.
+  if (Array.isArray(perceptionEvents) && perceptionEvents.length > 0) {
+    const block = formatPerceptionEvents(perceptionEvents, { selfPubkey: me.pubkey });
+    if (block) {
+      lines.push("");
+      lines.push(block);
+    }
   }
 
   // Seed message — only used on the very first turn (spawn trigger) or

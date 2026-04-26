@@ -9,6 +9,18 @@ import assert from "node:assert/strict";
 
 import { createGM, VERBS } from "../gm.js";
 
+/**
+ * Default snapshot used by stubbed deps. Two agents: the actor
+ * "abc123" (Marisol) at (5,5), and "carlos_pk" (Carlos) at (6,5) so
+ * they're scene-mates by Chebyshev distance 1.
+ */
+const DEFAULT_SNAPSHOT = {
+  agents: [
+    { npub: "abc123", name: "Marisol", x: 5, y: 5 },
+    { npub: "carlos_pk", name: "Carlos", x: 6, y: 5 },
+  ],
+};
+
 function makeStubDeps(overrides = {}) {
   const calls = {
     roomSay: [],
@@ -16,7 +28,9 @@ function makeStubDeps(overrides = {}) {
     moveAgent: [],
     saveCharacterManifest: [],
     loadCharacter: [],
+    perception: [],   // every broadcast/append goes here
   };
+  const snapshot = overrides.snapshot ?? DEFAULT_SNAPSHOT;
   const deps = {
     roomSay: (agentId, content) => {
       calls.roomSay.push({ agentId, content });
@@ -34,12 +48,21 @@ function makeStubDeps(overrides = {}) {
       calls.loadCharacter.push({ pubkey });
       return { mood: { energy: 50, social: 50 } };
     },
+    getSnapshot: () => snapshot,
+    perception: {
+      appendOne: (target, ev) => calls.perception.push({ kind: "appendOne", target, ev }),
+      broadcastTo: (targets, ev, except) =>
+        calls.perception.push({ kind: "broadcastTo", targets: [...targets], ev, except }),
+    },
     ...overrides,
   };
+  // Allow caller to pass a partial perception override that doesn't
+  // know about our `calls` map (e.g. omit perception entirely).
+  if (overrides.perception === null) deps.perception = undefined;
   return { deps, calls };
 }
 
-const ctx = { agentId: "agent_1", pubkey: "abc123", model: "test-model" };
+const ctx = { agentId: "agent_1", pubkey: "abc123", name: "Marisol", model: "test-model" };
 
 // ── factory ──
 
@@ -297,4 +320,120 @@ test("dispatch: handler throw becomes structured rejection", async () => {
   assert.equal(res.ok, false);
   assert.equal(res.verb, "say");
   assert.match(res.reason, /room offline/);
+});
+
+// ── slice 3 + 4: perception emission + scene-aware say_to ──
+
+test("say: broadcasts speech perception to scene-mates", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { type: "say", text: "good morning" });
+  const broadcasts = calls.perception.filter((c) => c.kind === "broadcastTo");
+  assert.equal(broadcasts.length, 1);
+  assert.deepEqual(broadcasts[0].targets, ["carlos_pk"]);
+  assert.equal(broadcasts[0].ev.kind, "speech");
+  assert.equal(broadcasts[0].ev.from_pubkey, "abc123");
+  assert.equal(broadcasts[0].ev.from_name, "Marisol");
+  assert.equal(broadcasts[0].ev.text, "good morning");
+});
+
+test("say: no perception broadcast when alone", async () => {
+  const aloneSnap = { agents: [{ npub: "abc123", name: "Marisol", x: 5, y: 5 }] };
+  const { deps, calls } = makeStubDeps({ snapshot: aloneSnap });
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { type: "say", text: "anybody here?" });
+  assert.equal(calls.perception.length, 0);
+  assert.equal(calls.roomSay.length, 1);
+});
+
+test("say_to: rejects when recipient not in room", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "say_to", recipient: "Stranger", text: "hi" });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /not found in room/);
+  assert.equal(calls.roomSay.length, 0);
+  assert.equal(calls.perception.length, 0);
+});
+
+test("say_to: rejects when recipient out of scene", async () => {
+  const farSnap = {
+    agents: [
+      { npub: "abc123", name: "Marisol", x: 5, y: 5 },
+      { npub: "carlos_pk", name: "Carlos", x: 15, y: 15 },
+    ],
+  };
+  const { deps, calls } = makeStubDeps({ snapshot: farSnap });
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "say_to", recipient: "Carlos", text: "you ok?" });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /not in scene/);
+  assert.equal(calls.roomSay.length, 0);
+  assert.equal(calls.perception.length, 0);
+});
+
+test("say_to: resolves by name and emits addressed speech event", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "say_to", recipient: "Carlos", text: "you ok?" });
+  assert.equal(res.ok, true);
+  // roomSay still happens, with the canonical recipient name prefixed.
+  assert.equal(calls.roomSay[0].content, "@Carlos you ok?");
+  // Speech event broadcast to scene-mate with the addressed_to fields.
+  const broadcasts = calls.perception.filter((c) => c.kind === "broadcastTo");
+  assert.equal(broadcasts.length, 1);
+  assert.equal(broadcasts[0].ev.addressed_to_npub, "carlos_pk");
+  assert.equal(broadcasts[0].ev.addressed_to_name, "Carlos");
+});
+
+test("say_to: resolves by npub directly", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { type: "say_to", recipient: "carlos_pk", text: "hey" });
+  assert.equal(res.ok, true);
+  // Recipient name comes from the snapshot, not the raw arg.
+  assert.equal(calls.roomSay[0].content, "@Carlos hey");
+});
+
+test("move: emits movement event to pre-move scene-mates", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { type: "move", x: 9, y: 9 });
+  const broadcasts = calls.perception.filter((c) => c.kind === "broadcastTo");
+  assert.equal(broadcasts.length, 1);
+  assert.deepEqual(broadcasts[0].targets, ["carlos_pk"]);
+  assert.equal(broadcasts[0].ev.kind, "movement");
+  assert.equal(broadcasts[0].ev.who_pubkey, "abc123");
+  assert.equal(broadcasts[0].ev.x, 9);
+  assert.equal(broadcasts[0].ev.y, 9);
+});
+
+test("move: no perception when moving alone", async () => {
+  const aloneSnap = { agents: [{ npub: "abc123", name: "Marisol", x: 5, y: 5 }] };
+  const { deps, calls } = makeStubDeps({ snapshot: aloneSnap });
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { type: "move", x: 8, y: 4 });
+  assert.equal(calls.perception.length, 0);
+  assert.equal(calls.moveAgent.length, 1);
+});
+
+test("post: does NOT emit perception (offstage social action)", async () => {
+  const { deps, calls } = makeStubDeps();
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { type: "post", text: "morning, internet" });
+  assert.equal(calls.relayPost.length, 1);
+  assert.equal(calls.perception.length, 0);
+});
+
+test("perception is optional — handlers tolerate missing dep", async () => {
+  // Simulate a test or external embedding that doesn't wire perception.
+  const { deps, calls } = makeStubDeps();
+  delete deps.perception;
+  const gm = createGM(deps);
+  const r1 = await gm.dispatch(ctx, { type: "say", text: "hi" });
+  const r2 = await gm.dispatch(ctx, { type: "move", x: 1, y: 1 });
+  assert.equal(r1.ok, true);
+  assert.equal(r2.ok, true);
+  assert.equal(calls.roomSay.length, 1);
+  assert.equal(calls.moveAgent.length, 1);
 });

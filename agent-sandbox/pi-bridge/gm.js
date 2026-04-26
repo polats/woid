@@ -6,14 +6,21 @@
  *   2. Args are validated against the verb's declared schema.
  *   3. The handler runs, applying effects through injected bridge deps.
  *   4. A structured { ok, reason?, effects? } result is returned.
+ *   5. Perception events are emitted to scene-mates when applicable
+ *      (slice 3 + 4: speech, movement go through the perception store).
  *
- * Slice 2 of #225 grows the registry to the full ten-verb set:
+ * Slice 2 of #225 grew the registry to the full ten-verb set; slice
+ * 3 + 4 add scene-aware perception emission and `say_to` validation
+ * against scene-mate membership.
  *
  *   say(text)                  — speak in the room. Colyseus only, no relay.
- *   say_to(recipient, text)    — addressed speech. Same channel as `say`,
- *                                with @recipient embedded in the text.
- *                                Scene-membership enforcement lands in slice 3.
- *   move(x, y)                 — set position on the grid.
+ *                                Emits a speech event to scene-mates.
+ *   say_to(recipient, text)    — addressed speech. Validates the recipient
+ *                                is resolvable + in scene with the actor.
+ *                                Emits an addressed speech event.
+ *   move(x, y)                 — set position on the grid. Emits a movement
+ *                                event to characters who were nearby BEFORE
+ *                                the move (so they see "X walked past me").
  *   face(target)               — turn toward an agent or coordinate.
  *                                Records intent; no state mutation yet.
  *   wait(seconds?)             — explicit pass-time. Pure intent record.
@@ -23,6 +30,7 @@
  *   set_mood(energy?, social?) — patch the character's mood vector.
  *   post(text)                 — public social post → Nostr kind:1.
  *                                The only verb that publishes to the relay.
+ *                                Doesn't emit room perception (it's offstage).
  *   idle                       — explicit no-op.
  *
  * Legacy verb names (`state`, `mood`) are still accepted via the normaliser
@@ -30,8 +38,10 @@
  *
  * The GM doesn't import bridge functions directly — they're passed
  * to `createGM` so this file is unit-testable without booting the
- * whole bridge.
+ * whole bridge. `perception` and `getSnapshot` are optional so tests
+ * can opt out; production wires them.
  */
+import { sceneMatesOf, inScene, resolveRecipient } from "./scenes.js";
 
 const SAY_LIMIT = 1000;
 const POST_LIMIT = 1000;
@@ -54,9 +64,23 @@ const WAIT_MAX = 600;
 export const VERBS = {
   say: {
     args: { text: { type: "string", required: true, max: SAY_LIMIT } },
-    effects: ["room.message"],
+    effects: ["room.message", "perception.speech"],
     handler: async (deps, ctx, args) => {
       deps.roomSay(ctx.agentId, args.text);
+      const snapshot = (ctx?.snapshot ?? deps.getSnapshot?.());
+      const mates = sceneMatesOf(snapshot, ctx.pubkey);
+      if (mates.length > 0) {
+        deps.perception?.broadcastTo?.(
+          mates,
+          {
+            kind: "speech",
+            from_pubkey: ctx.pubkey,
+            from_name: ctx.name,
+            text: args.text,
+          },
+          ctx.pubkey,
+        );
+      }
     },
   },
 
@@ -65,13 +89,35 @@ export const VERBS = {
       recipient: { type: "string", required: true, max: RECIPIENT_LIMIT },
       text: { type: "string", required: true, max: SAY_LIMIT },
     },
-    effects: ["room.message"],
+    effects: ["room.message", "perception.speech"],
     handler: async (deps, ctx, args) => {
-      // Slice 2: encode the recipient inline ("@recipient text") so the
-      // existing room schema doesn't have to change. Slice 3 + scenes
-      // promotes this to a structured `to` field on Message.
-      const formatted = `@${args.recipient} ${args.text}`.slice(0, SAY_LIMIT);
+      const snapshot = (ctx?.snapshot ?? deps.getSnapshot?.());
+      const recipientPubkey = resolveRecipient(snapshot, args.recipient);
+      if (!recipientPubkey) {
+        throw new Error(`recipient "${args.recipient}" not found in room`);
+      }
+      if (!inScene(snapshot, ctx.pubkey, recipientPubkey)) {
+        throw new Error(`recipient "${args.recipient}" not in scene with you`);
+      }
+      const recipientName = findName(snapshot, recipientPubkey) ?? args.recipient;
+      const formatted = `@${recipientName} ${args.text}`.slice(0, SAY_LIMIT);
       deps.roomSay(ctx.agentId, formatted);
+
+      const mates = sceneMatesOf(snapshot, ctx.pubkey);
+      if (mates.length > 0) {
+        deps.perception?.broadcastTo?.(
+          mates,
+          {
+            kind: "speech",
+            from_pubkey: ctx.pubkey,
+            from_name: ctx.name,
+            text: args.text,
+            addressed_to_npub: recipientPubkey,
+            addressed_to_name: recipientName,
+          },
+          ctx.pubkey,
+        );
+      }
     },
   },
 
@@ -80,9 +126,26 @@ export const VERBS = {
       x: { type: "number", required: true, integer: true },
       y: { type: "number", required: true, integer: true },
     },
-    effects: ["room.position"],
+    effects: ["room.position", "perception.movement"],
     handler: async (deps, ctx, args) => {
+      // Capture the pre-move snapshot so "people who were nearby" see
+      // the movement event even if the agent walks out of their scene.
+      const snapshot = (ctx?.snapshot ?? deps.getSnapshot?.());
+      const matesBefore = sceneMatesOf(snapshot, ctx.pubkey);
       deps.moveAgent(ctx.agentId, args.x, args.y);
+      if (matesBefore.length > 0) {
+        deps.perception?.broadcastTo?.(
+          matesBefore,
+          {
+            kind: "movement",
+            who_pubkey: ctx.pubkey,
+            who_name: ctx.name,
+            x: args.x,
+            y: args.y,
+          },
+          ctx.pubkey,
+        );
+      }
     },
   },
 
@@ -295,4 +358,12 @@ function validateArgs(schema, raw) {
     }
   }
   return { ok: true, args: out };
+}
+
+function findName(snapshot, pubkey) {
+  if (!snapshot) return null;
+  for (const a of snapshot.agents ?? []) {
+    if (a?.npub === pubkey) return a.name ?? null;
+  }
+  return null;
 }

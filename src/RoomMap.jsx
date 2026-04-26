@@ -97,15 +97,35 @@ export default function RoomMap({
               >
                 {occupants.slice(0, 1).map((o) => {
                   const selectable = o.kind === 'character' && onSelectCharacter
+                  // Characters on the board are draggable — drop on a
+                  // tile fires the same onDropCharacter the sidebar cards
+                  // do (which routes to the bridge's /agents/:id/move).
+                  const draggable = o.kind === 'character' && !!onDropCharacter
+                  // Inline handler reused so the inner img can also
+                  // initiate a drag — without this, browsers that take
+                  // the inner image as the drag target see draggable=false
+                  // and never start the drag.
+                  const startDrag = (e) => {
+                    e.dataTransfer.setData('application/x-character-pubkey', o.npub)
+                    e.dataTransfer.setData('text/plain', o.npub)
+                    e.dataTransfer.effectAllowed = 'copyMove'
+                  }
                   return (
                     <div
                       key={o.npub}
-                      className={`room-tile-avatar kind-${o.kind}${o.thinking ? ' thinking' : ''}${o.running ? ' running' : ''}${selectable ? ' selectable' : ''}`}
+                      className={`room-tile-avatar kind-${o.kind}${o.thinking ? ' thinking' : ''}${o.running ? ' running' : ''}${selectable ? ' selectable' : ''}${draggable ? ' draggable' : ''}`}
+                      draggable={draggable || undefined}
+                      onDragStart={draggable ? startDrag : undefined}
                       onClick={selectable ? (e) => { e.stopPropagation(); onSelectCharacter(o.npub) } : undefined}
-                      title={selectable ? `Click to inspect ${o.name}` : undefined}
+                      title={selectable ? `Drag to move · click to inspect ${o.name}` : undefined}
                     >
                       {o.avatarUrl ? (
-                        <img src={o.avatarUrl} alt={o.name} draggable={false} />
+                        <img
+                          src={o.avatarUrl}
+                          alt={o.name}
+                          draggable={draggable || undefined}
+                          onDragStart={draggable ? startDrag : undefined}
+                        />
                       ) : (
                         <span>{initial(o.name)}</span>
                       )}
@@ -121,7 +141,7 @@ export default function RoomMap({
         )}
       </div>
       <p className="room-map-caption">
-        {width}×{height} · drag a card onto a tile to spawn or move · click an empty tile to move yourself
+        {width}×{height} · drag a card or avatar onto a tile to spawn / move · click an empty tile to move yourself
       </p>
     </div>
   )
