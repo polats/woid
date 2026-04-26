@@ -17,6 +17,7 @@ import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/ind
 import { createGM } from "./gm.js";
 import { createPerception, formatPerceptionEvents } from "./perception.js";
 import { createScheduler } from "./scheduler.js";
+import { createSceneTracker } from "./scene-tracker.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -1036,8 +1037,22 @@ function runtimeSnapshot(pubkey) {
 // block injected into each turn's user prompt. See perception.js.
 const perception = createPerception();
 
+// Conversation gate — stateful scene tracker. Opens scenes when a
+// pair becomes proximate, closes them on budget / soft-stop / hard
+// cap / proximity_lost, and applies a per-pair cooldown so chatty
+// pairs naturally drift apart. See scene-tracker.js.
+const sceneTracker = createSceneTracker({
+  budgetMin: Number(process.env.SCENE_BUDGET_MIN) || undefined,
+  budgetMax: Number(process.env.SCENE_BUDGET_MAX) || undefined,
+  hardCap: Number(process.env.SCENE_HARD_CAP) || undefined,
+  cooldownMs: Number(process.env.SCENE_COOLDOWN_MS) || undefined,
+  softStopRun: Number(process.env.SCENE_SOFT_STOP_RUN) || undefined,
+});
+
 // Game Master — single chokepoint for committing harness-emitted
 // actions. See gm.js for the verb registry and dispatch logic.
+// The tracker's effective scene helpers are injected so cooldowns
+// flow through to say_to validation, perception emission, etc.
 const gm = createGM({
   roomSay,
   relayPost,
@@ -1045,6 +1060,8 @@ const gm = createGM({
   saveCharacterManifest,
   loadCharacter,
   perception,
+  sceneMatesOf: sceneTracker.effectiveSceneMatesOf,
+  inScene: sceneTracker.effectiveInScene,
 });
 
 // Heartbeat scheduler — drives autonomous turns at a scene-aware
@@ -1056,6 +1073,8 @@ const gm = createGM({
 const scheduler = createScheduler({
   getSnapshot: (agentId) => roomSnapshot(agentId),
   runTurn: (rec, opts) => runPiTurn(rec, opts),
+  // Cooldown-aware so paired-out characters fall back to alone-cadence.
+  sceneMatesOf: sceneTracker.effectiveSceneMatesOf,
 });
 
 // Execute actions returned by a harness turn. Each action is a
@@ -1070,6 +1089,11 @@ async function executeActions(rec, actions) {
     // have already moved the actor, and later actions need to see
     // post-move scene composition.
     const snapshot = roomSnapshot(rec.agentId);
+    // Sync scene tracker with the latest positions BEFORE dispatch so
+    // newly-formed pairs open scenes and lost-proximity pairs close.
+    const sceneTransitions = sceneTracker.onSnapshot(snapshot);
+    emitSceneTransitionEvents(sceneTransitions);
+
     const result = await gm.dispatch(
       {
         agentId: rec.agentId,
@@ -1090,8 +1114,41 @@ async function executeActions(rec, actions) {
         verb,
         reason: result.reason,
       });
+    } else {
+      // Record the committed action with the tracker so budget /
+      // soft-stop / hard-cap can fire. Closes scenes that exceeded
+      // their gate; participants see the close event next turn.
+      const closed = sceneTracker.recordAction(rec.pubkey, result.verb);
+      for (const scene of closed) {
+        emitSceneCloseEvent(scene);
+      }
     }
   }
+}
+
+// Surface scene_open / scene_close in each participant's perception
+// stream so the LLM is aware of state transitions on its next turn.
+function emitSceneTransitionEvents(transitions) {
+  for (const scene of transitions.opened || []) {
+    perception.broadcastTo(scene.participants, {
+      kind: "scene_open",
+      sceneId: scene.sceneId,
+      with_pubkeys: scene.participants,
+    });
+  }
+  for (const scene of transitions.closed || []) {
+    emitSceneCloseEvent(scene);
+  }
+}
+
+function emitSceneCloseEvent(scene) {
+  perception.broadcastTo(scene.participants, {
+    kind: "scene_close",
+    sceneId: scene.sceneId,
+    with_pubkeys: scene.participants,
+    reason: scene.reason,
+  });
+  console.log(`[scenes] closed ${scene.sceneId} (${scene.participants.join(" + ")}) — ${scene.reason}`);
 }
 
 // Ensure a harness is started for `rec`. Harnesses are created lazily
@@ -1505,9 +1562,11 @@ async function stopAgent(agentId) {
   rec.exitedAt = Date.now();
   rec.events.push({ kind: "exit", code: "stopped", turns: rec.turns });
   // Stop heartbeat ticks for this agent; drop any buffered perception
-  // events. The next spawn starts with a clean slate.
+  // events; clear scene tracker state for this character. The next
+  // spawn starts with a clean slate.
   scheduler.detach(rec);
   perception.clear(rec.pubkey);
+  sceneTracker.clearCharacter(rec.pubkey);
   await leaveRoom(agentId);
   // Record stays around briefly so the inspector drawer remains readable;
   // reaper (below) purges after REAP_AFTER_MS.
@@ -1623,6 +1682,13 @@ app.get("/health", (_req, res) => {
     pool: piPool.poolSnapshot(),
     cooldowns: rateLimiter.snapshot(),
   });
+});
+
+// Scene tracker introspection — useful for verifying the conversation
+// gate is firing as expected. Lists active scenes (with turn budget +
+// remaining), pair cooldowns, and per-character quiet-action runs.
+app.get("/health/scenes", (_req, res) => {
+  res.json(sceneTracker.snapshot());
 });
 
 // ── Public persona generation API ──

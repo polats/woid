@@ -28,7 +28,7 @@
  * (conversation gate, hard cap, cooldown) build on top.
  */
 
-import { sceneMatesOf } from "./scenes.js";
+import { sceneMatesOf as rawSceneMatesOf } from "./scenes.js";
 
 export const DEFAULTS = {
   aloneMinMs: 30_000,
@@ -57,6 +57,9 @@ export function createScheduler(deps, opts = {}) {
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
   const random = deps.random ?? Math.random;
+  // Optional cooldown-aware helper (scene tracker injects). Defaults
+  // to raw proximity so unit tests don't have to wire a tracker.
+  const sceneMatesOf = deps.sceneMatesOf ?? rawSceneMatesOf;
 
   /** @type {Map<string, any>} agentId → active timer handle */
   const timers = new Map();

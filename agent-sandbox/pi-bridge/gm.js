@@ -41,7 +41,7 @@
  * whole bridge. `perception` and `getSnapshot` are optional so tests
  * can opt out; production wires them.
  */
-import { sceneMatesOf, inScene, resolveRecipient } from "./scenes.js";
+import { sceneMatesOf as rawSceneMatesOf, inScene as rawInScene, resolveRecipient } from "./scenes.js";
 
 const SAY_LIMIT = 1000;
 const POST_LIMIT = 1000;
@@ -68,7 +68,7 @@ export const VERBS = {
     handler: async (deps, ctx, args) => {
       deps.roomSay(ctx.agentId, args.text);
       const snapshot = (ctx?.snapshot ?? deps.getSnapshot?.());
-      const mates = sceneMatesOf(snapshot, ctx.pubkey);
+      const mates = deps.sceneMatesOf(snapshot, ctx.pubkey);
       if (mates.length > 0) {
         deps.perception?.broadcastTo?.(
           mates,
@@ -96,14 +96,14 @@ export const VERBS = {
       if (!recipientPubkey) {
         throw new Error(`recipient "${args.recipient}" not found in room`);
       }
-      if (!inScene(snapshot, ctx.pubkey, recipientPubkey)) {
+      if (!deps.inScene(snapshot, ctx.pubkey, recipientPubkey)) {
         throw new Error(`recipient "${args.recipient}" not in scene with you`);
       }
       const recipientName = findName(snapshot, recipientPubkey) ?? args.recipient;
       const formatted = `@${recipientName} ${args.text}`.slice(0, SAY_LIMIT);
       deps.roomSay(ctx.agentId, formatted);
 
-      const mates = sceneMatesOf(snapshot, ctx.pubkey);
+      const mates = deps.sceneMatesOf(snapshot, ctx.pubkey);
       if (mates.length > 0) {
         deps.perception?.broadcastTo?.(
           mates,
@@ -131,7 +131,7 @@ export const VERBS = {
       // Capture the pre-move snapshot so "people who were nearby" see
       // the movement event even if the agent walks out of their scene.
       const snapshot = (ctx?.snapshot ?? deps.getSnapshot?.());
-      const matesBefore = sceneMatesOf(snapshot, ctx.pubkey);
+      const matesBefore = deps.sceneMatesOf(snapshot, ctx.pubkey);
       deps.moveAgent(ctx.agentId, args.x, args.y);
       if (matesBefore.length > 0) {
         deps.perception?.broadcastTo?.(
@@ -234,6 +234,12 @@ export function createGM(deps) {
       throw new Error(`createGM: missing dep "${k}"`);
     }
   }
+  // Optional cooldown-aware scene helpers. Injected by the scene
+  // tracker in production; tests fall back to the raw scenes.js
+  // helpers (no cooldowns). Patched onto deps so the module-scoped
+  // verb handlers can reach them via their `deps` arg.
+  if (typeof deps.sceneMatesOf !== "function") deps.sceneMatesOf = rawSceneMatesOf;
+  if (typeof deps.inScene !== "function") deps.inScene = rawInScene;
 
   /**
    * Dispatch a single action.

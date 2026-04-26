@@ -169,10 +169,28 @@ function formatOne(ev, selfPubkey) {
     }
     case "action_rejected":
       return `(your attempt to ${ev.verb || "act"} was rejected: ${ev.reason || "unknown reason"})`;
+    case "scene_open": {
+      const others = (ev.with_pubkeys || []).filter((p) => p !== selfPubkey);
+      const who = others.length === 1 ? others[0].slice(0, 8) : others.join(", ");
+      return `(scene opened — you and ${who} are now in conversation)`;
+    }
+    case "scene_close": {
+      const others = (ev.with_pubkeys || []).filter((p) => p !== selfPubkey);
+      const who = others.length === 1 ? others[0].slice(0, 8) : others.join(", ");
+      const reasonText = SCENE_CLOSE_REASONS[ev.reason] || `closed (${ev.reason || "?"})`;
+      return `(scene with ${who} ${reasonText})`;
+    }
     default:
       return null;
   }
 }
+
+const SCENE_CLOSE_REASONS = {
+  budget: "ended naturally — give them space for a few minutes",
+  soft_stop: "wound down quietly",
+  hard_cap: "ran long; stepping back",
+  proximity_lost: "ended when you parted",
+};
 
 function truncate(s, max = 240) {
   if (typeof s !== "string") return "";
