@@ -194,6 +194,7 @@ export function buildUserTurn({
   lastSeenMessageTs,
   perceptionEvents,
   memoryBlock,
+  needsLine,
   seedMessage,
 }) {
   const lines = [];
@@ -209,6 +210,13 @@ export function buildUserTurn({
     y: character.y ?? 0,
   };
   lines.push(`You are at (${me.x}, ${me.y}).`);
+
+  // Needs / mood line — surfaced one line in, terse, sorted by most
+  // pressing axis. Empty string skipped so first-tick prompts don't
+  // carry placeholder text.
+  if (typeof needsLine === "string" && needsLine.trim()) {
+    lines.push(needsLine);
+  }
 
   // Scene-mates — characters within SCENE_RADIUS tiles. These are who
   // you can `say_to` directly. Surfaced separately from the wider

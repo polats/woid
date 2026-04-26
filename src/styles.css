@@ -2345,6 +2345,52 @@ body {
   text-transform: uppercase;
 }
 
+/* Vitals — derived wellbeing + three needs bars. Replaces the legacy
+   two-pill mood display. Polled live every 4s from /health/needs. */
+.agent-profile-vitals {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--ink-faint);
+  background: var(--paper-2);
+}
+.agent-profile-vitals-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+}
+.agent-profile-wellbeing-badge {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: .15em; text-transform: uppercase;
+  padding: 2px 8px; border: 1.5px solid currentColor;
+}
+/* Green for well; degrading through yellow → orange → red as the
+   character's most-pressing need slides toward zero. Mirrored on
+   the per-axis bar fill below. */
+.agent-profile-wellbeing-badge.wellbeing-thriving      { color: #2d8a4f; }
+.agent-profile-wellbeing-badge.wellbeing-uneasy     { color: #b58b1a; }
+.agent-profile-wellbeing-badge.wellbeing-distressed { color: #c47538; }
+.agent-profile-wellbeing-badge.wellbeing-in_crisis  { color: #b04a3a; background: #fde6e2; }
+
+.agent-profile-needs-grid {
+  display: grid; grid-template-columns: 1fr; gap: 4px; margin-top: 4px;
+}
+.agent-profile-need {
+  display: grid; grid-template-columns: 70px 1fr 32px; align-items: center; gap: 8px;
+  font-family: var(--font-mono); font-size: 11px;
+}
+.agent-profile-need-label { color: var(--ink-muted); text-transform: lowercase; }
+.agent-profile-need-bar {
+  height: 8px; background: var(--paper); border: 1px solid var(--ink-faint);
+  position: relative; overflow: hidden;
+}
+.agent-profile-need-fill {
+  height: 100%; background: #2d8a4f;  /* default: well-tier green */
+  transition: width 400ms ease-out, background-color 200ms;
+}
+.agent-profile-need.tier-thriving   .agent-profile-need-fill { background: #2d8a4f; }
+.agent-profile-need.tier-uneasy     .agent-profile-need-fill { background: #d6a83e; }
+.agent-profile-need.tier-distressed .agent-profile-need-fill { background: #c47538; }
+.agent-profile-need.tier-in_crisis  .agent-profile-need-fill { background: #b04a3a; }
+.agent-profile-need-value { text-align: right; color: var(--ink); }
+
 /* Dirty form indicator + Save button highlight. */
 .agent-profile-dirty-flag {
   color: var(--transmit);
@@ -3461,6 +3507,21 @@ body {
   font-family: var(--font-mono); font-size: 8px;
   padding: 0 3px; letter-spacing: .05em;
 }
+
+/* Wellbeing dot above the avatar — single color reads at a glance.
+   Green when well, drifting through yellow / orange / red as the
+   character's worst-need slides toward zero. */
+.room-tile-wellbeing {
+  position: absolute; top: -4px; right: -4px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--paper);
+  box-shadow: 0 0 0 1px var(--ink-faint);
+}
+.room-tile-wellbeing.wellbeing-thriving      { background: #2d8a4f; }
+.room-tile-wellbeing.wellbeing-uneasy     { background: #d6a83e; }
+.room-tile-wellbeing.wellbeing-distressed { background: #c47538; }
+.room-tile-wellbeing.wellbeing-in_crisis  { background: #b04a3a; }
 .room-tile-hint {
   position: absolute; top: -28px; left: 50%; transform: translateX(-50%);
   padding: 2px 8px;

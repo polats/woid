@@ -18,6 +18,30 @@ const GEN_MODELS = [
   { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B' },
 ]
 
+// Need axes (matches NEED_AXES on the bridge). Order = display order.
+const NEEDS_AXES = ['energy', 'social', 'curiosity']
+
+// Compute the 4-state wellbeing level from a needs vector. Mirrors
+// computeWellbeing() in agent-sandbox/pi-bridge/needs.js — kept
+// duplicated rather than shared because the frontend doesn't import
+// server-side modules.
+const WELLBEING_BANDS = [
+  { name: 'thriving',   min: 70 },
+  { name: 'uneasy',     min: 50 },
+  { name: 'distressed', min: 30 },
+  { name: 'in_crisis',  min: 0  },
+]
+function wellbeingFromNeeds(needs) {
+  if (!needs) return 'thriving'
+  let min = 100
+  for (const axis of NEEDS_AXES) {
+    const v = typeof needs[axis] === 'number' ? needs[axis] : 100
+    if (v < min) min = v
+  }
+  for (const b of WELLBEING_BANDS) if (min >= b.min) return b.name
+  return 'in_crisis'
+}
+
 // Prompt style — A/B testable. Surfaced in the Settings section
 // alongside Brain. New characters default to 'dynamic'; legacy
 // characters with no field stay on 'minimal' until the user opts in.
@@ -126,6 +150,28 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
         })
       })
       .catch((err) => setError(err.message || String(err)))
+  }, [pubkey])
+
+  // Live needs poll — character.needs in state is whatever was loaded
+  // at fetch time; the bridge persists every 5s after a 2-point drift,
+  // so polling /health/needs gives us closer-to-real-time values for
+  // the bars and wellbeing badge.
+  const [liveNeeds, setLiveNeeds] = useState(null)
+  useEffect(() => {
+    if (!cfg.bridgeUrl || !pubkey) return
+    let cancelled = false
+    async function poll() {
+      try {
+        const r = await fetch(`${cfg.bridgeUrl}/health/needs`)
+        if (!r.ok) return
+        const j = await r.json()
+        const me = (j.characters || []).find((c) => c.pubkey === pubkey)
+        if (!cancelled && me) setLiveNeeds({ needs: me.needs, wellbeing: me.wellbeing })
+      } catch { /* ignore */ }
+    }
+    poll()
+    const t = setInterval(poll, 4000)
+    return () => { cancelled = true; clearInterval(t) }
   }, [pubkey])
 
   // Whether the form has unsaved changes vs the loaded character.
@@ -456,13 +502,10 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
             disabled={saving || generating}
           />
         </label>
-        {character?.mood && (
-          <div className="agent-profile-mood">
-            <span className="agent-profile-field-label">Mood</span>
-            <span className="agent-profile-mood-pill">energy: {character.mood.energy ?? '—'}</span>
-            <span className="agent-profile-mood-pill">social: {character.mood.social ?? '—'}</span>
-          </div>
-        )}
+        {/* Vitals — derived wellbeing + three needs bars. Live values
+            poll every 4s. Character voice lives in `about`; there is
+            no personality / vibe enum. */}
+        <Vitals characterNeeds={character?.needs} live={liveNeeds} />
       </fieldset>
 
       {/* Settings — applies on every spawn for this character. Brain
@@ -590,6 +633,44 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
         </p>
         <button type="button" onClick={remove} className="danger">Delete character</button>
       </fieldset>
+    </div>
+  )
+}
+
+/**
+ * Vitals — derived wellbeing badge + three needs bars (energy, social,
+ * curiosity). Live values come from /health/needs (polled every 4s);
+ * fall back to the manifest's persisted needs while live data loads.
+ *
+ * No personality / vibe enum — character voice lives in `about`.
+ */
+function Vitals({ characterNeeds, live }) {
+  const needs = live?.needs ?? characterNeeds ?? null
+  const wellbeing = live?.wellbeing ?? wellbeingFromNeeds(needs)
+
+  return (
+    <div className="agent-profile-vitals">
+      <div className="agent-profile-vitals-row">
+        <span className="agent-profile-field-label">Wellbeing</span>
+        <span className={`agent-profile-wellbeing-badge wellbeing-${wellbeing}`} title="Derived from current needs (worst axis wins)">
+          {wellbeing.replace('_', ' ')}
+        </span>
+      </div>
+      <div className="agent-profile-needs-grid">
+        {NEEDS_AXES.map((axis) => {
+          const v = typeof needs?.[axis] === 'number' ? Math.round(needs[axis]) : null
+          const tier = v == null ? null : v >= 70 ? 'thriving' : v >= 50 ? 'uneasy' : v >= 30 ? 'distressed' : 'in_crisis'
+          return (
+            <div key={axis} className={`agent-profile-need need-${axis}${tier ? ` tier-${tier}` : ''}`}>
+              <span className="agent-profile-need-label">{axis}</span>
+              <div className="agent-profile-need-bar">
+                <div className="agent-profile-need-fill" style={{ width: `${v ?? 0}%` }} />
+              </div>
+              <span className="agent-profile-need-value">{v ?? '—'}</span>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

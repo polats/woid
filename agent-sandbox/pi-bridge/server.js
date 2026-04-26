@@ -20,6 +20,7 @@ import { createScheduler } from "./scheduler.js";
 import { createSceneTracker } from "./scene-tracker.js";
 import { createJournal } from "./journal.js";
 import { buildMemoryBlock } from "./memory.js";
+import { createNeedsTracker, describeNeeds, NEED_AXES } from "./needs.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -650,6 +651,10 @@ function createCharacter({ name } = {}) {
     // A/B comparison until the user explicitly switches them.
     promptStyle: "dynamic",
     mood: { energy: 50, social: 50 },
+    // Needs scaffold (#235 slice 1). Three axes seeded at 75 so
+    // characters spawn comfortable and decay over the next sim-hours.
+    // No personality / vibe — character voice lives in `about`.
+    needs: { energy: 75, social: 75, curiosity: 75 },
     follows: seedFollows,
     createdAt: Date.now(),
   });
@@ -1056,6 +1061,39 @@ const sceneTracker = createSceneTracker({
 // the post-dispatch turn record. Persisted as JSONL under $WORKSPACE.
 const journal = createJournal({ workspacePath: WORKSPACE });
 
+// Needs tracker — server-side per-character drives (energy, social,
+// curiosity) decaying uniformly over sim-time. Slice 1 of #235 is
+// pure tracking; slice 2 will add the need-interrupt → LLM gate.
+const needsTracker = createNeedsTracker({
+  simMinutePerRealMs: Number(process.env.NEEDS_SIM_MS_PER_MIN) || undefined,
+});
+
+// Tick needs every NEEDS_TICK_MS real-ms. Persist any character whose
+// values have drifted by ≥ NEEDS_FLUSH_DELTA back to their manifest
+// at the same cadence so a bridge restart doesn't lose progress.
+const NEEDS_TICK_MS = Number(process.env.NEEDS_TICK_MS) || 5_000;
+const NEEDS_FLUSH_DELTA = Number(process.env.NEEDS_FLUSH_DELTA) || 2;
+const needsFlushedAt = new Map(); // pubkey → snapshot of last persisted needs
+setInterval(() => {
+  try {
+    const decays = needsTracker.tickAll();
+    for (const d of decays) {
+      const last = needsFlushedAt.get(d.pubkey);
+      const drifted = !last || NEED_AXES.some((a) =>
+        Math.abs((d.after?.[a] ?? 0) - (last?.[a] ?? d.before?.[a] ?? 0)) >= NEEDS_FLUSH_DELTA,
+      );
+      if (drifted) {
+        try {
+          saveCharacterManifest(d.pubkey, { needs: { ...d.after } });
+          needsFlushedAt.set(d.pubkey, { ...d.after });
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.error("[needs] tick failed:", err?.message || err);
+  }
+}, NEEDS_TICK_MS).unref();
+
 // Game Master — single chokepoint for committing harness-emitted
 // actions. See gm.js for the verb registry and dispatch logic.
 // The tracker's effective scene helpers are injected so cooldowns
@@ -1069,6 +1107,7 @@ const gm = createGM({
   perception,
   sceneMatesOf: sceneTracker.effectiveSceneMatesOf,
   inScene: sceneTracker.effectiveInScene,
+  needsTracker, // optional GM dep; set_mood mirrors values into the tracker
 });
 
 // Heartbeat scheduler — drives autonomous turns at a scene-aware
@@ -1268,6 +1307,11 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     recentScenesBetween: (a, b, opts) => journal.recentScenesBetween(a, b, opts),
   });
 
+  // Read the current needs / mood for the perception block. Tickless
+  // here — the global needs interval is already advancing values.
+  const needsRec = needsTracker.get(rec.pubkey);
+  const needsLine = needsRec ? describeNeeds(needsRec.needs) : "";
+
   const userTurn = buildUserTurn({
     character: { pubkey: rec.pubkey, x: myPresence.x ?? 0, y: myPresence.y ?? 0 },
     trigger,
@@ -1276,6 +1320,7 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     lastSeenMessageTs: rec.lastSeenMessageTs,
     perceptionEvents,
     memoryBlock,
+    needsLine,
     seedMessage,
   });
 
@@ -1563,6 +1608,13 @@ async function createAgent({ pubkey, name, seedMessage, roomName, model, provide
   // thinking when no reactive events arrive.
   scheduler.attach(rec);
 
+  // Register with the needs tracker so this character's drives start
+  // decaying. Persisted needs are seeded from the manifest; defaults
+  // fill in for new characters.
+  needsTracker.register(character.pubkey, {
+    needs: character.needs,
+  });
+
   return out;
 }
 
@@ -1608,10 +1660,13 @@ async function stopAgent(agentId) {
   rec.events.push({ kind: "exit", code: "stopped", turns: rec.turns });
   // Stop heartbeat ticks for this agent; drop any buffered perception
   // events; clear scene tracker state for this character. The next
-  // spawn starts with a clean slate.
+  // spawn starts with a clean slate. Needs are unregistered too —
+  // they'll re-seed from the manifest on next spawn.
   scheduler.detach(rec);
   perception.clear(rec.pubkey);
   sceneTracker.clearCharacter(rec.pubkey);
+  needsTracker.unregister(rec.pubkey);
+  needsFlushedAt.delete(rec.pubkey);
   await leaveRoom(agentId);
   // Record stays around briefly so the inspector drawer remains readable;
   // reaper (below) purges after REAP_AFTER_MS.
@@ -1734,6 +1789,12 @@ app.get("/health", (_req, res) => {
 // remaining), pair cooldowns, and per-character quiet-action runs.
 app.get("/health/scenes", (_req, res) => {
   res.json(sceneTracker.snapshot());
+});
+
+// Needs tracker introspection — current per-character needs vector,
+// derived mood, and personality. Useful for tuning decay rates.
+app.get("/health/needs", (_req, res) => {
+  res.json({ characters: needsTracker.snapshot() });
 });
 
 // ── Scene journal ──
@@ -2245,6 +2306,7 @@ app.get("/characters/:pubkey", (req, res) => {
     harness: c.harness ?? null,
     promptStyle: c.promptStyle ?? null,
     mood: c.mood ?? null,
+    needs: c.needs ?? null,
     profileSource: c.profileSource ?? null,
     profileModel: c.profileModel ?? null,
     createdAt: c.createdAt ?? null,
@@ -2755,7 +2817,7 @@ app.patch("/characters/:pubkey", async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
-  const { name, about, state, avatarUrl, model, harness, promptStyle, mood } = req.body || {};
+  const { name, about, state, avatarUrl, model, harness, promptStyle, mood, needs } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = String(name).trim() || c.name;
   if (about !== undefined) patch.about = about ? String(about) : null;
@@ -2789,8 +2851,26 @@ app.patch("/characters/:pubkey", async (req, res) => {
       patch.mood = { ...(c.mood || {}), ...next };
     }
   }
+  // Needs patch (#235 slice 1) — partial axes update. Mirrors into
+  // the live needsTracker so changes take effect for any running
+  // agent without waiting for the next spawn.
+  if (needs !== undefined && typeof needs === "object" && needs !== null) {
+    const nextNeeds = { ...(c.needs || {}) };
+    for (const axis of NEED_AXES) {
+      const v = needs[axis];
+      if (typeof v === "number" && Number.isFinite(v)) {
+        nextNeeds[axis] = Math.max(0, Math.min(100, Math.round(v)));
+      }
+    }
+    patch.needs = nextNeeds;
+  }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
   saveCharacterManifest(pubkey, patch);
+  // Mirror needs edits into the live tracker so the change takes
+  // effect immediately for any running agent.
+  if (patch.needs) {
+    needsTracker.register(pubkey, { needs: patch.needs });
+  }
   // Re-publish kind:0 so external clients (Jumble etc) see the new name/about/picture.
   // Awaited so the caller can see whether the relay actually received it.
   let relayPublished = false;
@@ -2813,6 +2893,7 @@ app.patch("/characters/:pubkey", async (req, res) => {
     harness: next.harness ?? null,
     promptStyle: next.promptStyle ?? null,
     mood: next.mood ?? null,
+    needs: next.needs ?? null,
     profileSource: next.profileSource ?? null,
     profileModel: next.profileModel ?? null,
     createdAt: next.createdAt ?? null,

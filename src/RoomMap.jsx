@@ -8,6 +8,26 @@ function initial(name) {
   return (name || '?').trim().charAt(0).toUpperCase()
 }
 
+// Compute wellbeing from a needs vector — mirrors wellbeingFromNeeds()
+// in AgentProfile.jsx and computeMalaise() on the bridge.
+const WELLBEING_BANDS_MAP = [
+  { name: 'thriving',   min: 70 },
+  { name: 'uneasy',     min: 50 },
+  { name: 'distressed', min: 30 },
+  { name: 'in_crisis',  min: 0  },
+]
+function wellbeingFromNeeds(needs) {
+  if (!needs) return null
+  let min = 100
+  for (const axis of ['energy', 'social', 'curiosity']) {
+    const v = typeof needs[axis] === 'number' ? needs[axis] : 100
+    if (v < min) min = v
+  }
+  for (const b of WELLBEING_BANDS_MAP) if (min >= b.min) return b.name
+  return 'in_crisis'
+}
+
+
 export default function RoomMap({
   width = 16,
   height = 12,
@@ -43,6 +63,9 @@ export default function RoomMap({
         avatarUrl: c?.avatarUrl,
         running: !!c?.runtime?.running,
         thinking: !!c?.runtime?.thinking,
+        // Derived wellbeing badge — only on character avatars since
+        // admin/human/observer kinds don't carry needs.
+        wellbeing: kind === 'character' ? wellbeingFromNeeds(c?.needs) : null,
         kind,
       }
       const key = `${a.x},${a.y}`
@@ -128,6 +151,12 @@ export default function RoomMap({
                         />
                       ) : (
                         <span>{initial(o.name)}</span>
+                      )}
+                      {o.wellbeing && (
+                        <span
+                          className={`room-tile-wellbeing wellbeing-${o.wellbeing}`}
+                          title={`wellbeing: ${o.wellbeing.replace('_', ' ')}`}
+                        />
                       )}
                     </div>
                   )

@@ -188,12 +188,19 @@ export const VERBS = {
       energy: { type: "number", required: false, min: 0, max: 100, integer: true },
       social: { type: "number", required: false, min: 0, max: 100, integer: true },
     },
-    effects: ["character.mood"],
+    effects: ["character.mood", "needs.energy", "needs.social"],
     handler: async (deps, ctx, args) => {
       const next = {};
       if (typeof args.energy === "number") next.energy = args.energy;
       if (typeof args.social === "number") next.social = args.social;
       if (Object.keys(next).length === 0) return;
+      // Mirror to the needs tracker so the same value is the source of
+      // truth for both the LLM-facing mood vector and the server-side
+      // decay loop. Optional dep — falls through silently if not wired.
+      if (deps.needsTracker?.setAxis) {
+        if (typeof next.energy === "number") deps.needsTracker.setAxis(ctx.pubkey, "energy", next.energy);
+        if (typeof next.social === "number") deps.needsTracker.setAxis(ctx.pubkey, "social", next.social);
+      }
       const c = deps.loadCharacter(ctx.pubkey);
       const merged = { ...(c?.mood || {}), ...next };
       deps.saveCharacterManifest(ctx.pubkey, { mood: merged });
