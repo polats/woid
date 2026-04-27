@@ -1,0 +1,15 @@
+{
+  "id": "goodnight",
+  "phase": "closing",
+  "weight": 5,
+  "intensity_min": 0,
+  "intensity_max": 1.0,
+  "cooldown_sim_min": 720,
+  "roles": {
+    "speaker": { "select": "random_with_scene_mate" }
+  },
+  "actions": [
+    { "type": "Suggest", "target": "speaker", "text": "The day is winding down. If you want to mark it with someone — a goodnight, a softer close — now's the moment." }
+  ],
+  "description": "Plants the impulse to mark end-of-day with whoever's around."
+}

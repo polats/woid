@@ -134,14 +134,30 @@ export function createPerception(opts = {}) {
  * Format an array of perception events as a human-readable block to
  * inject into the LLM's user-turn prompt. Returns "" for empty input.
  */
-export function formatPerceptionEvents(events, { selfPubkey } = {}) {
+export function formatPerceptionEvents(events, { selfPubkey, header = "Recent events:" } = {}) {
   if (!Array.isArray(events) || events.length === 0) return "";
-  const lines = ["Recent events:"];
+  const lines = [header];
   for (const ev of events) {
     const formatted = formatOne(ev, selfPubkey);
     if (formatted) lines.push("  " + formatted);
   }
   return lines.length === 1 ? "" : lines.join("\n");
+}
+
+// Kinds that originate from the storyteller (card pool / director). We
+// surface these in their own context section so the waterfall (and a
+// human reading the system prompt) can see at a glance when a card
+// influenced the turn.
+export const STORYTELLER_PERCEPTION_KINDS = new Set(["card_prompt", "ambient_moment"]);
+
+export function partitionStorytellerEvents(events) {
+  const cues = [];
+  const rest = [];
+  for (const ev of (events || [])) {
+    if (ev && STORYTELLER_PERCEPTION_KINDS.has(ev.kind)) cues.push(ev);
+    else rest.push(ev);
+  }
+  return { cues, rest };
 }
 
 function formatOne(ev, selfPubkey) {
@@ -198,6 +214,14 @@ function formatOne(ev, selfPubkey) {
         : "";
       return `(your ${slot}routine usually finds you in the ${room}${tile})`;
     }
+    case "ambient_moment":
+      return ev.text ? `(${truncate(ev.text)})` : null;
+    case "card_prompt":
+      // An impulse the storyteller is offering to you — not a fact,
+      // not an obligation. Take it, ignore it, twist it, whatever
+      // fits the moment. The wording flags it as internal so the LLM
+      // doesn't read it as someone speaking to it.
+      return ev.text ? `(impulse: ${truncate(ev.text)})` : null;
     case "moodlet_added":
       return `(you feel: ${ev.reason || ev.tag || "something"})`;
     case "moodlet_expired":

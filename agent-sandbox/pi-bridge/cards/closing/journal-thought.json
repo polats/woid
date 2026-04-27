@@ -1,0 +1,15 @@
+{
+  "id": "journal-thought",
+  "phase": "closing",
+  "weight": 6,
+  "intensity_min": 0,
+  "intensity_max": 1.0,
+  "once_per_session": true,
+  "roles": {
+    "host": { "select": "random_character" }
+  },
+  "actions": [
+    { "type": "EmitMoodlet", "target": "host", "tag": "reflective", "weight": 1, "reason": "quiet end-of-day thought", "duration_sim_min": 240 }
+  ],
+  "description": "A reflective thought near the end of the day."
+}

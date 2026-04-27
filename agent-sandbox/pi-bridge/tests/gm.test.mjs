@@ -74,7 +74,7 @@ test("createGM throws when missing deps", () => {
 test("createGM exposes the full verb registry", () => {
   const { deps } = makeStubDeps();
   const gm = createGM(deps);
-  for (const v of ["say", "say_to", "move", "face", "wait", "emote", "set_state", "set_mood", "post", "idle"]) {
+  for (const v of ["say", "say_to", "move", "face", "wait", "emote", "set_state", "set_mood", "feel", "post", "idle"]) {
     assert.ok(gm.verbs[v], `expected verb "${v}" in registry`);
   }
   assert.equal(gm.verbs, VERBS);
@@ -245,6 +245,66 @@ test("legacy alias: mood → set_mood", async () => {
   });
 });
 
+// ── feel ──
+
+function makeFeelDeps() {
+  const { deps, calls } = makeStubDeps();
+  const moodletCalls = [];
+  deps.moodletsTracker = {
+    emit: (pk, m) => { const rec = { id: `m_${moodletCalls.length}`, ...m }; moodletCalls.push({ pk, m: rec }); return rec; },
+  };
+  deps.simClock = { cadence: () => 60_000 };
+  return { deps, calls, moodletCalls };
+}
+
+test("feel: emits a self-moodlet via tracker + perception", async () => {
+  const { deps, calls, moodletCalls } = makeFeelDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { verb: "feel", args: { tag: "felt_seen", weight: 2, reason: "she actually asked" } });
+  assert.equal(res.ok, true);
+  assert.equal(moodletCalls.length, 1);
+  assert.equal(moodletCalls[0].pk, "abc123");
+  assert.equal(moodletCalls[0].m.tag, "felt_seen");
+  assert.equal(moodletCalls[0].m.weight, 2);
+  assert.equal(moodletCalls[0].m.source, "self");
+  // perception should record a moodlet_added on self.
+  const perc = calls.perception.find((p) => p.kind === "appendOne" && p.ev?.kind === "moodlet_added");
+  assert.ok(perc, "expected moodlet_added perception on self");
+  assert.equal(perc.target, "abc123");
+});
+
+test("feel: duration_sim_min × cadence → duration_ms", async () => {
+  const { deps, moodletCalls } = makeFeelDeps();
+  const gm = createGM(deps);
+  await gm.dispatch(ctx, { verb: "feel", args: { tag: "x", weight: 1, duration_sim_min: 90 } });
+  assert.equal(moodletCalls[0].m.duration_ms, 90 * 60_000);
+});
+
+test("feel: clamps out-of-range weight to ±5", async () => {
+  const { deps, moodletCalls } = makeFeelDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { verb: "feel", args: { tag: "x", weight: 99 } });
+  assert.equal(res.ok, true);
+  assert.equal(moodletCalls[0].m.weight, 5);
+});
+
+test("feel: rejects missing tag", async () => {
+  const { deps, moodletCalls } = makeFeelDeps();
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { verb: "feel", args: { weight: 1 } });
+  assert.equal(res.ok, false);
+  assert.equal(moodletCalls.length, 0);
+});
+
+test("feel: no-op when moodletsTracker not wired", async () => {
+  const { deps } = makeStubDeps();
+  // No moodletsTracker provided.
+  const gm = createGM(deps);
+  const res = await gm.dispatch(ctx, { verb: "feel", args: { tag: "x", weight: 1 } });
+  // Verb returned ok=true (handler short-circuits gracefully) — no throw.
+  assert.equal(res.ok, true);
+});
+
 // ── post ──
 
 test("post: routes to relayPost — no roomSay", async () => {
@@ -344,6 +404,21 @@ test("say: no perception broadcast when alone", async () => {
   await gm.dispatch(ctx, { type: "say", text: "anybody here?" });
   assert.equal(calls.perception.length, 0);
   assert.equal(calls.roomSay.length, 1);
+});
+
+test("say_to: rejects self-addressed speech", async () => {
+  const { deps, calls } = makeStubDeps({
+    inScene: () => true,
+    sceneMatesOf: () => ["carlos_pk"],
+  });
+  const gm = createGM(deps);
+  // Refer to self by name and by pubkey — both should be rejected.
+  const r1 = await gm.dispatch(ctx, { type: "say_to", recipient: "Marisol", text: "hey" });
+  assert.equal(r1.ok, false);
+  assert.match(r1.reason, /can't say_to yourself/);
+  const r2 = await gm.dispatch(ctx, { type: "say_to", recipient: "abc123", text: "hey" });
+  assert.equal(r2.ok, false);
+  assert.equal(calls.roomSay.length, 0);
 });
 
 test("say_to: rejects when recipient not in room", async () => {

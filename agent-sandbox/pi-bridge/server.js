@@ -3,7 +3,7 @@ import cors from "cors";
 import { spawn } from "child_process";
 import { createInterface } from "readline";
 import { EventEmitter } from "events";
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, cpSync, rmSync, renameSync, createReadStream } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, appendFileSync, cpSync, rmSync, renameSync, createReadStream } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir, tmpdir } from "os";
@@ -28,6 +28,10 @@ import { summarizeSceneToMoodlets, buildSceneSummaryPrompt } from "./scene-summa
 import { generateJson as openaiCompatGenerateJson } from "./providers/openai-compat.js";
 import { createSimClock } from "./storyteller/sim-clock.js";
 import { createSessionStore } from "./storyteller/sessions.js";
+import { createCardLoader } from "./storyteller/cards.js";
+import { createCardRuntime } from "./storyteller/actions.js";
+import { createDirector } from "./storyteller/director.js";
+import { buildStorytellerSnapshot, phaseForSimSlot } from "./storyteller/snapshot.js";
 import { createRelationships } from "./relationships.js";
 import { createObjectsRegistry, seedDefaults as seedDefaultObjects } from "./objects-registry.js";
 import { OBJECT_TYPES } from "./objects.js";
@@ -1240,9 +1244,13 @@ const simClock = createSimClock({
 // Session store (#275 slice 2) — opens a record per sim-day, hands
 // it off to the recap pipeline at rollover. The onClose hook below
 // gets wired once the recap function is defined.
+// Forward declaration — director is constructed after this block but
+// we want each new sim-day to clear once_per_session memory.
+let _onSessionOpen = null;
 const sessions = createSessionStore({
   workspacePath: WORKSPACE,
   simClock,
+  onOpen: (rec) => { _onSessionOpen?.(rec); },
   onClose: async (rec) => {
     try {
       await runRecap(rec);
@@ -1346,6 +1354,114 @@ const imagePostCooldown = new Map();
 // Relationships graph (#365) — per-pair record of who's met whom.
 // Backs first-meeting detection in the scene-open hook below.
 const relationships = createRelationships({ workspacePath: WORKSPACE });
+
+// Storyteller card pool + director (#305). Loads JSON cards from disk
+// on boot, wires the action runtime against the live moodlets/session/
+// perception surfaces, and runs the director on a tick interval. The
+// director picks one eligible card per tick (cooldowns gate frequency)
+// and routes by sim-clock phase: opening at the start of the day,
+// ambient through the middle, closing toward bedtime.
+const CARDS_DIR = process.env.CARDS_DIR || join(__dirname, "cards");
+const cardLoader = createCardLoader({ cardsPath: CARDS_DIR, fs: { existsSync, readdirSync, statSync, readFileSync } });
+const _cardLoadResult = cardLoader.loadAll();
+console.log(`[cards] loaded ${_cardLoadResult.loaded} cards from ${CARDS_DIR}` + (_cardLoadResult.errors.length ? ` (${_cardLoadResult.errors.length} errors)` : ""));
+for (const e of _cardLoadResult.errors) console.warn(`[cards]   ${e.path}: ${e.error}`);
+
+function listInRoomPubkeys() {
+  // Only characters with a live runtime are eligible for card role
+  // binding — dormant characters have no turn loop, so moodlets and
+  // speech perceptions emitted onto them go nowhere.
+  const out = [];
+  for (const c of listCharacters()) {
+    if (activeRuntimeForCharacter(c.pubkey)) out.push(c.pubkey);
+  }
+  return out;
+}
+
+// Get scene-mates of pubkey using its runtime's room snapshot. Returns
+// [] if the character isn't running or has no runtime.
+function sceneMatesOfPubkey(pubkey) {
+  const active = activeRuntimeForCharacter(pubkey);
+  if (!active) return [];
+  const snap = roomSnapshot(active.id);
+  if (!snap) return [];
+  const me = (snap.agents || []).find((a) => a.npub === pubkey);
+  if (!me) return [];
+  const out = [];
+  for (const a of snap.agents || []) {
+    if (!a?.npub || a.npub === pubkey) continue;
+    if (Math.max(Math.abs((a.x ?? 0) - (me.x ?? 0)), Math.abs((a.y ?? 0) - (me.y ?? 0))) <= 1) {
+      out.push(a.npub);
+    }
+  }
+  return out;
+}
+
+function pickRandomCharacterPubkey(opts = {}) {
+  let pool = listInRoomPubkeys();
+  if (opts.withSceneMate) {
+    const withMates = pool.filter((pk) => sceneMatesOfPubkey(pk).length > 0);
+    // Fall back to any in-room character only if nobody has a scene-
+    // mate — better to fire on the wrong character than not at all.
+    if (withMates.length > 0) pool = withMates;
+  }
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function pickSceneMatePubkey(anchorPubkey) {
+  const mates = sceneMatesOfPubkey(anchorPubkey);
+  if (mates.length === 0) return null;
+  return mates[Math.floor(Math.random() * mates.length)];
+}
+
+let _scheduleCardCb = () => {};   // resolved once director is constructed
+const cardRuntime = createCardRuntime({
+  moodletsTracker: moodlets,
+  sessions,
+  perception,
+  simClock,
+  loadCharacter,
+  pickRandomCharacter: pickRandomCharacterPubkey,
+  pickSceneMate: pickSceneMatePubkey,
+  scheduleCard: (id, atRealMs) => _scheduleCardCb(id, atRealMs),
+});
+
+// Persistent fire log — append-only JSONL of every card the director
+// has decided to fire. Survives restart so the Storyteller tab can
+// load history on mount instead of only showing in-tab fires.
+const DIRECTOR_LOG_PATH = join(WORKSPACE, "director-log.jsonl");
+function recordFire(rec) {
+  try {
+    appendFileSync(DIRECTOR_LOG_PATH, JSON.stringify(rec) + "\n");
+  } catch (err) {
+    console.warn("[director] log write failed:", err?.message || err);
+  }
+  const who = rec.bindings ? Object.entries(rec.bindings).map(([r, p]) => `${r}:${(loadCharacter(p)?.name || p.slice(0, 6))}`).join(" ") : "";
+  console.log(`[director] ${rec.ok ? "fired" : "FAILED"} ${rec.card_id} (${rec.source}) phase=${rec.phase} intensity=${rec.intensity} ${who}${rec.reason ? ` — ${rec.reason}` : ""}`);
+}
+
+const director = createDirector({
+  cards: cardLoader,
+  runtime: cardRuntime,
+  moodlets,
+  sessions,
+  simClock,
+  onFire: recordFire,
+});
+_scheduleCardCb = director.scheduleCard;
+_onSessionOpen = () => director.onSessionOpen();
+
+const DIRECTOR_TICK_MS = Number(process.env.DIRECTOR_TICK_MS) || 60_000;
+setInterval(() => {
+  // Skip when there are no in-room characters to bind roles against.
+  if (listInRoomPubkeys().length === 0) return;
+  const slot = simClock.currentSlot?.();
+  const phase = phaseForSimSlot(slot);
+  director.tick({ phases: new Set([phase]) }).catch((err) => {
+    console.warn("[director] tick failed:", err?.message || err);
+  });
+}, DIRECTOR_TICK_MS).unref();
 
 // Cross-character post subscriptions (#365 slice 4). Each follower
 // subscribes to the kind:1 events of every character they follow;
@@ -1790,6 +1906,7 @@ function appendActionToSession(rec, result, snapshot) {
       text: args.text,
       image_url: args.image_url || null,
       image_prompt: args.image_prompt || null,
+      event_id: result.event_id || null,
       room,
       ...stamp,
     });
@@ -2790,6 +2907,133 @@ app.get("/sessions/:simDay", (req, res) => {
 
 app.get("/health/sessions", (_req, res) => {
   res.json(sessions.snapshot());
+});
+
+// ── Image post log (#415) ───────────────────────────────────────────
+//
+// Aggregates every `kind: "post"` session event with an `image_url`
+// across the open + closed sessions and exposes them newest-first
+// for the Image Posts browser view.
+
+function collectImagePosts() {
+  const out = [];
+  const all = [sessions.current(), ...sessions.listClosed({ limit: 200 })].filter(Boolean);
+  for (const s of all) {
+    for (const ev of s.events || []) {
+      if (ev.kind !== "post" || !ev.image_url) continue;
+      out.push({
+        event_id: ev.event_id || null,
+        actor_pubkey: ev.actor_pubkey,
+        actor_name: ev.actor_name,
+        text: ev.text || "",
+        image_url: ev.image_url,
+        image_prompt: ev.image_prompt || null,
+        sim_iso: ev.sim_iso || null,
+        sim_day: ev.sim_day ?? s.sim_day,
+        ts: ev.ts || s.opened_at,
+      });
+    }
+  }
+  out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return out;
+}
+
+app.get("/image-posts", (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const cursor = Math.max(Number(req.query.cursor) || 0, 0);
+  const all = collectImagePosts();
+  const items = all.slice(cursor, cursor + limit);
+  const nextCursor = cursor + items.length < all.length ? cursor + items.length : null;
+  res.json({ items, total: all.length, nextCursor });
+});
+
+app.get("/image-posts/status", (_req, res) => {
+  const all = collectImagePosts();
+  const byCharacter = {};
+  for (const p of all) {
+    const k = p.actor_pubkey || "unknown";
+    byCharacter[k] = (byCharacter[k] || 0) + 1;
+  }
+  res.json({
+    count: all.length,
+    latest_ts: all[0]?.ts || null,
+    latest_actor_name: all[0]?.actor_name || null,
+    latest_sim_iso: all[0]?.sim_iso || null,
+    by_character: byCharacter,
+  });
+});
+
+// ── Storyteller (#305) ──────────────────────────────────────────────
+//
+// Lets the UI watch the director and force fires for verification.
+// /storyteller/snapshot returns intensity + per-card eligibility so
+// the operator can see why a card is or isn't firing right now.
+
+app.get("/storyteller/snapshot", (_req, res) => {
+  res.json(buildStorytellerSnapshot({
+    director,
+    cardLoader,
+    slot: simClock.currentSlot?.(),
+    characterCount: listInRoomPubkeys().length,
+    loadErrors: _cardLoadResult.errors,
+  }));
+});
+
+app.get("/storyteller/cards", (_req, res) => {
+  res.json({ cards: cardLoader.listAll() });
+});
+
+app.get("/storyteller/log", (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500);
+  if (!existsSync(DIRECTOR_LOG_PATH)) return res.json({ entries: [] });
+  let text;
+  try { text = readFileSync(DIRECTOR_LOG_PATH, "utf-8"); }
+  catch (err) { return res.status(500).json({ error: err?.message || String(err) }); }
+  const lines = text.split("\n").filter((l) => l.trim());
+  const tail = lines.slice(-limit);
+  const entries = [];
+  for (const line of tail) {
+    try { entries.push(JSON.parse(line)); }
+    catch { /* skip malformed */ }
+  }
+  // Newest first.
+  entries.reverse();
+  res.json({ entries, total: lines.length });
+});
+
+app.post("/storyteller/tick", async (_req, res) => {
+  if (listInRoomPubkeys().length === 0) {
+    return res.status(409).json({ error: "no characters in the room — director can't bind roles" });
+  }
+  const slot = simClock.currentSlot?.();
+  const phase = phaseForSimSlot(slot);
+  try {
+    const r = await director.tick({ phases: new Set([phase]) });
+    res.json({ ok: true, phase, ...r });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post("/storyteller/fire", async (req, res) => {
+  const cardId = String(req.body?.card_id || "");
+  if (!cardId) return res.status(400).json({ error: "card_id required" });
+  const card = cardLoader.get(cardId);
+  if (!card) return res.status(404).json({ error: `unknown card "${cardId}"` });
+  if (listInRoomPubkeys().length === 0) {
+    return res.status(409).json({ error: "no characters in the room — can't bind roles" });
+  }
+  try {
+    const result = await director.fireCard(card, { roleBindings: req.body?.role_bindings, source: "manual" });
+    res.json({ ok: result.ok !== false, card_id: cardId, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post("/storyteller/reset-session", (_req, res) => {
+  director.onSessionOpen();
+  res.json({ ok: true });
 });
 
 // Dev-only: fast-forward the sim-clock to the next sim-day rollover

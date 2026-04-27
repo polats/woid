@@ -18,6 +18,8 @@ const SECTION_MAP = [
   ['Others in the room',     'Roster'],
   ['New in the room',        'New messages'],
   ['Recent chat:',           'Recent chat'],
+  ['Storyteller cues',       'Storyteller'],
+  ['Recent events:',         'Recent events'],
   ['Your recent actions',    'Recent Actions'],
   ['Tools available',        'Tool Manual'],
   ['Read .pi/skills',        'Tool Manual'],
@@ -35,6 +37,8 @@ const SECTION_COLORS = {
   'Roster':          'var(--violet)',
   'New messages':    'var(--prussian)',
   'Recent chat':     'var(--prussian)',
+  'Storyteller':     'var(--violet)',
+  'Recent events':   'var(--ok-ink)',
   'Recent Actions':  'var(--amber)',
   'Tool Manual':     'var(--ink-muted)',
 }

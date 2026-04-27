@@ -1,0 +1,15 @@
+{
+  "id": "morning-kettle",
+  "phase": "opening",
+  "weight": 8,
+  "intensity_min": 0,
+  "intensity_max": 0.5,
+  "once_per_session": true,
+  "roles": {
+    "early_riser": { "select": "random_character" }
+  },
+  "actions": [
+    { "type": "EmitMoodlet", "target": "early_riser", "tag": "had_quiet_morning", "weight": 2, "reason": "alone with the kettle", "duration_sim_min": 180 }
+  ],
+  "description": "Someone is the first one up; the kitchen is quiet."
+}

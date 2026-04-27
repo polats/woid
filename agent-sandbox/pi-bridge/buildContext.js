@@ -15,7 +15,7 @@
  * run so pi's --session-backed history sees it as a normal user message.
  */
 
-import { formatPerceptionEvents } from "./perception.js";
+import { formatPerceptionEvents, partitionStorytellerEvents } from "./perception.js";
 import { sceneMatesOf, SCENE_RADIUS } from "./scenes.js";
 import { OBJECT_TYPES } from "./objects.js";
 import { VERBS } from "./gm.js";
@@ -419,10 +419,26 @@ export function buildUserTurn({
   // room-message delta above; the two will eventually consolidate when
   // scenes (slice 4+) gate which speech events the LLM sees in detail.
   if (Array.isArray(perceptionEvents) && perceptionEvents.length > 0) {
-    const block = formatPerceptionEvents(perceptionEvents, { selfPubkey: me.pubkey });
-    if (block) {
-      lines.push("");
-      lines.push(block);
+    // Split storyteller-driven cues (card_prompt, ambient_moment) into
+    // their own block so their influence on the turn is observable —
+    // the waterfall picks the header up as a distinct section.
+    const { cues, rest } = partitionStorytellerEvents(perceptionEvents);
+    if (cues.length > 0) {
+      const block = formatPerceptionEvents(cues, {
+        selfPubkey: me.pubkey,
+        header: "Storyteller cues (impulses you can take, twist, or ignore):",
+      });
+      if (block) {
+        lines.push("");
+        lines.push(block);
+      }
+    }
+    if (rest.length > 0) {
+      const block = formatPerceptionEvents(rest, { selfPubkey: me.pubkey });
+      if (block) {
+        lines.push("");
+        lines.push(block);
+      }
     }
   }
 

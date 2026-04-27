@@ -1,7 +1,7 @@
 ---
 name: World — Relationships graph + follow / cross-character perception / reply
 description: First-meeting detection, follow verb (kind:3), cross-character post subscription (followee's kind:1 → follower's perception), reply verb (kind:1 with NIP-10 e/p tags). The infrastructure for the Maya-meets-Roman scenario in docs/design/scenarios/.
-status: todo
+status: done
 order: 365
 epic: world
 depends_on: [275, 285, 305, 355]

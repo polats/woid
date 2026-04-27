@@ -1,0 +1,15 @@
+{
+  "id": "small-friction",
+  "phase": "ambient",
+  "weight": 3,
+  "intensity_min": 0.3,
+  "intensity_max": 0.7,
+  "cooldown_sim_min": 480,
+  "roles": {
+    "speaker": { "select": "random_with_scene_mate" }
+  },
+  "actions": [
+    { "type": "Suggest", "target": "speaker", "text": "Some small thing in the room or about someone present is grating on you. Say something about it if you want — petty is fine, you're allowed to be petty." }
+  ],
+  "description": "Plants a low-grade irritation. The speaker decides whether to voice it."
+}

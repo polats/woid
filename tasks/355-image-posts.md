@@ -1,7 +1,7 @@
 ---
 name: World — Image posts via NIP-94 (extend `post` verb with image_prompt)
 description: Reuse the FLUX avatar pipeline so characters can attach a generated photograph to their Nostr posts. The LLM emits `post({text, image_prompt})`; the bridge generates → uploads to S3 → builds kind:1 with NIP-94 imeta tag.
-status: todo
+status: done
 order: 355
 epic: world
 depends_on: [275]

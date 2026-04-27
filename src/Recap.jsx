@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import config from './config.js'
+import { eventUrl } from './lib/jumble.js'
 
 const cfg = config.agentSandbox || {}
+const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'
 
 /**
  * Recap stack — pinned card on the Sandbox home showing the most
@@ -183,17 +185,53 @@ export default function Recap() {
 function RecapEvents({ session }) {
   const events = session.events || []
   if (events.length === 0) return null
+  // Image posts surface inline as a thumbnail strip — buried in the
+  // event list otherwise. #385.
+  const imagePosts = events
+    .filter((e) => e.kind === 'post' && e.image_url)
+    .map((e) => ({
+      url: e.image_url,
+      alt: e.text || '',
+      actor: e.actor_name,
+      // Click-through to the Jumble post (NIP-19 nevent). Falls back to
+      // the raw image URL if event_id is missing on older session events.
+      link: e.event_id
+        ? eventUrl(JUMBLE_URL, e.event_id, { author: e.actor_pubkey, kind: 1 })
+        : e.image_url,
+    }))
   return (
-    <details className="recap-events">
-      <summary>{events.length} source event{events.length === 1 ? '' : 's'}</summary>
-      <ul className="recap-events-list">
-        {events.map((e, i) => (
-          <li key={i} className={`recap-event recap-event-${e.kind}`}>
-            {renderEvent(e)}
-          </li>
-        ))}
-      </ul>
-    </details>
+    <>
+      {imagePosts.length > 0 && <RecapImageStrip posts={imagePosts} />}
+      <details className="recap-events">
+        <summary>{events.length} source event{events.length === 1 ? '' : 's'}</summary>
+        <ul className="recap-events-list">
+          {events.map((e, i) => (
+            <li key={i} className={`recap-event recap-event-${e.kind}`}>
+              {renderEvent(e)}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </>
+  )
+}
+
+function RecapImageStrip({ posts }) {
+  const visible = posts.slice(0, 3)
+  const overflow = posts.length - visible.length
+  return (
+    <div className="recap-images">
+      {visible.map((p) => (
+        <a key={p.url} href={p.link || p.url} target="_blank" rel="noreferrer"
+          className="recap-image-link"
+          title={p.actor ? `${p.actor}: ${p.alt} — open on Jumble` : 'open on Jumble'}>
+          <img src={p.url} alt={p.alt} loading="lazy" />
+        </a>
+      ))}
+      {overflow > 0 && (
+        <span className="recap-image-overflow" title={`${overflow} more`}>+{overflow}</span>
+      )}
+    </div>
   )
 }
 

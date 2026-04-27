@@ -1,0 +1,21 @@
+{
+  "id": "memory-surfacing",
+  "phase": "ambient",
+  "weight": 3,
+  "intensity_min": 0.2,
+  "intensity_max": 0.7,
+  "cooldown_sim_min": 600,
+  "roles": {
+    "host": { "select": "random_character" }
+  },
+  "actions": [
+    { "type": "RNG", "prob": 0.5, "then": "warm_memory", "else": "bittersweet_memory" },
+    { "type": "Label", "name": "warm_memory" },
+    { "type": "EmitMoodlet", "target": "host", "tag": "fond_recollection", "weight": 2, "reason": "remembered something good", "duration_sim_min": 120 },
+    { "type": "GoTo", "target": "end" },
+    { "type": "Label", "name": "bittersweet_memory" },
+    { "type": "EmitMoodlet", "target": "host", "tag": "wistful", "weight": -1, "reason": "remembered something it hurt to remember", "duration_sim_min": 120 },
+    { "type": "Label", "name": "end" }
+  ],
+  "description": "A memory surfaces — warm or wistful, depending on the roll."
+}

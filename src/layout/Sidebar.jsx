@@ -1,4 +1,5 @@
 import PersonaApiStatus from './PersonaApiStatus.jsx'
+import ImagePostsStatus from './ImagePostsStatus.jsx'
 
 export default function Sidebar({
   config,
@@ -63,6 +64,12 @@ export default function Sidebar({
               <PersonaApiStatus
                 bridgeUrl={config.agentSandbox?.bridgeUrl}
                 active={route.view === 'personas'}
+              />
+            </li>
+            <li>
+              <ImagePostsStatus
+                bridgeUrl={config.agentSandbox?.bridgeUrl}
+                active={route.view === 'image-posts'}
               />
             </li>
           </ul>

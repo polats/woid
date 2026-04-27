@@ -1,0 +1,15 @@
+{
+  "id": "check-in",
+  "phase": "ambient",
+  "weight": 5,
+  "intensity_min": 0.2,
+  "intensity_max": 0.8,
+  "cooldown_sim_min": 300,
+  "roles": {
+    "speaker": { "select": "random_with_scene_mate" }
+  },
+  "actions": [
+    { "type": "Suggest", "target": "speaker", "text": "You notice someone in the room could use being asked how they're doing. Check in with them — your way." }
+  ],
+  "description": "Plants the impulse to check in on someone. The speaker chooses who and how."
+}

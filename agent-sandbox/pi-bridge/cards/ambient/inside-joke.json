@@ -1,0 +1,15 @@
+{
+  "id": "inside-joke",
+  "phase": "ambient",
+  "weight": 4,
+  "intensity_min": 0,
+  "intensity_max": 0.6,
+  "cooldown_sim_min": 480,
+  "roles": {
+    "speaker": { "select": "random_with_scene_mate" }
+  },
+  "actions": [
+    { "type": "Suggest", "target": "speaker", "text": "Something from a shared past with someone in the room just floated up in your head — small, dumb, maybe funny. If the moment wants it, bring it up." }
+  ],
+  "description": "Plants the impulse to surface an old reference. The speaker picks the memory and the wording."
+}

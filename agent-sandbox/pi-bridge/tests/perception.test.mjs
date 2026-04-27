@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createPerception, formatPerceptionEvents } from "../perception.js";
+import { createPerception, formatPerceptionEvents, partitionStorytellerEvents } from "../perception.js";
 
 // ── append / drain ──
 
@@ -209,6 +209,58 @@ test("format: long speech truncated with ellipsis", () => {
   ]);
   assert.ok(out.length < long.length, "should truncate long speech");
   assert.match(out, /…/);
+});
+
+test("format: ambient_moment renders the text in parens", () => {
+  const out = formatPerceptionEvents([
+    { kind: "ambient_moment", text: "the kettle is the only sound." },
+  ]);
+  assert.match(out, /\(the kettle is the only sound\.\)/);
+});
+
+test("partitionStorytellerEvents: splits card_prompt + ambient_moment from rest", () => {
+  const events = [
+    { kind: "speech", text: "hi" },
+    { kind: "card_prompt", text: "say hi if you feel like it" },
+    { kind: "moodlet_added", tag: "warmed" },
+    { kind: "ambient_moment", text: "the room is quiet" },
+  ];
+  const { cues, rest } = partitionStorytellerEvents(events);
+  assert.equal(cues.length, 2);
+  assert.equal(cues[0].kind, "card_prompt");
+  assert.equal(cues[1].kind, "ambient_moment");
+  assert.equal(rest.length, 2);
+  assert.equal(rest[0].kind, "speech");
+  assert.equal(rest[1].kind, "moodlet_added");
+});
+
+test("partitionStorytellerEvents: empty / nullish input safe", () => {
+  assert.deepEqual(partitionStorytellerEvents(null), { cues: [], rest: [] });
+  assert.deepEqual(partitionStorytellerEvents([]), { cues: [], rest: [] });
+});
+
+test("format: custom header replaces default 'Recent events:' line", () => {
+  const out = formatPerceptionEvents(
+    [{ kind: "card_prompt", text: "you might check in on them" }],
+    { header: "Storyteller cues:" },
+  );
+  assert.match(out, /^Storyteller cues:/);
+  assert.match(out, /\(impulse: you might check in on them\)/);
+});
+
+test("format: card_prompt renders as an internal impulse", () => {
+  const out = formatPerceptionEvents([
+    { kind: "card_prompt", text: "if you want to greet them, do." },
+  ]);
+  assert.match(out, /\(impulse: if you want to greet them, do\.\)/);
+});
+
+test("format: ambient_moment with no text is dropped", () => {
+  const out = formatPerceptionEvents([
+    { kind: "ambient_moment" },
+    { kind: "speech", from_name: "Bob", text: "hi" },
+  ]);
+  assert.equal(out.split("\n").length, 2); // header + speech only
 });
 
 test("format: unknown kinds are dropped", () => {

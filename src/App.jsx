@@ -10,6 +10,7 @@ import RelayFeed from './RelayFeed.jsx'
 import Testing from './Testing.jsx'
 import Doc from './views/Doc.jsx'
 import Personas from './views/Personas.jsx'
+import ImagePosts from './views/ImagePosts.jsx'
 import Network from './views/Network.jsx'
 import Journal from './views/Journal.jsx'
 
@@ -44,6 +45,7 @@ function parseHash() {
   if (h === 'agent-sandbox') return { view: 'agent-sandbox' }
   if (h === 'relay-feed') return { view: 'relay-feed' }
   if (h === 'personas') return { view: 'personas' }
+  if (h === 'image-posts') return { view: 'image-posts' }
   if (h === 'network') return { view: 'network' }
   if (h === 'journal') return { view: 'journal' }
   if (h === 'testing') return { view: 'testing' }
@@ -145,6 +147,7 @@ export default function App() {
         {route.view === 'agent-sandbox' && config.features?.agentSandbox && <Sandbox />}
         {route.view === 'relay-feed' && config.features?.agentSandbox && <RelayFeed />}
         {route.view === 'personas' && config.features?.agentSandbox && <Personas />}
+        {route.view === 'image-posts' && config.features?.agentSandbox && <ImagePosts />}
         {route.view === 'network' && config.features?.agentSandbox && <Network />}
         {route.view === 'journal' && config.features?.agentSandbox && <Journal />}
         {route.view === 'testing' && <Testing initialSession={route.sessionName} />}

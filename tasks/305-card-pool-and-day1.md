@@ -1,7 +1,7 @@
 ---
 name: World — Card pool, director, and authored Day 1
 description: The hand-authored content pipeline. Card schema in `cards/*.md`, director with intensity scalar, action DSL, and the authored Day-1 hook (cold open, seed residents, cliffhanger).
-status: todo
+status: done
 order: 305
 epic: world
 depends_on: [275, 285, 295]

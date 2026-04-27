@@ -31,6 +31,7 @@ const CURRENT_FILE = "current.json";
  *   simClock: { now: Function, simDay: Function, nextDayRolloverRealMs: Function },
  *   fs?: typeof FS_DEFAULT,
  *   id?: () => string,
+ *   onOpen?: (session) => void,
  *   onClose?: (session) => Promise<void> | void,
  * }} opts
  */
@@ -110,6 +111,10 @@ export function createSessionStore(opts = {}) {
       recap: null,  // filled by recap LLM call at close
     };
     persistCurrent();
+    if (typeof opts.onOpen === "function") {
+      try { opts.onOpen(current); }
+      catch (err) { console.warn("[sessions] onOpen hook failed:", err?.message || err); }
+    }
     return current;
   }
 

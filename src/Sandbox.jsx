@@ -5,6 +5,7 @@ import { useBridgeModels } from './hooks/useBridgeModels.js'
 import AgentDrawer from './AgentDrawer.jsx'
 import RoomMap from './RoomMap.jsx'
 import Recap from './Recap.jsx'
+import Storyteller from './Storyteller.jsx'
 import SimClock from './SimClock.jsx'
 
 const cfg = config.agentSandbox || {}
@@ -427,6 +428,16 @@ export default function Sandbox() {
             >
               Recap
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={stageView === 'storyteller'}
+              className={`sandbox3-stage-tab${stageView === 'storyteller' ? ' active' : ''}`}
+              onClick={() => setStageView('storyteller')}
+              title="Storyteller — director state, card pool, force fires"
+            >
+              Storyteller
+            </button>
           </nav>
           <div className="sandbox3-stage-meta">
             <SimClock />
@@ -435,10 +446,23 @@ export default function Sandbox() {
           {roomError && <p className="agent-sandbox-error">{roomError}</p>}
         </header>
 
-        <div className={`sandbox3-map-frame${stageView === 'recap' ? ' showing-recap' : ''}`}>
+        <div className={`sandbox3-map-frame${stageView !== 'room' ? ' showing-recap' : ''}`}>
           {stageView === 'recap' ? (
             <div className="sandbox3-recap-pane">
               <Recap />
+            </div>
+          ) : stageView === 'storyteller' ? (
+            <div className="sandbox3-recap-pane">
+              <Storyteller
+                characters={characters}
+                onInspect={(pubkey) => {
+                  const c = characters.find((x) => x.pubkey === pubkey)
+                  safelySetInspectedId(
+                    c?.runtime?.agentId || pubkey,
+                    c?.runtime?.agentId ? 'context' : 'profile',
+                  )
+                }}
+              />
             </div>
           ) : (
           <RoomMap

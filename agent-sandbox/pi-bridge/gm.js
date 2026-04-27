@@ -106,6 +106,12 @@ export const VERBS = {
       if (!recipientPubkey) {
         throw new Error(`recipient "${args.recipient}" not found in room`);
       }
+      if (recipientPubkey === ctx.pubkey) {
+        // Talking to yourself in say_to bounces a speech perception
+        // back into your own stream and can spiral into a self-reply
+        // loop. Prefer set_state / a journal note for inner monologue.
+        throw new Error("you can't say_to yourself — use set_state or just say if you want to think out loud");
+      }
       if (!deps.inScene(snapshot, ctx.pubkey, recipientPubkey)) {
         throw new Error(`recipient "${args.recipient}" not in scene with you`);
       }
@@ -222,6 +228,39 @@ export const VERBS = {
       const c = deps.loadCharacter(ctx.pubkey);
       const merged = { ...(c?.mood || {}), ...next };
       deps.saveCharacterManifest(ctx.pubkey, { mood: merged });
+    },
+  },
+
+  feel: {
+    args: {
+      tag: { type: "string", required: true, max: 64 },
+      weight: { type: "number", required: true, min: -5, max: 5, integer: true },
+      reason: { type: "string", required: false, max: 200 },
+      duration_sim_min: { type: "number", required: false, min: 1, max: 24 * 60 * 7, integer: true },
+    },
+    effects: ["character.moodlet"],
+    prompt: "register a feeling on yourself in response to what just happened — a moodlet with a short tag (e.g. \"felt_seen\", \"miffed\", \"warmed_up\"), a weight in [-5, +5], a brief reason, and an optional duration in sim-minutes (default ~2 sim-hours). Use sparingly: only when the moment genuinely shifted how you feel.",
+    handler: async (deps, ctx, args) => {
+      if (!deps.moodletsTracker?.emit) return;
+      let durationMs;
+      if (Number.isFinite(args.duration_sim_min) && deps.simClock?.cadence) {
+        durationMs = args.duration_sim_min * deps.simClock.cadence();
+      }
+      const m = deps.moodletsTracker.emit(ctx.pubkey, {
+        tag: args.tag,
+        weight: args.weight,
+        reason: args.reason || "",
+        source: "self",
+        duration_ms: durationMs,
+      });
+      if (m) {
+        deps.perception?.appendOne?.(ctx.pubkey, {
+          kind: "moodlet_added",
+          tag: m.tag,
+          weight: m.weight,
+          reason: m.reason || null,
+        });
+      }
     },
   },
 
@@ -538,9 +577,14 @@ export function createGM(deps) {
       return { ok: false, verb, reason: validation.reason };
     }
     try {
-      await def.handler(deps, ctx, validation.args);
-      // Return the cleaned args alongside the verb so callers (journal,
-      // turn log) can record the canonical post-validation form.
+      const handlerResult = await def.handler(deps, ctx, validation.args);
+      // If the handler returned a richer result object (e.g. post with
+      // image_url, follow with resolved target_name), merge it over the
+      // default shape so session-event recorders see the canonical
+      // post-execution form. Plain undefined / void = use defaults.
+      if (handlerResult && typeof handlerResult === "object") {
+        return { ok: true, verb, args: validation.args, ...handlerResult };
+      }
       return { ok: true, verb, args: validation.args };
     } catch (err) {
       return { ok: false, verb, reason: err?.message || String(err) };

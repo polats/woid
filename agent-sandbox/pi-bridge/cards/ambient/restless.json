@@ -1,0 +1,15 @@
+{
+  "id": "restless",
+  "phase": "ambient",
+  "weight": 4,
+  "intensity_min": 0,
+  "intensity_max": 0.4,
+  "cooldown_sim_min": 240,
+  "roles": {
+    "host": { "select": "random_character" }
+  },
+  "actions": [
+    { "type": "EmitMoodlet", "target": "host", "tag": "restless", "weight": -1, "reason": "can't sit still", "duration_sim_min": 90 }
+  ],
+  "description": "Low-key restlessness on a quiet day."
+}

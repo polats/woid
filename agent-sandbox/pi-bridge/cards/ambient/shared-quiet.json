@@ -1,0 +1,17 @@
+{
+  "id": "shared-quiet",
+  "phase": "ambient",
+  "weight": 5,
+  "intensity_min": 0,
+  "intensity_max": 0.5,
+  "cooldown_sim_min": 360,
+  "roles": {
+    "a": { "select": "random_with_scene_mate" },
+    "b": { "select": "scene_mate", "of": "a" }
+  },
+  "actions": [
+    { "type": "Notice", "target": "a", "text": "You're sharing the room in comfortable silence — neither of you needs to fill it." },
+    { "type": "Notice", "target": "b", "text": "You're sharing the room in comfortable silence — neither of you needs to fill it." }
+  ],
+  "description": "Two people sharing the same room without needing to fill it."
+}
