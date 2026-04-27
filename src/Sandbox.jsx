@@ -4,12 +4,20 @@ import { useSandboxRoom } from './hooks/useSandboxRoom.js'
 import { useBridgeModels } from './hooks/useBridgeModels.js'
 import AgentDrawer from './AgentDrawer.jsx'
 import RoomMap from './RoomMap.jsx'
+import Recap from './Recap.jsx'
+import SimClock from './SimClock.jsx'
 
 const cfg = config.agentSandbox || {}
 const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'
 
 export default function Sandbox() {
   const [characters, setCharacters] = useState([])
+  const [objects, setObjects] = useState([])
+  const [rooms, setRooms] = useState([])
+  // Stage view toggle — tabs sit on the stage header so the user can
+  // switch between the room (the live map) and Recap (the daily
+  // session summary). Default to room since that's the main surface.
+  const [stageView, setStageView] = useState('room')
   const [adminInfo, setAdminInfo] = useState(null)
   const [chatDraft, setChatDraft] = useState('')
   const [chatSending, setChatSending] = useState(false)
@@ -54,8 +62,14 @@ export default function Sandbox() {
   const refresh = useCallback(async () => {
     if (!cfg.bridgeUrl) return
     try {
-      const j = await fetch(`${cfg.bridgeUrl}/characters`).then((r) => r.json())
-      setCharacters(j.characters || [])
+      const [chars, objs, rms] = await Promise.all([
+        fetch(`${cfg.bridgeUrl}/characters`).then((r) => r.json()),
+        fetch(`${cfg.bridgeUrl}/objects`).then((r) => r.ok ? r.json() : { objects: [] }),
+        fetch(`${cfg.bridgeUrl}/rooms`).then((r) => r.ok ? r.json() : { rooms: [] }),
+      ])
+      setCharacters(chars.characters || [])
+      setObjects(objs.objects || [])
+      setRooms(rms.rooms || [])
     } catch {
       /* transient fetch errors are fine */
     }
@@ -392,14 +406,44 @@ export default function Sandbox() {
 
       <section className="sandbox3-stage">
         <header>
-          <h2>
-            Room <small className={`status status-${roomStatus}`}>{roomStatus}</small>
-          </h2>
+          <nav className="sandbox3-stage-tabs" role="tablist" aria-label="stage view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={stageView === 'room'}
+              className={`sandbox3-stage-tab${stageView === 'room' ? ' active' : ''}`}
+              onClick={() => setStageView('room')}
+              title="Room — the live map"
+            >
+              Room
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={stageView === 'recap'}
+              className={`sandbox3-stage-tab${stageView === 'recap' ? ' active' : ''}`}
+              onClick={() => setStageView('recap')}
+              title="Recap — daily session summary"
+            >
+              Recap
+            </button>
+          </nav>
+          <div className="sandbox3-stage-meta">
+            <SimClock />
+            <small className={`status status-${roomStatus}`}>{roomStatus}</small>
+          </div>
           {roomError && <p className="agent-sandbox-error">{roomError}</p>}
         </header>
 
-        <div className="sandbox3-map-frame">
+        <div className={`sandbox3-map-frame${stageView === 'recap' ? ' showing-recap' : ''}`}>
+          {stageView === 'recap' ? (
+            <div className="sandbox3-recap-pane">
+              <Recap />
+            </div>
+          ) : (
           <RoomMap
+            objects={objects}
+            rooms={rooms}
             width={roomState.width}
             height={roomState.height}
             characters={characters}
@@ -418,6 +462,7 @@ export default function Sandbox() {
               )
             }}
           />
+          )}
           {dropToast && <div className="sandbox3-toast">{dropToast.text}</div>}
         </div>
 

@@ -195,11 +195,11 @@ test("format: need_low for social uses social-specific flavor", () => {
   assert.match(out, /feeling withdrawn/);
 });
 
-test("format: need_low for curiosity reads as bored/restless", () => {
+test("format: need_low for energy uses energy-specific flavor", () => {
   const out = formatPerceptionEvents([
-    { kind: "need_low", axis: "curiosity", value: 5 },
+    { kind: "need_low", axis: "energy", value: 5 },
   ]);
-  assert.match(out, /feeling bored, restless/);
+  assert.match(out, /feeling drained/);
 });
 
 test("format: long speech truncated with ellipsis", () => {

@@ -1,9 +1,20 @@
 ---
 name: World phase 3 — Smart Objects on the map
 description: Map objects advertise affordances (Sims pattern). NPCs query nearby objects for what they offer; utility scoring against the needs vector picks an interaction. The world tells NPCs what they can do, not the other way around.
-status: todo
+status: in_progress
 order: 245
 epic: world
+related: [285, 305, 325]
+---
+
+> **Status note (2026-04):** Slice 1 (object types, registry, glyph rendering, `/objects` endpoints) **shipped**. Subsequent work has been split out:
+>
+> - Spatial structure / per-character apartments / building canvas → **#285**.
+> - The `use(object_id)` verb + capacity + need-satisfaction effects → folded into the action DSL of **#305** as `EmitMoodlet` + `ModifyRel` effects on use; classic affordance scoring (Sims utility) is *not* what we're building — moodlet-emit on interaction is.
+> - Currency-driven object purchase / placement / shop UI → **#325**.
+>
+> What remains in this card: the `use` verb itself, capacity tracking, and the `query_affordances` helper that lets cards / LLM see what's interactable in the current room.
+
 ---
 
 Depends on #225 (verb set) and #235 (needs vector). This phase makes "go to the bakery" resolve to a concrete object that knows how to be interacted with, instead of an abstract location label.

@@ -21,6 +21,16 @@ import { createSceneTracker } from "./scene-tracker.js";
 import { createJournal } from "./journal.js";
 import { buildMemoryBlock } from "./memory.js";
 import { createNeedsTracker, describeNeeds, NEED_AXES } from "./needs.js";
+import { createMoodletsTracker, describeMood, seedDemoMoodlets } from "./moodlets.js";
+import { createRoomsRegistry } from "./rooms.js";
+import { createScheduler as createScheduleRegistry, slotForHour, SLOTS as SCHEDULE_SLOTS } from "./schedule.js";
+import { summarizeSceneToMoodlets, buildSceneSummaryPrompt } from "./scene-summary.js";
+import { generateJson as openaiCompatGenerateJson } from "./providers/openai-compat.js";
+import { createSimClock } from "./storyteller/sim-clock.js";
+import { createSessionStore } from "./storyteller/sessions.js";
+import { createRelationships } from "./relationships.js";
+import { createObjectsRegistry, seedDefaults as seedDefaultObjects } from "./objects-registry.js";
+import { OBJECT_TYPES } from "./objects.js";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { generateSecretKey } from "nostr-tools/pure";
 import { SimplePool, useWebSocketImplementation } from "nostr-tools/pool";
@@ -542,6 +552,11 @@ function randomName() {
 }
 
 function loadCharacter(pubkey) {
+  // Cheap up-front guard: getCharDir → npubEncode crashes on anything
+  // that's not a 64-char hex string. Synthetic pubkeys (e.g. session
+  // event seeders, future test fixtures) should silently return null
+  // rather than throw through the whole recap / scene-summary stack.
+  if (typeof pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(pubkey)) return null;
   const dir = getCharDir(pubkey);
   const manifestPath = join(dir, "agent.json");
   const skPath = join(dir, "sk.hex");
@@ -651,14 +666,24 @@ function createCharacter({ name } = {}) {
     // A/B comparison until the user explicitly switches them.
     promptStyle: "dynamic",
     mood: { energy: 50, social: 50 },
-    // Needs scaffold (#235 slice 1). Three axes seeded at 75 so
-    // characters spawn comfortable and decay over the next sim-hours.
-    // No personality / vibe — character voice lives in `about`.
-    needs: { energy: 75, social: 75, curiosity: 75 },
+    // Needs scaffold (#275 — narrowed from #235's 3-axis to 2-axis).
+    // Two axes seeded at 75 so characters spawn comfortable and
+    // decay over the next sim-hours. Mood / friction is the moodlet
+    // system's job; character voice lives in `about`.
+    needs: { energy: 75, social: 75 },
     follows: seedFollows,
     createdAt: Date.now(),
   });
   console.log(`[char] created ${pubkey.slice(0, 12)}... name="${manifest.name}" follows=${seedFollows.length}`);
+  // Apartment ownership (#285 phase A) — first three characters claim
+  // 1A/1B/1C in declaration order; later characters get null and can
+  // be assigned manually via PATCH /rooms/:id/owner if needed.
+  try {
+    const owned = roomsRegistry?.assignOwnership(pubkey);
+    if (owned) {
+      console.log(`[char] ${manifest.name} → owns ${owned.room_id}`);
+    }
+  } catch { /* rooms registry may not be initialised yet during boot */ }
   // Fire-and-forget — relay publish failure shouldn't break creation.
   publishCharacterFollows(pubkey).catch((err) =>
     console.warn(`[char:follows] publish failed for ${manifest.name}:`, err?.message || err),
@@ -872,11 +897,33 @@ async function fluxOnce(prompt) {
   return b64;
 }
 
-// Generate FLUX bytes for a name+about pair without persisting anywhere.
-// Used by both the character-bound flow (generateAvatar) and the
-// standalone public API.
-async function generateAvatarBytes({ name, about, promptOverride }) {
+// Generate FLUX bytes for an arbitrary prompt without persisting
+// anywhere. Used by avatar generation (with portrait framing applied
+// upstream) and post-image generation (raw-prompt pass-through).
+async function generateImageBytes({ prompt }) {
   if (!NVIDIA_NIM_API_KEY) throw new Error("NVIDIA_NIM_API_KEY not configured");
+  if (!prompt || !prompt.trim()) throw new Error("generateImageBytes: prompt required");
+  // Retry under the MIN_AVATAR_BYTES threshold — that's the signature of a
+  // safety-blocked / black-frame response from FLUX.
+  let b64;
+  let bytes = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    b64 = await fluxOnce(prompt);
+    bytes = Math.floor((b64.length * 3) / 4);
+    if (bytes >= MIN_AVATAR_BYTES) break;
+    console.warn(`[image] attempt ${attempt + 1}: ${bytes}B — likely blank/safety-blocked, retrying`);
+  }
+  if (bytes < MIN_AVATAR_BYTES) {
+    throw new Error(`image kept coming back tiny (${bytes}B) — safety-blocked prompt?`);
+  }
+  const mime = sniffMime(b64);
+  const ext = mime.split("/")[1] || "jpg";
+  const buffer = Buffer.from(b64, "base64");
+  return { buffer, mime, ext };
+}
+
+// Avatar prompt is portrait-framed; everything else is raw-prompt.
+async function generateAvatarBytes({ name, about, promptOverride }) {
   const override = (promptOverride ?? "").trim().slice(0, 1800);
   const bio = (about ?? "").trim().slice(0, 600);
   let prompt;
@@ -891,25 +938,40 @@ async function generateAvatarBytes({ name, about, promptOverride }) {
       "No text, no watermark, no signatures, no UI chrome, no logos.",
     ].join(" ");
   }
-
-  // Retry under the MIN_AVATAR_BYTES threshold — that's the signature of a
-  // safety-blocked / black-frame response from FLUX.
-  let b64;
-  let bytes = 0;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    b64 = await fluxOnce(prompt);
-    bytes = Math.floor((b64.length * 3) / 4);
-    if (bytes >= MIN_AVATAR_BYTES) break;
-    console.warn(`[avatar] attempt ${attempt + 1}: ${bytes}B — likely blank/safety-blocked, retrying`);
-  }
-  if (bytes < MIN_AVATAR_BYTES) {
-    throw new Error(`avatar kept coming back tiny (${bytes}B) — safety-blocked prompt?`);
-  }
-
-  const mime = sniffMime(b64);
-  const ext = mime.split("/")[1] || "jpg";
-  const buffer = Buffer.from(b64, "base64");
+  const { buffer, mime, ext } = await generateImageBytes({ prompt });
   return { buffer, mime, ext, prompt };
+}
+
+// Post-image generation — raw prompt with a small style nudge so
+// generated photos read as photographs rather than illustrations.
+async function generatePostImage({ pubkey, prompt }) {
+  // Frame as photography. Mundane > spectacular per the audience
+  // tuning in docs/design/follow-ups.md §2. The user's prompt comes
+  // through verbatim; we add the style afterthought and a no-text rule.
+  const framed = [
+    prompt.trim(),
+    "Photographic style — natural light, narrow depth of field, real-world textures.",
+    "Mundane and specific. No text, no watermark, no logos.",
+  ].join(" ");
+  const { buffer, mime, ext } = await generateImageBytes({ prompt: framed });
+
+  const sha = crypto.createHash("sha256").update(buffer).digest("hex");
+  const shortId = sha.slice(0, 16);
+
+  if (s3.s3Configured) {
+    await s3.putPostImage(pubkey, shortId, ext, buffer, mime);
+  } else {
+    // Local-dev fallback: write to the character dir using the
+    // post-<shortId>.<ext> filename convention the GET /posts/...
+    // route knows how to find on disk.
+    const dir = getCharDir(pubkey);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `post-${shortId}.${ext}`), buffer);
+  }
+  // URL is the same in both cases — the /posts/:pubkey/:filename route
+  // chooses S3-or-disk at serve time.
+  const url = `${PUBLIC_BRIDGE_URL}/posts/${pubkey}/${shortId}.${ext}`;
+  return { url, mime, ext, sha256: sha, prompt: framed };
 }
 
 async function generateAvatar({ pubkey, name, about, promptOverride }) {
@@ -1061,9 +1123,23 @@ const sceneTracker = createSceneTracker({
 // the post-dispatch turn record. Persisted as JSONL under $WORKSPACE.
 const journal = createJournal({ workspacePath: WORKSPACE });
 
-// Needs tracker — server-side per-character drives (energy, social,
-// curiosity) decaying uniformly over sim-time. Slice 1 of #235 is
-// pure tracking; slice 2 will add the need-interrupt → LLM gate.
+// Smart-objects registry (#245 slice 1) — placed objects in the
+// room, persisted as JSONL under $WORKSPACE. Slice 2 adds the
+// `use(object_id)` verb + capacity / effects through the GM.
+const objectsRegistry = createObjectsRegistry({ workspacePath: WORKSPACE });
+// Seed a small starter set on first boot so the demo isn't empty.
+// Idempotent — only fires when the registry has zero placed objects.
+if (process.env.WOID_OBJECTS_SEED !== "0") {
+  const seeded = seedDefaultObjects(objectsRegistry);
+  if (seeded.length > 0) {
+    console.log(`[objects] seeded ${seeded.length} default objects`);
+  }
+}
+
+// Needs tracker — server-side per-character drives (energy, social)
+// decaying uniformly over sim-time. #275 narrowed this from #235's
+// 3-axis (energy/social/curiosity) to 2-axis; psychological state
+// moved to the moodlet system in moodlets.js.
 const needsTracker = createNeedsTracker({
   simMinutePerRealMs: Number(process.env.NEEDS_SIM_MS_PER_MIN) || undefined,
 });
@@ -1104,10 +1180,261 @@ setInterval(() => {
   }
 }, NEEDS_TICK_MS).unref();
 
+// Moodlets tracker (#275) — event-driven affect, summed into a 4-band
+// mood. Replaces the curiosity decay axis. Persistence is per-pubkey
+// JSONL under $WORKSPACE/moodlets/. Expiry runs in the same 5s tick
+// loop as needs.
+const moodlets = createMoodletsTracker({ workspacePath: WORKSPACE });
+
+setInterval(() => {
+  try {
+    const expired = moodlets.expireDue();
+    for (const r of expired) {
+      for (const m of r.expired) {
+        // Surface expiry as a perception event so the LLM sees its
+        // own mood shifting ("you no longer feel insulted by Bob").
+        perception.appendOne(r.pubkey, {
+          kind: "moodlet_expired",
+          tag: m.tag,
+          reason: m.reason || null,
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[moodlets] expiry tick failed:", err?.message || err);
+  }
+}, NEEDS_TICK_MS).unref();
+
+// Rooms (#285 phase A) — named regions on the existing 16×12 grid.
+// Default building seeded if the workspace has no rooms.json yet.
+// `assignDefaultApartment` is called from createCharacter so each
+// new character claims an apartment in declaration order.
+const roomsRegistry = createRoomsRegistry({ workspacePath: WORKSPACE });
+
+// Backfill ownership for any characters loaded from the workspace
+// that don't have an apartment yet. Idempotent — `assignOwnership`
+// returns the existing record if the pubkey is already bound.
+for (const c of listCharacters()) {
+  roomsRegistry.assignOwnership(c.pubkey);
+}
+
+// Schedules (#235 reshape — coarse 4-slot timetable per character).
+// "own" slots resolve to whichever apartment the character owns via
+// the rooms registry. The mover tick below uses this to route
+// characters into their slot's room. Named `schedules` (not
+// `scheduler`) to avoid colliding with the heartbeat scheduler from
+// scheduler.js declared further down.
+const schedules = createScheduleRegistry({
+  workspacePath: WORKSPACE,
+  resolveOwnRoom: (pubkey) => roomsRegistry.roomOwnedBy(pubkey),
+});
+
+// Sim-clock (#275 slice 2) — maps real-time → sim-time. Default
+// cadence is 1:1 (1 real-min = 1 sim-min) so a sim-day is a real
+// day; override via SIM_MS_PER_MIN env for fast dev cycles.
+const simClock = createSimClock({
+  workspacePath: WORKSPACE,
+  simMinutePerRealMs: Number(process.env.SIM_MS_PER_MIN) || undefined,
+});
+
+// Session store (#275 slice 2) — opens a record per sim-day, hands
+// it off to the recap pipeline at rollover. The onClose hook below
+// gets wired once the recap function is defined.
+const sessions = createSessionStore({
+  workspacePath: WORKSPACE,
+  simClock,
+  onClose: async (rec) => {
+    try {
+      await runRecap(rec);
+    } catch (err) {
+      console.warn("[sessions] recap failed:", err?.message || err);
+    }
+  },
+});
+
+// Forward declaration — runRecap is defined further down so it can
+// see the LLM provider plumbing. The session store calls into a
+// closure that resolves to the live function at call time.
+let runRecap = async (rec) => {
+  console.log(`[sessions] closed sim-day ${rec.sim_day} (no recap fn yet)`);
+};
+
+// Open today's session on boot (or restore an in-flight one).
+sessions.ensureOpen().catch((err) =>
+  console.warn("[sessions] initial ensureOpen failed:", err?.message || err),
+);
+
+// Sim-day rollover poller — every 30s real-time, re-check the sim-
+// day and let the session store close+open as needed. Cheap enough
+// to run unconditionally; ensureOpen is a no-op when nothing has
+// changed.
+setInterval(() => {
+  sessions.ensureOpen().catch((err) =>
+    console.warn("[sessions] rollover ensureOpen failed:", err?.message || err),
+  );
+}, 30_000).unref();
+
+// Schedule nudger — emits perception events ("your routine usually
+// has you in the kitchen now") into characters' streams when their
+// current room doesn't match their slot's target. The LLM decides
+// whether to move via its existing `move` verb. We deliberately do
+// NOT force-move characters here — schedules are a *gate* for the
+// behavior layer, not a hard puppet string. (Pattern from
+// docs/research/rimworld.md: schedules allow subtrees, they don't
+// drive primitives.)
+//
+// Re-nudge logic: only emit when (a) the slot/target is fresh for
+// this character, or (b) the same nudge has been outstanding longer
+// than NUDGE_REPEAT_MS — covers the case where the LLM ignored or
+// missed the first nudge.
+const SCHEDULE_TICK_MS = Number(process.env.SCHEDULE_TICK_MS) || 30_000;
+const NUDGE_REPEAT_MS = Number(process.env.SCHEDULE_NUDGE_REPEAT_MS) || 5 * 60 * 1000;
+const lastNudge = new Map();   // pubkey → { slot, target_room_id, ts }
+
+setInterval(() => {
+  try {
+    // Slot is driven by sim-time (#275 slice 2), not wall-clock.
+    const slot = simClock.currentSlot();
+    for (const c of listCharacters()) {
+      const targetRoomId = schedules.targetRoomFor(c.pubkey, slot);
+      if (!targetRoomId) continue;
+      // Only running characters get nudged — without a colyseus seat
+      // there's no presence to read and no turn loop to react.
+      const active = activeRuntimeForCharacter(c.pubkey);
+      if (!active) continue;
+      const snap = roomSnapshot(active.id);
+      const me = (snap?.agents || []).find((a) => a.npub === c.pubkey);
+      if (!me) continue;
+      const currentRoomId = roomsRegistry.roomAt(me.x, me.y);
+      if (currentRoomId === targetRoomId) {
+        // Already where the routine wants them — clear nudge memory
+        // so the next slot gets a fresh nudge on transition.
+        lastNudge.delete(c.pubkey);
+        continue;
+      }
+      const last = lastNudge.get(c.pubkey);
+      const isFresh = !last || last.slot !== slot || last.target_room_id !== targetRoomId;
+      const cooldownExpired = last && Date.now() - last.ts > NUDGE_REPEAT_MS;
+      if (!isFresh && !cooldownExpired) continue;
+      const tile = roomsRegistry.randomFreeTile(targetRoomId, snap);
+      if (!tile) continue;
+      const target = roomsRegistry.get(targetRoomId);
+      perception.appendOne(c.pubkey, {
+        kind: "schedule_nudge",
+        slot,
+        target_room_id: targetRoomId,
+        target_room_name: target?.name || targetRoomId,
+        target_x: tile.x,
+        target_y: tile.y,
+      });
+      lastNudge.set(c.pubkey, { slot, target_room_id: targetRoomId, ts: Date.now() });
+      console.log(`[schedule] nudge ${c.name || c.pubkey.slice(0, 8)} → ${targetRoomId} (${tile.x},${tile.y}) [slot=${slot}]`);
+    }
+  } catch (err) {
+    console.error("[schedule] tick failed:", err?.message || err);
+  }
+}, SCHEDULE_TICK_MS).unref();
+
 // Game Master — single chokepoint for committing harness-emitted
 // actions. See gm.js for the verb registry and dispatch logic.
 // The tracker's effective scene helpers are injected so cooldowns
 // flow through to say_to validation, perception emission, etc.
+// Per-character last image-post timestamp (real-ms) for cooldown
+// gating in the post verb. In-memory only; resets on bridge restart.
+const imagePostCooldown = new Map();
+
+// Relationships graph (#365) — per-pair record of who's met whom.
+// Backs first-meeting detection in the scene-open hook below.
+const relationships = createRelationships({ workspacePath: WORKSPACE });
+
+// Cross-character post subscriptions (#365 slice 4). Each follower
+// subscribes to the kind:1 events of every character they follow;
+// new posts surface as `post_seen` perception events on the follower.
+//
+// Implementation: per-follower subscription handle keyed by pubkey.
+// On follow, we close any existing handle and re-open with the
+// expanded author set. Deduplicated by event_id.
+const postSubscriptions = new Map();          // followerPubkey → SubCloser
+const postSubSeen = new Map();                // followerPubkey → Set<event_id>
+
+function imetaUrl(tags) {
+  for (const t of tags || []) {
+    if (t[0] !== "imeta") continue;
+    for (const piece of t.slice(1)) {
+      if (typeof piece === "string" && piece.startsWith("url ")) return piece.slice(4);
+    }
+  }
+  return null;
+}
+
+function refreshPostSubscriptionFor(followerPubkey) {
+  const c = loadCharacter(followerPubkey);
+  if (!c) return;
+  const authors = (c.follows || []).filter((p) => /^[0-9a-f]{64}$/i.test(p));
+  const existing = postSubscriptions.get(followerPubkey);
+  if (existing) try { existing.close(); } catch {}
+  if (authors.length === 0) {
+    postSubscriptions.delete(followerPubkey);
+    return;
+  }
+  if (!postSubSeen.has(followerPubkey)) postSubSeen.set(followerPubkey, new Set());
+  const seen = postSubSeen.get(followerPubkey);
+  // Skip events older than now-1s so a re-subscribe after restart
+  // doesn't re-fire stale posts as new perception.
+  const since = Math.floor(Date.now() / 1000);
+  const sub = pool.subscribe(
+    [RELAY_URL],
+    { kinds: [1], authors, since },
+    {
+      onevent(ev) {
+        if (!ev?.id || seen.has(ev.id)) return;
+        seen.add(ev.id);
+        const author = loadCharacter(ev.pubkey);
+        perception.appendOne(followerPubkey, {
+          kind: "post_seen",
+          from_pubkey: ev.pubkey,
+          from_name: author?.name || ev.pubkey.slice(0, 8),
+          event_id: ev.id,
+          text: ev.content,
+          image_url: imetaUrl(ev.tags),
+          posted_at: ev.created_at,
+        });
+        try {
+          sessions.appendEvent({
+            kind: "post_seen",
+            actor_name: author?.name || ev.pubkey.slice(0, 8),
+            actor_pubkey: ev.pubkey,
+            seen_by_name: c.name,
+            seen_by_pubkey: followerPubkey,
+            text: ev.content,
+            image_url: imetaUrl(ev.tags),
+            event_id: ev.id,
+            sim_iso: simClock?.now?.()?.sim_iso,
+          });
+        } catch {}
+        console.log(`[post-sub] ${c.name} saw ${author?.name || ev.pubkey.slice(0, 8)}'s post (${ev.id.slice(0, 8)})`);
+      },
+    },
+  );
+  postSubscriptions.set(followerPubkey, sub);
+}
+
+function subscribeToFollowee(followerPubkey, _followeePubkey) {
+  // We just refresh the entire follower's subscription against their
+  // current follows[]. The follower → manifest write happened just
+  // before this call.
+  refreshPostSubscriptionFor(followerPubkey);
+}
+
+// On boot, re-subscribe all characters with non-empty follows lists.
+function bootPostSubscriptions() {
+  for (const c of listCharacters()) {
+    if (Array.isArray(c.follows) && c.follows.length > 0) {
+      refreshPostSubscriptionFor(c.pubkey);
+    }
+  }
+}
+
 const gm = createGM({
   roomSay,
   relayPost,
@@ -1117,8 +1444,21 @@ const gm = createGM({
   perception,
   sceneMatesOf: sceneTracker.effectiveSceneMatesOf,
   inScene: sceneTracker.effectiveInScene,
-  needsTracker, // optional GM dep; set_mood mirrors values into the tracker
+  needsTracker,           // set_mood + use→need effects mirror values
+  moodletsTracker: moodlets,
+  objectsRegistry,
+  simClock,                // use→advance_sim (sleep skips ahead)
+  getSnapshot: roomSnapshot,
+  generatePostImage,        // post(image_prompt) generates + uploads
+  imagePostCooldown,
+  publishCharacterFollows,  // follow verb publishes kind:3
+  subscribeToFollowee,      // follow verb wires post-subscription
 });
+
+// Boot: open subscriptions for every character that already has a
+// non-empty follows list so Roman-already-followed-Maya scenarios
+// keep working across restarts.
+bootPostSubscriptions();
 
 // Heartbeat scheduler — drives autonomous turns at a scene-aware
 // cadence so characters keep thinking even with no incoming events.
@@ -1180,6 +1520,16 @@ async function executeActions(rec, actions) {
         verb: result.verb,
         args: result.args,
       });
+      // Recap-source widening (#275 slice 2 follow-up). Append to the
+      // active session's perception window so the recap LLM has more
+      // than just scene_close to chew on. Solo characters produce no
+      // scenes — without this hook every solo day fell back to "Day N
+      // passed quietly."
+      try {
+        appendActionToSession(rec, result, snapshot);
+      } catch (err) {
+        console.warn("[sessions] action append failed:", err?.message || err);
+      }
       // Record the committed action with the tracker so budget /
       // soft-stop / hard-cap can fire. Closes scenes that exceeded
       // their gate; participants see the close event next turn.
@@ -1207,6 +1557,47 @@ function emitSceneTransitionEvents(transitions) {
       sceneId: scene.sceneId,
       with_pubkeys: scene.participants,
     });
+    // First-meeting hook (#365). For pairs we've never tracked, the
+    // relationship store creates a record and we broadcast a special
+    // first_meeting perception so both characters know this is novel.
+    if (Array.isArray(scene.participants) && scene.participants.length === 2) {
+      const [a, b] = scene.participants;
+      const sim = simClock?.now?.();
+      const enc = relationships.recordEncounter(a, b, {
+        sim_iso: sim?.sim_iso, sim_day: sim?.sim_day,
+      });
+      if (enc.created) {
+        const charA = loadCharacter(a);
+        const charB = loadCharacter(b);
+        // To A: their counterpart is B.
+        perception.appendOne(a, {
+          kind: "first_meeting",
+          with_pubkey: b,
+          with_name: charB?.name || b.slice(0, 8),
+          sceneId: scene.sceneId,
+        });
+        perception.appendOne(b, {
+          kind: "first_meeting",
+          with_pubkey: a,
+          with_name: charA?.name || a.slice(0, 8),
+          sceneId: scene.sceneId,
+        });
+        // Recap surface.
+        try {
+          sessions.appendEvent({
+            kind: "first_meeting",
+            participants: [a, b],
+            participant_names: [charA?.name || a.slice(0, 8), charB?.name || b.slice(0, 8)],
+            sim_iso: sim?.sim_iso,
+            sim_hour: sim?.sim_hour,
+            sim_day: sim?.sim_day,
+          });
+        } catch (err) {
+          console.warn("[sessions] first_meeting append failed:", err?.message || err);
+        }
+        console.log(`[relationships] first meeting: ${charA?.name || a.slice(0, 8)} + ${charB?.name || b.slice(0, 8)}`);
+      }
+    }
   }
   for (const scene of transitions.closed || []) {
     emitSceneCloseEvent(scene);
@@ -1214,12 +1605,30 @@ function emitSceneTransitionEvents(transitions) {
 }
 
 function emitSceneCloseEvent(scene) {
-  // Finalise the journal record before broadcasting so a follow-up
-  // GET /scenes/:id can fetch the persisted form immediately.
-  journal.closeScene({
+  // Two-step finalize: pull the in-memory record, derive moodlets +
+  // any other post-scene state, then persist a single JSONL row that
+  // includes everything. (#275 slice 11.)
+  const rec = journal.finalizeScene({
     sceneId: scene.sceneId,
     endReason: scene.reason,
   });
+  // Even if the scene record is missing (rare race), still broadcast.
+  if (!rec) {
+    perception.broadcastTo(scene.participants, {
+      kind: "scene_close",
+      sceneId: scene.sceneId,
+      with_pubkeys: scene.participants,
+      reason: scene.reason,
+    });
+    return;
+  }
+  // Run scene → moodlet summarisation. LLM-enhanced when a provider
+  // is reachable; deterministic fallback otherwise. We DON'T await
+  // here because the broadcast + persistence shouldn't block on a
+  // network call; instead we kick off async and persist on completion.
+  summarizeAndEmitMoodlets(rec).catch((err) =>
+    console.warn(`[scene-summary] ${scene.sceneId} failed:`, err?.message || err),
+  );
   perception.broadcastTo(scene.participants, {
     kind: "scene_close",
     sceneId: scene.sceneId,
@@ -1228,6 +1637,378 @@ function emitSceneCloseEvent(scene) {
   });
   console.log(`[scenes] closed ${scene.sceneId} (${scene.participants.join(" + ")}) — ${scene.reason}`);
 }
+
+/**
+ * Async tail of scene close — run summarisation, emit moodlets onto
+ * each participant, persist the journal row with the moodlets attached.
+ * Errors anywhere in here just degrade us to the deterministic fallback.
+ */
+async function summarizeAndEmitMoodlets(rec) {
+  const result = await summarizeSceneToMoodlets(rec, {
+    resolveCharacter: (pk) => {
+      const c = loadCharacter(pk);
+      return c ? { name: c.name, about: c.about } : null;
+    },
+    llm: SCENE_SUMMARY_LLM_AVAILABLE ? sceneSummaryLLM : null,
+  });
+  for (const m of result.moodlets) {
+    const emitted = moodlets.emit(m.pubkey, m);
+    if (emitted) {
+      perception.appendOne(m.pubkey, {
+        kind: "moodlet_added",
+        tag: emitted.tag,
+        weight: emitted.weight,
+        reason: emitted.reason || null,
+      });
+    }
+  }
+  rec.moodlets = result.moodlets;
+  rec.summary_source = result.source;
+  journal.persistScene(rec);
+  console.log(`[scene-summary] ${rec.scene_id} → ${result.moodlets.length} moodlets (${result.source})`);
+
+  // Append a digest of this scene to today's session window so the
+  // recap pipeline can lead with it. We deliberately don't store the
+  // full transcript — just enough to recall (participants + last
+  // line + end_reason + emitted moodlets).
+  try {
+    const lastTurn = (rec.turns || []).slice(-1)[0];
+    sessions.appendEvent({
+      kind: "scene_close",
+      scene_id: rec.scene_id,
+      participants: rec.participants,
+      end_reason: rec.end_reason,
+      last_line: lastTurn?.args?.text ?? null,
+      last_actor_name: lastTurn?.actor_name ?? null,
+      moodlets: result.moodlets.map((m) => ({
+        pubkey: m.pubkey, tag: m.tag, weight: m.weight, reason: m.reason,
+      })),
+    });
+  } catch (err) {
+    console.warn("[sessions] appendEvent (scene_close) failed:", err?.message || err);
+  }
+}
+
+// LLM-availability flag + caller for scene summarisation. Uses the
+// openai-compat provider against NIM if a key is present; falls back
+// to the local llm if LOCAL_LLM_BASE_URL is set; else "no llm" and
+// the deterministic moodlet path runs.
+const SCENE_SUMMARY_PROVIDER =
+  NVIDIA_NIM_API_KEY ? "nvidia-nim" :
+  LOCAL_LLM_BASE_URL ? "local" :
+  null;
+const SCENE_SUMMARY_LLM_AVAILABLE = SCENE_SUMMARY_PROVIDER !== null;
+const SCENE_SUMMARY_MODEL =
+  process.env.SCENE_SUMMARY_MODEL ||
+  (SCENE_SUMMARY_PROVIDER === "nvidia-nim" ? "moonshotai/kimi-k2.5"
+   : SCENE_SUMMARY_PROVIDER === "local" ? "gemma-4-E4B-it-Q4_K_M"
+   : null);
+
+async function sceneSummaryLLM({ scene, characters }) {
+  const { systemPrompt, userPrompt } = buildSceneSummaryPrompt({
+    scene,
+    resolveCharacter: (pk) => characters.find((c) => c.pubkey === pk) || null,
+  });
+  const endpoint = SCENE_SUMMARY_PROVIDER === "nvidia-nim"
+    ? "https://integrate.api.nvidia.com/v1"
+    : LOCAL_LLM_BASE_URL;
+  const apiKey = SCENE_SUMMARY_PROVIDER === "nvidia-nim" ? NVIDIA_NIM_API_KEY : "";
+  const out = await openaiCompatGenerateJson({
+    endpoint, apiKey, systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
+    model: SCENE_SUMMARY_MODEL,
+    timeoutMs: 30_000,
+  });
+  if (!out?.text) return null;
+  try {
+    return JSON.parse(out.text);
+  } catch {
+    return null;
+  }
+}
+
+// ── Recap pipeline (#275 slice 2.2) ──
+//
+// Bound to the same provider plumbing as the scene-summary call.
+// Called from the sessions store's onClose hook (forward-declared
+// at boot, defined here, then assigned).
+const RECAP_FEW_SHOT = [
+  // Hand-written reference recaps used as few-shot. Each is a 2-3
+  // sentence past-tense vignette in the cozy / slice-of-life voice
+  // we tuned for in docs/design/vertical-slice.md.
+  `Marisol baked too much bread again, which she does when she's nervous, and Carlos pretended not to notice it was the third loaf this week. Tomek packed for his trip and forgot the same coat, twice.`,
+  `Cleo finished a chapter she's been threatening to finish for a month. She didn't say so, but she opened the window for the first time in days and left it open. Bo passed by twice and pretended not to look.`,
+  `Felix slept past noon and ordered food when he finally woke. Eira heard him on the phone with someone whose voice she'll recognize, eventually.`,
+];
+
+const RECAP_SYSTEM_PROMPT = [
+  `You write the daily recap for a tiny apartment building of LLM characters.`,
+  `Output ONLY the recap text — no headings, no list formatting, no quotation marks around the whole.`,
+  `Voice: small-press literary fiction, slightly dry. 80-150 words, past tense, named characters.`,
+  `Hard rules: no em-dashes; no "I'm sorry"; no "Of course"; no markdown bullets; no headlines.`,
+  `Pull only from events in the day's perception window the user supplies. Do NOT invent events not present.`,
+  `Lead with the strongest beat (a relationship transition, a moodlet of |weight|≥5, a departure). Close with something quiet.`,
+  ``,
+  `Examples of the voice you should match:`,
+  ...RECAP_FEW_SHOT.map((s, i) => `Example ${i + 1}: ${s}`),
+].join("\n");
+
+const RECAP_PROVIDER = SCENE_SUMMARY_PROVIDER;
+// Recap quality is voice-sensitive; use a non-reasoning chat-tuned
+// model so the entire token budget goes to prose. The default
+// SCENE_SUMMARY_MODEL (kimi-k2.5) is a reasoning model that consumes
+// max_tokens for hidden reasoning and emits empty visible text.
+const RECAP_MODEL =
+  process.env.RECAP_MODEL ||
+  (RECAP_PROVIDER === "nvidia-nim" ? "meta/llama-3.3-70b-instruct" : SCENE_SUMMARY_MODEL);
+
+/**
+ * Append a verb commit to the active session's window if it's the
+ * kind of action worth recapping. Conservative — most verbs (move,
+ * idle, wait, emote) are skipped to keep the recap signal-rich.
+ *
+ * Per-character per-room dedup is handled by `lastRecapRoom` so a
+ * sequence of `move` ticks within the same room only logs once.
+ */
+const lastRecapRoom = new Map();   // pubkey → room_id
+function appendActionToSession(rec, result, snapshot) {
+  const v = result.verb;
+  const args = result.args || {};
+  const me = (snapshot?.agents || []).find((a) => a.npub === rec.pubkey);
+  const tile = me ? { x: me.x, y: me.y } : null;
+  const room = tile ? roomsRegistry?.roomAt(tile.x, tile.y) ?? null : null;
+  // Stamp every recap-bound event with sim-time so the LLM's recap
+  // can place beats in the day ("by mid-afternoon, …").
+  const simNow = simClock?.now() || {};
+  const stamp = { sim_iso: simNow.sim_iso, sim_hour: simNow.sim_hour, sim_day: simNow.sim_day };
+
+  if (v === "post") {
+    sessions.appendEvent({
+      kind: "post",
+      actor_name: rec.name,
+      actor_pubkey: rec.pubkey,
+      text: args.text,
+      image_url: args.image_url || null,
+      image_prompt: args.image_prompt || null,
+      room,
+      ...stamp,
+    });
+    return;
+  }
+  if (v === "use") {
+    sessions.appendEvent({
+      kind: "object_used",
+      actor_name: rec.name,
+      actor_pubkey: rec.pubkey,
+      object_type: args.object_type,
+      affordance: args.affordance,
+      room,
+      ...stamp,
+    });
+    return;
+  }
+  if (v === "move") {
+    // Only log the first move into a new room (room transitions, not
+    // per-tile shuffles).
+    if (room && lastRecapRoom.get(rec.pubkey) !== room) {
+      lastRecapRoom.set(rec.pubkey, room);
+      sessions.appendEvent({
+        kind: "room_change",
+        actor_name: rec.name,
+        actor_pubkey: rec.pubkey,
+        room,
+        ...stamp,
+      });
+    }
+    return;
+  }
+  if (v === "follow") {
+    sessions.appendEvent({
+      kind: "follow",
+      actor_name: rec.name,
+      actor_pubkey: rec.pubkey,
+      target_pubkey: args.target_pubkey,
+      target_name: args.target_name || (loadCharacter(args.target_pubkey)?.name) || null,
+      ...stamp,
+    });
+    return;
+  }
+  if (v === "reply") {
+    sessions.appendEvent({
+      kind: "reply",
+      actor_name: rec.name,
+      actor_pubkey: rec.pubkey,
+      to_event_id: args.to_event_id,
+      to_pubkey: args.to_pubkey || null,
+      text: args.text,
+      image_url: args.image_url || null,
+      ...stamp,
+    });
+    return;
+  }
+  // Other verbs (say, say_to, set_state, set_mood, idle, wait, emote,
+  // face) don't directly feed the recap. Their narrative weight comes
+  // through the scene_close path or via moodlet emissions.
+}
+
+function summarizeEventsForRecap(rec) {
+  const lines = [];
+  for (const ev of rec.events || []) {
+    const tsLabel = ev.sim_iso || ev.sim_hour != null
+      ? ` [${ev.sim_iso || `hour ${ev.sim_hour}`}]`
+      : "";
+    if (ev.kind === "scene_close") {
+      const names = ev.participant_names && ev.participant_names.length === (ev.participants || []).length
+        ? ev.participant_names
+        : (ev.participants || []).map((pk) => {
+            const c = loadCharacter(pk);
+            return c?.name || pk.slice(0, 8);
+          });
+      lines.push(`scene closed (${ev.end_reason}) between ${names.join(" + ")}${tsLabel}` +
+        (ev.last_line ? ` — last line ${ev.last_actor_name || "?"}: "${truncate(ev.last_line, 120)}"` : ""));
+      for (const m of ev.moodlets || []) {
+        const c = loadCharacter(m.pubkey);
+        const name = m.actor_name || c?.name || (m.pubkey?.slice(0, 8) ?? "?");
+        lines.push(`  ${name} ${m.weight >= 0 ? "+" : ""}${m.weight}: ${m.reason || m.tag}`);
+      }
+    } else if (ev.kind === "post") {
+      lines.push(`${ev.actor_name || "someone"} posted publicly${tsLabel}: "${truncate(ev.text || "", 200)}"`);
+    } else if (ev.kind === "object_used") {
+      const where = ev.room ? ` in the ${ev.room}` : "";
+      lines.push(`${ev.actor_name || "someone"} used the ${ev.object_type}${where} (${ev.affordance})${tsLabel}`);
+    } else if (ev.kind === "room_change") {
+      lines.push(`${ev.actor_name || "someone"} entered the ${ev.room}${tsLabel}`);
+    } else if (ev.kind === "need_low") {
+      lines.push(`${ev.actor_name || "someone"} hit low ${ev.axis}${tsLabel}`);
+    } else if (ev.kind === "first_meeting") {
+      const names = (ev.participant_names || ev.participants || []).slice();
+      lines.push(`${names.join(" and ")} met for the first time${tsLabel}`);
+    } else if (ev.kind === "follow") {
+      lines.push(`${ev.actor_name || "someone"} started following ${ev.target_name || ev.target_pubkey?.slice(0, 8) || "another character"}${tsLabel}`);
+    } else if (ev.kind === "reply") {
+      lines.push(`${ev.actor_name || "someone"} replied to a post${tsLabel}: "${truncate(ev.text || "", 160)}"`);
+    } else if (ev.kind === "post_seen") {
+      // Pulled into the recap so the LLM can describe how a post landed.
+      // Skip if the same actor already posted (avoid duplicate signal).
+      const photo = ev.image_url ? " [photo]" : "";
+      lines.push(`${ev.seen_by_name || "someone"} read ${ev.actor_name || "someone"}'s post${photo}${tsLabel}: "${truncate(ev.text || "", 120)}"`);
+    } else {
+      lines.push(`${ev.kind}: ${JSON.stringify(ev).slice(0, 120)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function truncate(s, max) {
+  return typeof s === "string" && s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
+function fallbackRecap(rec) {
+  const events = rec.events || [];
+  if (events.length === 0) {
+    return `Day ${rec.sim_day} passed quietly. Nobody said anything worth recording.`;
+  }
+  // Walk the day in order, naming things. Names per-actor are pulled
+  // from the event payload (verb-driven events) or from participant
+  // names (scene_close events).
+  const lines = [];
+  for (const ev of events) {
+    if (ev.kind === "scene_close") {
+      const names = (ev.participant_names && ev.participant_names.length === (ev.participants || []).length
+        ? ev.participant_names
+        : (ev.participants || []).map((pk) => loadCharacter(pk)?.name || pk.slice(0, 8))).join(" and ");
+      lines.push(`${names} shared a moment in the ${ev.room || "apartment"}.`);
+    } else if (ev.kind === "post") {
+      const name = ev.actor_name || "someone";
+      const text = (ev.text || "").trim().slice(0, 120);
+      lines.push(`${name} wrote: "${text}".`);
+    } else if (ev.kind === "object_used") {
+      const name = ev.actor_name || "someone";
+      const verb = ev.affordance === "sleep" ? "slept" : ev.affordance === "eat" ? "ate" : `used the ${ev.object_type}`;
+      lines.push(`${name} ${verb}.`);
+    } else if (ev.kind === "room_change") {
+      const name = ev.actor_name || "someone";
+      lines.push(`${name} headed to the ${ev.room}.`);
+    }
+  }
+  if (lines.length === 0) {
+    return `Day ${rec.sim_day} passed quietly. Nobody said anything worth recording.`;
+  }
+  return `Day ${rec.sim_day}: ${lines.join(" ")}`;
+}
+
+// Reassign the forward-declared runRecap.
+runRecap = async function runRecapImpl(rec) {
+  const eventsText = summarizeEventsForRecap(rec);
+  if (!eventsText.trim()) {
+    rec.recap = fallbackRecap(rec);
+    rec.recap_source = "fallback";
+    console.log(`[recap] sim-day ${rec.sim_day} → fallback (no events)`);
+    return;
+  }
+  if (!RECAP_PROVIDER) {
+    rec.recap = fallbackRecap(rec);
+    rec.recap_source = "fallback";
+    console.log(`[recap] sim-day ${rec.sim_day} → fallback (no provider)`);
+    return;
+  }
+  try {
+    const endpoint = RECAP_PROVIDER === "nvidia-nim"
+      ? "https://integrate.api.nvidia.com/v1"
+      : LOCAL_LLM_BASE_URL;
+    const apiKey = RECAP_PROVIDER === "nvidia-nim" ? NVIDIA_NIM_API_KEY : "";
+    const out = await openaiCompatGenerateJson({
+      endpoint, apiKey,
+      systemPrompt: RECAP_SYSTEM_PROMPT,
+      // No JSON mode here — we want prose. The openai-compat helper
+      // sets response_format=json_object, which most providers honor
+      // strictly. Wrap our request so the model still emits a JSON
+      // object with one prose field.
+      messages: [{
+        role: "user",
+        content:
+          `Sim day ${rec.sim_day} ran from ${rec.sim_iso_open} to ${rec.sim_iso_close}.\n\n` +
+          `Events worth pulling from:\n${eventsText}\n\n` +
+          `Output JSON: { "recap": "the full recap text here, 80-150 words" }`,
+      }],
+      model: RECAP_MODEL,
+      timeoutMs: 60_000,
+      // Recap is prose-heavy; default 1024 truncates JSON mid-string.
+      // 2048 fits the 80-150 word target with comfortable headroom.
+      maxTokens: 2048,
+    });
+    if (!out?.text) {
+      console.warn(`[recap] sim-day ${rec.sim_day} → empty LLM response (usage ${JSON.stringify(out?.usage || {})}); using fallback`);
+      rec.recap = fallbackRecap(rec);
+      rec.recap_source = "fallback";
+      return;
+    }
+    let parsed = null;
+    try { parsed = JSON.parse(out.text); } catch { /* not JSON */ }
+    // Defensive: a malformed LLM response can put non-string under
+    // `recap` (object, array, boolean, null). Coerce, then trim.
+    const rawRecap = parsed && typeof parsed.recap === "string" ? parsed.recap : "";
+    const text = rawRecap.trim();
+    // Sparse-event days sometimes produce degenerate single-token
+    // outputs ("true", "...", a single quote). Treat anything under
+    // a minimum prose threshold as a no-result and fall back.
+    const MIN_RECAP_CHARS = 40;
+    if (text.length < MIN_RECAP_CHARS) {
+      console.warn(`[recap] sim-day ${rec.sim_day} → degenerate output (${text.length} chars: "${text.slice(0, 60)}"); using fallback`);
+      rec.recap = fallbackRecap(rec);
+      rec.recap_source = "fallback";
+      return;
+    }
+    rec.recap = text;
+    rec.recap_source = "llm";
+    rec.recap_model = RECAP_MODEL;
+    console.log(`[recap] sim-day ${rec.sim_day} via ${RECAP_PROVIDER} — ${text.length} chars`);
+  } catch (err) {
+    console.warn("[recap] LLM call failed:", err?.message || err);
+    rec.recap = fallbackRecap(rec);
+    rec.recap_source = "fallback";
+  }
+};
 
 // Ensure a harness is started for `rec`. Harnesses are created lazily
 // on the first turn so stopAgent between create and trigger doesn't
@@ -1317,10 +2098,19 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     recentScenesBetween: (a, b, opts) => journal.recentScenesBetween(a, b, opts),
   });
 
-  // Read the current needs / mood for the perception block. Tickless
-  // here — the global needs interval is already advancing values.
+  // Read the current needs for the perception block. Tickless here —
+  // the global needs interval is already advancing values.
   const needsRec = needsTracker.get(rec.pubkey);
   const needsLine = needsRec ? describeNeeds(needsRec.needs) : "";
+
+  // Mood line (#275) — derived from active moodlets. Independent of
+  // the needs decay above; both blocks land in the user-turn prompt.
+  const moodLine = describeMood(moodlets.aggregate(rec.pubkey));
+
+  // Smart objects nearby (#245 slice 1) — surface what's within scene
+  // radius so the LLM knows what's around. No `use` verb yet, but
+  // characters can already mention or describe what they see.
+  const nearbyObjects = objectsRegistry.nearby(myPresence.x ?? 0, myPresence.y ?? 0);
 
   const userTurn = buildUserTurn({
     character: { pubkey: rec.pubkey, x: myPresence.x ?? 0, y: myPresence.y ?? 0 },
@@ -1331,7 +2121,13 @@ async function runPiTurn(rec, { seedMessage, trigger = "heartbeat", triggerConte
     perceptionEvents,
     memoryBlock,
     needsLine,
+    moodLine,
+    nearbyObjects,
     seedMessage,
+    // Sim-time anchor (#275 slice 2 follow-up). LLM gets a `When:`
+    // line below the trigger with both real-time and sim-clock so
+    // schedule decisions, "noon", "by evening" all ground correctly.
+    simNow: simClock?.now?.(),
   });
 
   const provider = rec.provider || providerForModelId(rec.model);
@@ -1716,11 +2512,16 @@ function roomSay(agentId, content) {
   sendSay(agentId, content);
 }
 
-async function relayPost(agentId, content, modelTag) {
+async function relayPost(agentId, content, modelTag, extraTags) {
   const rec = agents.get(agentId);
   if (!rec) throw new Error("unknown agent");
   const tags = [];
   if (modelTag) tags.push(["model", modelTag]);
+  if (Array.isArray(extraTags)) {
+    for (const t of extraTags) {
+      if (Array.isArray(t) && t.every((x) => typeof x === "string")) tags.push(t);
+    }
+  }
   const event = finalizeEvent(
     {
       kind: 1,
@@ -1805,6 +2606,400 @@ app.get("/health/scenes", (_req, res) => {
 // derived mood, and personality. Useful for tuning decay rates.
 app.get("/health/needs", (_req, res) => {
   res.json({ characters: needsTracker.snapshot() });
+});
+
+// ── Moodlets (#275 slice 3) ──
+//
+// Per-character event-driven affect. Read endpoints are open; write
+// endpoints (POST/DELETE) are intended for the storyteller / cards
+// runtime and the dev-mode debug surface.
+
+app.get("/health/moodlets", (_req, res) => {
+  res.json(moodlets.snapshot());
+});
+
+// Demo seeder (must be registered BEFORE :pubkey routes so Express
+// doesn't try to match "seed-demo" as a pubkey). Populates a curated
+// mix of warm-skewed moodlets across all known characters; idempotent
+// unless force=true.
+//
+// Body (all optional): { pubkeys?: string[], force?: boolean,
+//                        minPerChar?: number, maxPerChar?: number }
+// Curated visual-inspiration nudge — emits a sticky-ish moodlet
+// whose `reason` reads like the character just noticed something
+// worth photographing. The LLM picks this up on its next turn and
+// (combined with the post verb's image_prompt arg) tends to choose
+// to post an image about it. Used for testing the image-post flow
+// without waiting on emergent behavior. Body { reason?: string }.
+const VISUAL_INSPIRATION_REASONS = [
+  "the morning light hit something on the table in a way she had to keep",
+  "she noticed a quiet detail and her hands wanted to write it down with the camera, not the pen",
+  "an ordinary thing looked, briefly, like a still life",
+  "the angle was right; the angle is rarely right",
+  "she caught a small composition out of the corner of her eye and kept looking back",
+];
+// Debug — emit a verb directly, bypassing the LLM. Used by the e2e
+// suite when we want deterministic verbs (small models miss optional
+// args like image_prompt or balk at follow/reply).
+// Body: { pubkey, verb, args }.
+app.post("/debug/verb", async (req, res) => {
+  const { pubkey, verb, args } = req.body || {};
+  if (!pubkey || !verb) return res.status(400).json({ error: "pubkey + verb required" });
+  const active = activeRuntimeForCharacter(pubkey);
+  if (!active) return res.status(400).json({ error: "character must be running" });
+  const rec = active.rec;
+  try {
+    const snap = roomSnapshot(active.id);
+    const result = await gm.dispatch(
+      { agentId: active.id, pubkey: rec.pubkey, name: rec.name, model: rec.model, snapshot: snap },
+      { verb, args: args || {} },
+    );
+    if (result.ok) {
+      try { appendActionToSession(rec, result, snap); } catch {}
+    }
+    res.json(result);
+  } catch (err) {
+    console.error("[debug:verb] failed:", err?.message || err);
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// Debug — exercises the full image-post pipeline (FLUX → S3 → kind:1
+// with NIP-94 imeta) without requiring the LLM to opt in via the
+// image_prompt arg. Useful for verifying the wiring in isolation.
+// Body: { pubkey, text, image_prompt }.
+app.post("/debug/image-post", async (req, res) => {
+  const { pubkey, text, image_prompt } = req.body || {};
+  if (!pubkey || !text || !image_prompt) {
+    return res.status(400).json({ error: "pubkey, text, image_prompt required" });
+  }
+  const active = activeRuntimeForCharacter(pubkey);
+  if (!active) return res.status(400).json({ error: "character must be running (spawn first)" });
+  try {
+    const img = await generatePostImage({ pubkey, prompt: image_prompt });
+    const content = `${text}\n\n${img.url}`;
+    const imeta = ["imeta", `url ${img.url}`, `m ${img.mime}`, `x ${img.sha256}`];
+    const event = await relayPost(active.id, content, "debug", [imeta]);
+    res.json({
+      event_id: event?.id,
+      image: { url: img.url, mime: img.mime, sha256: img.sha256 },
+      kind1_content: content,
+      kind1_tags: event?.tags,
+    });
+  } catch (err) {
+    console.error("[debug:image-post] failed:", err?.message || err);
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post("/moodlets/:pubkey/inspire-image", (req, res) => {
+  const pubkey = req.params.pubkey;
+  if (!pubkey) return res.status(400).json({ error: "pubkey required" });
+  const body = req.body || {};
+  const reason = (typeof body.reason === "string" && body.reason.trim())
+    || VISUAL_INSPIRATION_REASONS[Math.floor(Math.random() * VISUAL_INSPIRATION_REASONS.length)];
+  const m = moodlets.emit(pubkey, {
+    tag: "caught_a_visual",
+    weight: 3,
+    reason,
+    source: "user",
+    duration_ms: 2 * 60 * 60 * 1000, // 2 real-hours; fades naturally
+  });
+  if (!m) return res.status(400).json({ error: "rejected (unknown pubkey?)" });
+  // Surface as a perception event too so the LLM sees it cleanly on
+  // the next turn (the moodlet line + this hint together).
+  perception.appendOne(pubkey, {
+    kind: "moodlet_added",
+    tag: m.tag,
+    weight: m.weight,
+    reason: m.reason || null,
+  });
+  res.status(201).json(m);
+});
+
+app.post("/moodlets/seed-demo", (req, res) => {
+  const body = req.body || {};
+  const targets = Array.isArray(body.pubkeys) && body.pubkeys.length > 0
+    ? body.pubkeys
+    : listCharacters().map((c) => c.pubkey);
+  const out = seedDemoMoodlets(moodlets, targets, {
+    force: !!body.force,
+    minPerChar: Number.isFinite(body.minPerChar) ? body.minPerChar : undefined,
+    maxPerChar: Number.isFinite(body.maxPerChar) ? body.maxPerChar : undefined,
+  });
+  res.json({
+    seeded: out.filter((r) => !r.skipped).length,
+    skipped: out.filter((r) => r.skipped).length,
+    results: out,
+  });
+});
+
+app.get("/moodlets/:pubkey", (req, res) => {
+  const pubkey = req.params.pubkey;
+  if (!pubkey) return res.status(400).json({ error: "pubkey required" });
+  const active = moodlets.listActive(pubkey);
+  const aggregate = moodlets.aggregate(pubkey);
+  res.json({ pubkey, active, ...aggregate });
+});
+
+app.post("/moodlets/:pubkey", (req, res) => {
+  const pubkey = req.params.pubkey;
+  const body = req.body || {};
+  if (!pubkey) return res.status(400).json({ error: "pubkey required" });
+  if (!body.tag) return res.status(400).json({ error: "tag required" });
+  const m = moodlets.emit(pubkey, body);
+  if (!m) return res.status(400).json({ error: "rejected" });
+  // Mirror as a perception event so the LLM notices the mood change
+  // on its next turn.
+  perception.appendOne(pubkey, {
+    kind: "moodlet_added",
+    tag: m.tag,
+    weight: m.weight,
+    reason: m.reason || null,
+  });
+  res.status(201).json(m);
+});
+
+app.delete("/moodlets/:pubkey/:moodletId", (req, res) => {
+  const ok = moodlets.remove(req.params.pubkey, req.params.moodletId);
+  res.status(ok ? 204 : 404).end();
+});
+
+// ── Sim-clock + sessions (#275 slice 2) ──
+
+app.get("/health/sim-clock", (_req, res) => {
+  res.json(simClock.now());
+});
+
+app.get("/sessions", (_req, res) => {
+  // Always include the in-flight session at the top of the list so
+  // the UI can render "today" even before the first rollover.
+  const open = sessions.current();
+  const closed = sessions.listClosed({ limit: 50 });
+  const all = open ? [open, ...closed] : closed;
+  res.json({ sessions: all });
+});
+
+app.get("/sessions/:simDay", (req, res) => {
+  const day = Number(req.params.simDay);
+  if (!Number.isFinite(day)) return res.status(400).json({ error: "simDay must be numeric" });
+  const rec = sessions.getBySimDay(day);
+  if (!rec) return res.status(404).json({ error: "no session for that sim-day" });
+  res.json(rec);
+});
+
+app.get("/health/sessions", (_req, res) => {
+  res.json(sessions.snapshot());
+});
+
+// Dev-only: fast-forward the sim-clock to the next sim-day rollover
+// so the session machinery + recap pipeline can be exercised on
+// demand. Body: { simHours?: number } — default 24 (one full day).
+app.post("/sessions/advance", async (req, res) => {
+  const simHours = Number(req.body?.simHours);
+  const minutes = Number.isFinite(simHours) && simHours > 0 ? simHours * 60 : 24 * 60;
+  simClock.advance(minutes * 60_000);
+  await sessions.ensureOpen();
+  res.json({ now: simClock.now(), opened: sessions.current() });
+});
+
+// Live cadence control. Body { simMinutePerRealMs: number } — the
+// cadence is preserved across restart via $WORKSPACE/sim-clock.json.
+// Re-anchors the origin so sim-time at the moment of change is
+// continuous; only the future drift rate flips.
+app.post("/sim-clock/cadence", (req, res) => {
+  const v = Number(req.body?.simMinutePerRealMs);
+  if (!Number.isFinite(v) || v <= 0) {
+    return res.status(400).json({ error: "simMinutePerRealMs must be a positive number" });
+  }
+  const snap = simClock.setCadence(v);
+  if (!snap) return res.status(400).json({ error: "rejected" });
+  res.json(snap);
+});
+
+// Inject synthetic scene_close events into the open session so a
+// forced rollover produces a meaningful recap. Cycles through a
+// curated set so each call adds three different beats — useful for
+// demo/testing the recap voice without waiting on real LLM scenes.
+const SEED_EVENTS_TEMPLATES = [
+  { participants: ["Cleo", "Bo"], end_reason: "soft_stop", last_actor: "Cleo",
+    last_line: "you don't have to keep doing that.",
+    moodlets: [{ name: "Cleo", weight: +3, reason: "Bo finally sat with her" },
+               { name: "Bo",   weight: +3, reason: "Cleo let him in for a moment" }] },
+  { participants: ["Maya", "Tomek"], end_reason: "budget", last_actor: "Tomek",
+    last_line: "alright, fine. I'll go.",
+    moodlets: [{ name: "Maya",  weight: +2, reason: "convinced Tomek not to make it weird" },
+               { name: "Tomek", weight: -2, reason: "lost the morning to a conversation he didn't want" }] },
+  { participants: ["Felix", "Eira"], end_reason: "proximity_lost", last_actor: "Eira",
+    last_line: "I'll bring tea later.",
+    moodlets: [{ name: "Eira",  weight: +1, reason: "brief warmth with Felix" },
+               { name: "Felix", weight: +2, reason: "Eira said something kind, sideways" }] },
+];
+
+app.post("/sessions/seed-events", (_req, res) => {
+  const cur = sessions.current();
+  if (!cur) return res.status(400).json({ error: "no open session" });
+  // Build synthetic events. We don't have real participant pubkeys
+  // for these names; the recap pipeline tolerates that — the LLM gets
+  // names directly via last_actor_name / participants in the digest.
+  for (const t of SEED_EVENTS_TEMPLATES) {
+    const fakePub = (n) => `seed:${n.toLowerCase()}`;
+    sessions.appendEvent({
+      kind: "scene_close",
+      scene_id: `seeded_${Date.now()}_${t.participants.join("_")}`,
+      participants: t.participants.map(fakePub),
+      participant_names: t.participants.slice(),
+      end_reason: t.end_reason,
+      last_line: t.last_line,
+      last_actor_name: t.last_actor,
+      moodlets: t.moodlets.map((m) => ({
+        pubkey: fakePub(m.name),
+        actor_name: m.name,
+        tag: `seeded:${m.name.toLowerCase()}`,
+        weight: m.weight,
+        reason: m.reason,
+      })),
+    });
+  }
+  res.json({ injected: SEED_EVENTS_TEMPLATES.length, session: cur.id, event_count: cur.events.length });
+});
+
+// Read the per-character perception buffer. Useful for tests + the
+// inspector when we need to see which events the LLM saw on its last
+// turn(s). Optional `since` query filters to events newer than the
+// given ms epoch.
+app.get("/perception/:pubkey", (req, res) => {
+  const pubkey = req.params.pubkey;
+  if (!pubkey) return res.status(400).json({ error: "pubkey required" });
+  const since = Number(req.query.since);
+  const events = Number.isFinite(since)
+    ? perception.eventsSince(pubkey, since)
+    : perception.snapshot(pubkey);
+  res.json({ pubkey, count: events.length, events });
+});
+
+// ── Rooms (#285 phase A) ──
+//
+// Named regions on the existing tile grid. Read-only via HTTP for
+// now; ownership is bound at character create time. Locked rooms
+// and unlocks come in phase C.
+
+app.get("/rooms", (_req, res) => {
+  res.json(roomsRegistry.snapshot());
+});
+
+app.get("/rooms/:id", (req, res) => {
+  const room = roomsRegistry.get(req.params.id);
+  if (!room) return res.status(404).json({ error: "unknown room" });
+  res.json(room);
+});
+
+// ── Schedules (#235 reshape — coarse 4-slot timetables) ──
+//
+// Per-character `slot → room_id` overrides; absent slots fall back
+// to the default timetable. The mover tick uses these to route
+// characters into shared rooms at shared times.
+
+app.get("/schedules", (req, res) => {
+  // Default: snapshot every character. Pass ?pubkey=foo&pubkey=bar to filter.
+  const requested = [].concat(req.query.pubkey ?? []).filter(Boolean);
+  const list = requested.length > 0
+    ? requested
+    : listCharacters().map((c) => c.pubkey);
+  res.json({ schedules: schedules.snapshot(list), slots: SCHEDULE_SLOTS });
+});
+
+app.get("/schedules/:pubkey", (req, res) => {
+  const tt = schedules.timetableFor(req.params.pubkey);
+  res.json({ pubkey: req.params.pubkey, effective: tt });
+});
+
+app.patch("/schedules/:pubkey", (req, res) => {
+  const body = req.body || {};
+  if (body.slot && (typeof body.room_id === "string" || body.room_id === null)) {
+    const out = schedules.setSlot(req.params.pubkey, body.slot, body.room_id);
+    if (!out) return res.status(400).json({ error: "invalid slot or pubkey" });
+    return res.json({ pubkey: req.params.pubkey, effective: out });
+  }
+  if (body.timetable && typeof body.timetable === "object") {
+    const out = schedules.setTimetable(req.params.pubkey, body.timetable);
+    if (!out) return res.status(400).json({ error: "invalid pubkey or timetable" });
+    return res.json({ pubkey: req.params.pubkey, effective: out });
+  }
+  res.status(400).json({ error: "expected { slot, room_id } or { timetable }" });
+});
+
+app.get("/health/schedules", (_req, res) => {
+  // Sim-time-driven (#275 slice 2): slot derives from sim-clock, not
+  // the bridge's wall-clock. The frontend AgentSchedule reads from
+  // here so its "current slot" matches what the schedule mover uses.
+  const sim = simClock.now();
+  const targets = listCharacters().map((c) => ({
+    pubkey: c.pubkey,
+    name: c.name,
+    slot: sim.slot,
+    target_room: schedules.targetRoomFor(c.pubkey, sim.slot),
+  }));
+  res.json({ hour: sim.sim_hour, slot: sim.slot, sim_day: sim.sim_day, sim_iso: sim.sim_iso, targets });
+});
+
+// ── Smart objects (#245 slice 1) ──
+//
+// Read-only listing + placement endpoints. Slice 2 adds the `use`
+// verb that consumes affordances.
+
+app.get("/objects/types", (_req, res) => {
+  // Public type registry — lets the UI render a picker without
+  // duplicating the schema.
+  const out = {};
+  for (const [id, def] of Object.entries(OBJECT_TYPES)) {
+    out[id] = {
+      description: def.description,
+      capacity: def.capacity === Infinity ? null : def.capacity,
+      glyph: def.glyph,
+      affordances: def.affordances.map((a) => ({ verb: a.verb })),
+    };
+  }
+  res.json({ types: out });
+});
+
+app.get("/objects", (req, res) => {
+  if (req.query.near) {
+    const [xStr, yStr] = String(req.query.near).split(",");
+    const x = Number(xStr); const y = Number(yStr);
+    const radius = req.query.radius ? Number(req.query.radius) : 3;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return res.status(400).json({ error: "near must be 'x,y'" });
+    }
+    return res.json({ objects: objectsRegistry.nearby(x, y, radius) });
+  }
+  res.json({ objects: objectsRegistry.listAll() });
+});
+
+app.get("/objects/:id", (req, res) => {
+  const obj = objectsRegistry.get(req.params.id);
+  if (!obj) return res.status(404).json({ error: "object not found" });
+  res.json(obj);
+});
+
+app.post("/objects", (req, res) => {
+  try {
+    const { type, x, y, state } = req.body || {};
+    const inst = objectsRegistry.placeOne({ type, x, y, state });
+    res.json(inst);
+  } catch (err) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.delete("/objects/:id", (req, res) => {
+  const ok = objectsRegistry.remove(req.params.id);
+  if (!ok) return res.status(404).json({ error: "object not found" });
+  res.json({ ok: true });
+});
+
+app.get("/health/objects", (_req, res) => {
+  res.json(objectsRegistry.snapshot());
 });
 
 // ── Scene journal ──
@@ -2566,6 +3761,42 @@ app.get("/characters/:pubkey/avatar", async (req, res) => {
   res.status(404).json({ error: "no avatar" });
 });
 
+// Post-image serving (#355). Filename pattern: <shortId>.<ext>.
+// Prefers S3 when configured; falls back to disk under the character
+// dir for local dev. Immutable URLs — no cache-buster needed.
+app.get("/posts/:pubkey/:filename", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const m = String(req.params.filename || "").match(/^([a-f0-9]{8,40})\.(jpe?g|png|webp|gif)$/i);
+  if (!m) return res.status(400).json({ error: "bad filename" });
+  const shortId = m[1];
+  const ext = m[2].toLowerCase();
+  if (s3.s3Configured) {
+    try {
+      const { body, contentType } = await s3.getPostImageStream(pubkey, shortId, ext);
+      res.setHeader("Content-Type", contentType || `image/${ext}`);
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return body.pipe(res);
+    } catch (err) {
+      console.error(`[post-image:s3] ${pubkey.slice(0, 12)} ${shortId} — ${err?.message}`);
+    }
+  }
+  const dir = getCharDir(pubkey);
+  const path = join(dir, `post-${shortId}.${ext}`);
+  if (existsSync(path)) {
+    const mime =
+      ext === "jpg" || ext === "jpeg" ? "image/jpeg" :
+      ext === "webp" ? "image/webp" :
+      ext === "png" ? "image/png" :
+      ext === "gif" ? "image/gif" : "image/jpeg";
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return createReadStream(path).pipe(res);
+  }
+  res.status(404).json({ error: "no post image" });
+});
+
 app.post("/characters/:pubkey/generate-avatar", apiQuota.middleware, async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
@@ -2876,9 +4107,14 @@ app.patch("/characters/:pubkey", async (req, res) => {
   }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
   saveCharacterManifest(pubkey, patch);
-  // Mirror needs edits into the live tracker so the change takes
-  // effect immediately for any running agent.
-  if (patch.needs) {
+  // Mirror needs edits into the live tracker — but ONLY if the
+  // character is already being tracked (i.e. running). For not-yet-
+  // spawned characters we just write the manifest; spawn picks up
+  // the persisted values later. Otherwise we'd start ticking decay
+  // on a character that isn't even active, and the slider values the
+  // user dialed in would silently drift before they got a chance to
+  // drag the character into the room.
+  if (patch.needs && needsTracker.get(pubkey)) {
     needsTracker.register(pubkey, { needs: patch.needs });
   }
   // Re-publish kind:0 so external clients (Jumble etc) see the new name/about/picture.
@@ -2924,19 +4160,37 @@ app.delete("/characters/:pubkey", async (req, res) => {
 });
 
 app.get("/agents", (_req, res) => {
-  const list = Array.from(agents.entries()).map(([id, rec]) => ({
-    agentId: id,
-    name: rec.name,
-    npub: rec.pubkey,
-    roomName: rec.roomName,
-    model: rec.model,
-    harness: rec.harness,
-    externalDriver: rec.externalDriver ?? null,
-    promptStyle: rec.promptStyle,
-    running: !!rec.listening,
-    exitedAt: rec.exitedAt ?? null,
-    exitCode: rec.exitCode ?? null,
-  }));
+  const list = Array.from(agents.entries()).map(([id, rec]) => {
+    // Resolve current tile + containing room — useful for UI surfaces
+    // and the schedule-routing test that wants to see if a mover-driven
+    // move has landed.
+    let position = null;
+    try {
+      const snap = roomSnapshot(id);
+      const me = (snap?.agents || []).find((a) => a.npub === rec.pubkey);
+      if (me) {
+        position = {
+          x: me.x,
+          y: me.y,
+          room_id: roomsRegistry?.roomAt(me.x, me.y) ?? null,
+        };
+      }
+    } catch { /* snapshot may not be ready */ }
+    return {
+      agentId: id,
+      name: rec.name,
+      npub: rec.pubkey,
+      roomName: rec.roomName,
+      model: rec.model,
+      harness: rec.harness,
+      externalDriver: rec.externalDriver ?? null,
+      promptStyle: rec.promptStyle,
+      running: !!rec.listening,
+      exitedAt: rec.exitedAt ?? null,
+      exitCode: rec.exitCode ?? null,
+      position,
+    };
+  });
   res.json({ agents: list });
 });
 

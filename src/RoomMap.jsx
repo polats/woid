@@ -8,6 +8,22 @@ function initial(name) {
   return (name || '?').trim().charAt(0).toUpperCase()
 }
 
+// Minimal type→glyph table mirroring agent-sandbox/pi-bridge/objects.js.
+// Sync on every #245 type addition; promote to a /objects/types fetch
+// when it grows past ~10 entries.
+const OBJECT_GLYPHS = {
+  chair: '🪑',
+  bed: '🛏️',
+  bookshelf: '📚',
+  jukebox: '🎵',
+  table: '🍽️',
+  fridge: '🧊',
+  // Fridge is unlocked at #245 slice 2; lives in the communal kitchen.
+}
+function objectGlyph(type) {
+  return OBJECT_GLYPHS[type] || '◆'
+}
+
 // Compute wellbeing from a needs vector — mirrors wellbeingFromNeeds()
 // in AgentProfile.jsx and computeMalaise() on the bridge.
 const WELLBEING_BANDS_MAP = [
@@ -17,9 +33,12 @@ const WELLBEING_BANDS_MAP = [
   { name: 'in_crisis',  min: 0  },
 ]
 function wellbeingFromNeeds(needs) {
+  // Note: this only reflects biological pressure (energy, social).
+  // Slice 4 of #275 will switch the dot color to drive off the
+  // moodlet-derived mood band, which is the audience-honest read.
   if (!needs) return null
   let min = 100
-  for (const axis of ['energy', 'social', 'curiosity']) {
+  for (const axis of ['energy', 'social']) {
     const v = typeof needs[axis] === 'number' ? needs[axis] : 100
     if (v < min) min = v
   }
@@ -33,6 +52,8 @@ export default function RoomMap({
   height = 12,
   characters = [],           // bridge /characters, with runtime + avatarUrl
   roomAgents = [],           // Colyseus presence array with x,y
+  objects = [],              // bridge /objects — placed smart objects
+  rooms = [],                // bridge /rooms — named regions on the grid
   adminPubkey = null,
   humanPubkey = null,
   onDropCharacter,           // (pubkey, x, y) -> spawn/move decision handled by caller
@@ -40,6 +61,29 @@ export default function RoomMap({
   onSelectCharacter,         // (pubkey) -> open inspector drawer
 }) {
   const [dragOver, setDragOver] = useState(null)
+
+  // Room region tinting per type — apartments get owner-name labels;
+  // hallways and communals are subtler. Each tile gets a class derived
+  // from the room it falls into.
+  const roomByCell = useMemo(() => {
+    const cells = new Map()
+    for (const r of rooms ?? []) {
+      for (let yy = r.y; yy < r.y + r.h; yy++) {
+        for (let xx = r.x; xx < r.x + r.w; xx++) {
+          cells.set(`${xx},${yy}`, r)
+        }
+      }
+    }
+    return cells
+  }, [rooms])
+
+  // Lookup name → display string for each apartment owner so the
+  // overlay label reads "Maya — 1A" instead of a 64-char npub.
+  const ownerName = useMemo(() => {
+    const m = new Map()
+    for (const c of characters) if (c.pubkey) m.set(c.pubkey, c.name || c.pubkey.slice(0, 6))
+    return m
+  }, [characters])
 
   // Enrich presence rows with avatar/display info from characters list.
   // Presence is the source of truth for x/y; characters contributes visual.
@@ -95,6 +139,18 @@ export default function RoomMap({
     onMoveSelf(x, y)
   }
 
+  // Index objects by tile so the renderer can pick them up cheaply.
+  const objectsByCell = useMemo(() => {
+    const m = new Map()
+    for (const o of objects ?? []) {
+      const key = `${o.x},${o.y}`
+      const list = m.get(key) ?? []
+      list.push(o)
+      m.set(key, list)
+    }
+    return m
+  }, [objects])
+
   return (
     <div className="room-map-wrap">
       <div
@@ -107,11 +163,14 @@ export default function RoomMap({
         {Array.from({ length: height }, (_, y) =>
           Array.from({ length: width }, (_, x) => {
             const occupants = byCell.get(`${x},${y}`) ?? []
+            const tileObjects = objectsByCell.get(`${x},${y}`) ?? []
+            const region = roomByCell.get(`${x},${y}`) ?? null
             const isDragOver = dragOver && dragOver.x === x && dragOver.y === y
+            const roomClass = region ? ` room-region region-type-${region.type} region-${region.id}` : ''
             return (
               <div
                 key={`${x}-${y}`}
-                className={`room-tile${isDragOver ? ' drag-over' : ''}${occupants.length ? ' occupied' : ''}`}
+                className={`room-tile${isDragOver ? ' drag-over' : ''}${occupants.length ? ' occupied' : ''}${roomClass}`}
                 onDragOver={(e) => onCellDragOver(e, x, y)}
                 onDragLeave={() => setDragOver((cur) => (cur?.x === x && cur?.y === y ? null : cur))}
                 onDrop={(e) => onCellDrop(e, x, y)}
@@ -161,6 +220,26 @@ export default function RoomMap({
                     </div>
                   )
                 })}
+                {/* Object glyph layer — sits BEHIND the avatar
+                    (lower z-index in CSS) so a character on the
+                    same tile reads first. Empty tiles show the
+                    object glyph centered. */}
+                {tileObjects.length > 0 && occupants.length === 0 && (
+                  <span
+                    className="room-tile-object"
+                    title={tileObjects.map((o) => o.type).join(', ')}
+                  >
+                    {objectGlyph(tileObjects[0].type)}
+                  </span>
+                )}
+                {tileObjects.length > 0 && occupants.length > 0 && (
+                  <span
+                    className="room-tile-object-corner"
+                    title={tileObjects.map((o) => o.type).join(', ')}
+                  >
+                    {objectGlyph(tileObjects[0].type)}
+                  </span>
+                )}
                 {occupants.length > 1 && (
                   <span className="room-tile-badge">+{occupants.length - 1}</span>
                 )}
@@ -168,6 +247,28 @@ export default function RoomMap({
             )
           }),
         )}
+        {/* Room labels — one floating chip per region, anchored to
+            the room's top-left tile. Sits over the grid via absolute
+            positioning, so it doesn't disturb the existing tile flow. */}
+        {(rooms ?? []).map((r) => {
+          const owner = r.owner_pubkey ? ownerName.get(r.owner_pubkey) : null
+          const label = owner ? `${owner} — ${r.id.replace(/^apt-/, '')}` : r.name
+          return (
+            <span
+              key={`label-${r.id}`}
+              className={`room-region-label region-type-${r.type}`}
+              style={{
+                gridColumnStart: r.x + 1,
+                gridColumnEnd: r.x + r.w + 1,
+                gridRowStart: r.y + 1,
+                gridRowEnd: r.y + 1 + 1,
+              }}
+              title={`${r.name}${owner ? ` · owned by ${owner}` : ''}`}
+            >
+              {label}
+            </span>
+          )
+        })}
       </div>
       <p className="room-map-caption">
         {width}×{height} · drag a card or avatar onto a tile to spawn / move · click an empty tile to move yourself

@@ -1703,6 +1703,9 @@ body {
 .wf-kv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-family: var(--font-mono); font-size: 11px; }
 .wf-kv small { display: block; color: var(--ink-muted); text-transform: uppercase; letter-spacing: .1em; font-size: 9px; }
 .wf-kv strong { display: block; font-weight: normal; color: var(--ink); }
+/* Sim-time stacks under the real-time `When` code line so the inspector
+   shows both clocks without duplicating the field. */
+.wf-when-sim { display: block; margin-top: 2px; font-size: 10px; opacity: 0.85; }
 .wf-sections { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; }
 .wf-section { border-left: 3px solid; background: var(--paper); }
 .wf-section-head {
@@ -1981,6 +1984,197 @@ body {
   color: var(--bad-ink);
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+/* Enriched per-test details (#275 testing slice). */
+.testing-test-spec {
+  display: block;
+  padding: 0 14px 4px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.testing-test-summary {
+  margin: 4px 14px 12px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--ink-faint);
+  background: var(--paper-2);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.testing-test-steps {
+  margin: 8px 14px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--ink-faint);
+  background: var(--paper);
+}
+.testing-test-steps h4 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.testing-test-steps ol {
+  margin: 0; padding: 0; list-style: none;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.testing-step {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  gap: 6px;
+  padding: 2px 0;
+}
+.testing-step.ok .testing-step-marker   { color: #2d8a4f; }
+.testing-step.fail .testing-step-marker { color: #b04a3a; }
+.testing-step-marker { font-weight: 600; text-align: center; }
+.testing-step-detail { font-size: 10px; }
+.testing-test-artifacts {
+  margin: 8px 14px 12px;
+}
+.testing-test-artifacts > summary {
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding: 4px 0;
+}
+.testing-artifacts {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--ink-faint);
+  background: var(--paper);
+}
+.testing-artifact-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  align-items: baseline;
+}
+.testing-artifact-key {
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding-top: 2px;
+}
+.testing-artifact-val { color: var(--ink); word-break: break-word; }
+.testing-artifact-val em { font-style: italic; }
+.testing-artifact-moodlet {
+  display: flex; gap: 6px; align-items: baseline; padding: 2px 0;
+}
+.testing-artifact-moodlet.pos code { color: #2d8a4f; }
+.testing-artifact-moodlet.neg code { color: #b04a3a; }
+
+/* Recap stack — sits at the top of the Sandbox stage. Pinned card
+   for the most recent closed session; collapsed list for the rest. */
+.recap-stack {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-bottom: 12px;
+}
+.recap-stack-error { color: var(--bad-ink); font-size: 11px; }
+.recap-stack-empty { padding: 8px 10px; font-size: 12px; }
+.recap-card {
+  padding: 10px 12px;
+  border: 1px solid var(--ink-faint);
+  background: var(--paper-2);
+}
+.recap-card.recap-card-pinned {
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 3px 3px 0 var(--ink-faint);
+}
+.recap-card.recap-card-open {
+  border-style: dashed;
+  background: var(--paper-3);
+}
+.recap-card-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.recap-card-header strong { color: var(--ink); }
+.recap-card-body {
+  font-size: 13px; line-height: 1.55;
+  color: var(--ink-2);
+}
+.recap-past {
+  margin-top: 4px;
+  font-family: var(--font-mono); font-size: 11px;
+}
+.recap-past > summary {
+  cursor: pointer; padding: 4px 0;
+  color: var(--ink-muted);
+  text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px;
+}
+.recap-past-list { list-style: none; padding: 0; margin: 4px 0; }
+.recap-past-item { border-top: 1px dashed var(--ink-faint); padding: 4px 0; }
+.recap-past-toggle {
+  width: 100%; text-align: left;
+  display: flex; gap: 10px; align-items: baseline;
+  background: none; border: none; cursor: pointer;
+  font: inherit; color: inherit;
+  padding: 4px 0;
+}
+.recap-past-toggle:hover { background: var(--paper-2); }
+.recap-past-preview {
+  flex: 1; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+.recap-past-detail {
+  padding: 4px 0 8px 16px;
+  font-size: 12px; line-height: 1.5;
+}
+.recap-events {
+  margin-top: 6px;
+  font-size: 10px; color: var(--ink-muted);
+}
+.recap-events > summary {
+  cursor: pointer;
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.recap-events-list {
+  list-style: none; padding: 4px 0 0 8px; margin: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.recap-event {
+  display: flex; gap: 6px; align-items: baseline;
+  font-family: var(--font-mono);
+}
+.recap-event-kind {
+  font-weight: 600; color: var(--ink-2);
+  text-transform: lowercase;
+}
+.recap-event-line { font-style: italic; color: var(--ink-muted); }
+
+.recap-actions {
+  display: flex; gap: 8px;
+  margin-bottom: 4px;
+}
+.recap-action {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 5px 10px;
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  cursor: pointer;
+}
+.recap-action:hover:not(:disabled) {
+  background: var(--paper);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.recap-action:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 .testing-error {
   color: var(--bad-ink);
@@ -2390,6 +2584,111 @@ body {
 .agent-profile-need.tier-distressed .agent-profile-need-fill { background: #c47538; }
 .agent-profile-need.tier-in_crisis  .agent-profile-need-fill { background: #b04a3a; }
 .agent-profile-need-value { text-align: right; color: var(--ink); }
+
+/* Slider variant — used pre-spawn so the user can dial initial
+   values. Track + fill match the read-only bar exactly: same height,
+   same border, same saturated tier-color fill from 0% to value via
+   a CSS gradient. Square thumb fits the rest of the panel's
+   right-angle aesthetic. */
+.agent-profile-need-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 8px;
+  background: linear-gradient(
+    to right,
+    var(--need-fill-color, #2d8a4f) var(--fill, 75%),
+    var(--paper) var(--fill, 75%)
+  );
+  border: 1px solid var(--ink-faint);
+  outline: none; padding: 0; margin: 0;
+  cursor: grab;
+}
+.agent-profile-need-slider:active { cursor: grabbing; }
+.agent-profile-need-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 8px; height: 16px;
+  background: var(--ink);
+  border: none; border-radius: 0;
+}
+.agent-profile-need-slider::-moz-range-thumb {
+  width: 8px; height: 16px;
+  background: var(--ink);
+  border: none; border-radius: 0;
+}
+/* Tier-color fill, matched to the bar variant. */
+.agent-profile-need.tier-thriving   .agent-profile-need-slider { --need-fill-color: #2d8a4f; }
+.agent-profile-need.tier-uneasy     .agent-profile-need-slider { --need-fill-color: #d6a83e; }
+.agent-profile-need.tier-distressed .agent-profile-need-slider { --need-fill-color: #c47538; }
+.agent-profile-need.tier-in_crisis  .agent-profile-need-slider { --need-fill-color: #b04a3a; }
+
+/* Mood badge — sits next to the wellbeing badge in the same row.
+   Uses event-driven mood band, not decay-derived wellbeing. Less
+   prominent than wellbeing because it's a softer signal. */
+.agent-profile-mood-badge {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: .12em; text-transform: lowercase;
+  padding: 2px 6px; border: 1px solid currentColor;
+  margin-left: 6px;
+}
+.agent-profile-mood-badge.mood-cheerful { color: #2d8a4f; }
+.agent-profile-mood-badge.mood-steady   { color: var(--ink-muted); }
+.agent-profile-mood-badge.mood-lousy    { color: #c47538; }
+.agent-profile-mood-badge.mood-breaking { color: #b04a3a; background: #fde6e2; }
+
+/* Moodlets — list under the needs grid showing what's currently
+   weighing on the character. Each entry is one row: weight pill,
+   reason text, fade countdown. Empty state is a single muted line. */
+.agent-profile-moodlets {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px dashed var(--ink-faint);
+}
+.agent-profile-moodlets-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-family: var(--font-mono); font-size: 10px;
+}
+.agent-profile-moodlets-count {
+  color: var(--ink-faint); font-size: 10px;
+  text-transform: lowercase; letter-spacing: .04em;
+}
+.agent-profile-moodlet-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.agent-profile-moodlet {
+  display: grid; grid-template-columns: 36px 1fr auto;
+  /* Allow the row to grow to multiple lines for long moodlet reasons.
+     align-items: start keeps the weight pill anchored to the first
+     line of wrapping prose. */
+  align-items: start;
+  gap: 8px;
+  font-family: var(--font-mono); font-size: 11px;
+  padding: 2px 4px;
+}
+.agent-profile-moodlet-weight {
+  text-align: center;
+  font-weight: 600;
+  border: 1px solid currentColor;
+  padding: 0 4px;
+  font-size: 10px;
+}
+.agent-profile-moodlet-weight.polarity-positive { color: #2d8a4f; }
+.agent-profile-moodlet-weight.polarity-negative { color: #b04a3a; }
+.agent-profile-moodlet-weight.polarity-neutral  { color: var(--ink-muted); }
+.agent-profile-moodlet-reason {
+  color: var(--ink-2);
+  /* Wrap onto multiple lines so long moodlet reasons are readable in
+     full. The grid row above grows to fit. */
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
+}
+.agent-profile-moodlet-fade {
+  font-size: 10px; color: var(--ink-faint);
+  white-space: nowrap;
+}
+.agent-profile-moodlet.polarity-negative .agent-profile-moodlet-reason {
+  color: var(--ink-2);
+}
 
 /* Dirty form indicator + Save button highlight. */
 .agent-profile-dirty-flag {
@@ -3399,6 +3698,142 @@ body {
   display: flex; align-items: baseline; gap: var(--sp-2);
 }
 
+/* Stage tabs — Room / Recap. Horizontal sibling of the drawer
+   sidetab aesthetic: paper bg, ink border, mono uppercase, paper
+   bg + box-shadow on active. Sit in the stage header next to the
+   status pill. */
+.sandbox3-stage-tabs {
+  display: flex;
+  gap: 0;
+  align-items: stretch;
+}
+.sandbox3-stage-tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  background: var(--paper-2);
+  border: 2px solid var(--ink);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 16px 9px;
+  cursor: pointer;
+  margin-right: -2px;       /* stack borders between adjacent tabs */
+  margin-bottom: -1.5px;    /* lap onto the header underline so active reads as "owns" the panel */
+  transition: background 120ms ease, color 120ms ease, padding-top 120ms ease;
+}
+.sandbox3-stage-tab:hover:not(.active) {
+  color: var(--ink);
+  background: var(--paper);
+}
+.sandbox3-stage-tab.active {
+  background: var(--paper);
+  color: var(--ink);
+  padding-bottom: 11px;     /* visually pulls into the panel beneath */
+  box-shadow: 4px -4px 0 var(--ink);
+  z-index: 1;
+}
+.sandbox3-stage-tab + .sandbox3-stage-tab { margin-left: 0; }
+
+/* When the stage is showing the Recap pane, swap the map-frame's
+   centered-flex layout for a top-aligned scrollable column so the
+   recap text reads naturally. */
+.sandbox3-map-frame.showing-recap {
+  display: block;
+  background: var(--paper);
+  overflow: auto;
+  container-type: normal;
+}
+.sandbox3-recap-pane {
+  padding: var(--sp-3);
+  max-width: 780px;
+  margin: 0 auto;
+}
+
+.sandbox3-stage-meta {
+  display: flex; gap: 10px; align-items: center;
+}
+
+/* Sim-clock chip — sits in the stage header next to the room status
+   pill. Click to expand a small cadence picker. */
+.sim-clock { position: relative; }
+.sim-clock-chip {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  padding: 4px 10px;
+  font-family: var(--font-mono); font-size: 11px;
+  background: var(--paper-2); color: var(--ink);
+  border: 1.5px solid var(--ink);
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.sim-clock-chip:hover { background: var(--paper); }
+.sim-clock-chip[aria-expanded="true"] {
+  background: var(--paper);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.sim-clock-day {
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--ink-muted);
+}
+.sim-clock-time { font-weight: 600; }
+.sim-clock-slot {
+  text-transform: lowercase;
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.sim-clock-fast {
+  font-size: 9px;
+  padding: 1px 4px;
+  background: var(--ink);
+  color: var(--paper);
+  letter-spacing: 0.06em;
+}
+
+.sim-clock-picker {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  min-width: 180px;
+  display: flex; flex-direction: column;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  font-family: var(--font-mono); font-size: 11px;
+}
+.sim-clock-picker-header {
+  padding: 6px 10px;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  font-size: 9px;
+  color: var(--ink-muted);
+  border-bottom: 1px dashed var(--ink-faint);
+}
+.sim-clock-picker-item {
+  background: none;
+  border: none;
+  border-bottom: 1px dashed var(--ink-faint);
+  padding: 6px 10px;
+  text-align: left;
+  font: inherit; color: var(--ink);
+  cursor: pointer;
+}
+.sim-clock-picker-item:last-child { border-bottom: none; }
+.sim-clock-picker-item:hover:not(:disabled) { background: var(--paper-2); }
+.sim-clock-picker-item:disabled { opacity: 0.5; cursor: wait; }
+.sim-clock-picker-item.active {
+  background: var(--ink);
+  color: var(--paper);
+}
+.sim-clock-picker-error {
+  padding: 4px 10px;
+  font-size: 10px;
+  color: var(--bad-ink);
+  border-top: 1px dashed var(--ink-faint);
+}
+
 .sandbox3-map-frame {
   position: relative;
   display: flex; align-items: center; justify-content: center;
@@ -3480,6 +3915,135 @@ body {
   box-shadow: inset 0 0 0 2px var(--transmit);
 }
 
+/* Room region tinting (#285) — translucent overlay per room type so
+   apartments / hallway / kitchen are visually distinct without
+   competing with avatars or objects. */
+.room-tile.region-type-apartment { background: #efe1c1; }
+.room-tile.region-type-hallway   { background: #e7dfd0; }
+.room-tile.region-type-communal  { background: #ead7b8; }
+
+/* Specific apartment hues — gentle differentiation so 1A/1B/1C are
+   distinguishable at a glance. */
+.room-tile.region-apt-1A { background: #e8d4a8; }
+.room-tile.region-apt-1B { background: #d8d8c0; }
+.room-tile.region-apt-1C { background: #d8c4b8; }
+
+/* Room labels — float over the top tile of each region. Pointer-events
+   off so they don't intercept drag/drop on the tile underneath. */
+.room-region-label {
+  position: relative;
+  z-index: 2;
+  align-self: start;
+  justify-self: start;
+  margin: 2px 0 0 4px;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  background: var(--paper);
+  border: 1px solid var(--ink-faint);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.room-region-label.region-type-apartment { background: var(--paper); border-color: var(--ink); }
+.room-region-label.region-type-hallway   { color: var(--ink-faint); }
+.room-region-label.region-type-communal  { background: var(--paper-3); }
+
+/* AgentSchedule — daily timetable view (drawer Schedule tab). */
+.agent-schedule {
+  display: flex; flex-direction: column;
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+.agent-schedule-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 10px;
+}
+.agent-schedule-header strong {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.agent-schedule-status {
+  font-size: 10px;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+}
+.agent-schedule-status.status-on_schedule { color: #2d8a4f; }
+.agent-schedule-status.status-routing     { color: #b58b1a; }
+.agent-schedule-status.status-not_running { color: var(--ink-faint); }
+.agent-schedule-status.status-unknown     { color: var(--ink-muted); }
+
+.agent-schedule-list {
+  list-style: none; padding: 0; margin: 0 0 12px 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.agent-schedule-slot {
+  display: grid;
+  grid-template-columns: 18px 80px 1fr 14px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--ink-faint);
+  background: var(--paper-2);
+}
+.agent-schedule-slot.current {
+  border-color: var(--ink);
+  border-width: 1.5px;
+  background: var(--paper);
+}
+.agent-schedule-slot.overridden {
+  border-style: dashed;
+}
+.agent-schedule-glyph {
+  font-size: 14px;
+  color: var(--ink-2);
+  text-align: center;
+}
+.agent-schedule-slot-name {
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+}
+.agent-schedule-hours {
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+.agent-schedule-arrow {
+  color: var(--ink-faint);
+  text-align: center;
+}
+.agent-schedule-target {
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-schedule-override-pill {
+  font-size: 9px;
+  padding: 0 4px;
+  border: 1px dashed var(--ink-faint);
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.agent-schedule-footer {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--ink-faint);
+  font-size: 10px;
+}
+
 .room-tile-avatar {
   width: 82%; height: 82%;
   border-radius: 50%;
@@ -3506,6 +4070,24 @@ body {
   background: var(--ink); color: var(--paper);
   font-family: var(--font-mono); font-size: 8px;
   padding: 0 3px; letter-spacing: .05em;
+}
+
+/* Smart-object glyph (#245 slice 1). Centered when alone on a tile;
+   tucked into the bottom-left corner when a character is on top of
+   the same tile. */
+.room-tile-object {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 100%;
+  font-size: 22px; line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+.room-tile-object-corner {
+  position: absolute; bottom: 1px; left: 1px;
+  font-size: 12px; line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  z-index: 1;
 }
 
 /* Wellbeing dot above the avatar — single color reads at a glance.

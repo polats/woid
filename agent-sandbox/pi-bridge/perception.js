@@ -185,6 +185,36 @@ function formatOne(ev, selfPubkey) {
       const v = typeof ev.value === "number" ? ` (${ev.value})` : "";
       return `(your ${ev.axis} just dropped${v} — ${flavor})`;
     }
+    case "schedule_nudge": {
+      // Soft routine prompt — tells the character where their day
+      // would normally take them, with a concrete target tile so they
+      // can emit `move(x, y)`. The wording leaves room for them to
+      // stay if their mood / circumstance argues otherwise; the LLM
+      // is the one who decides.
+      const slot = ev.slot ? `${ev.slot} ` : "";
+      const room = ev.target_room_name || ev.target_room_id || "another room";
+      const tile = (Number.isFinite(ev.target_x) && Number.isFinite(ev.target_y))
+        ? ` — try (${ev.target_x}, ${ev.target_y}) if it suits you`
+        : "";
+      return `(your ${slot}routine usually finds you in the ${room}${tile})`;
+    }
+    case "moodlet_added":
+      return `(you feel: ${ev.reason || ev.tag || "something"})`;
+    case "moodlet_expired":
+      return `(${ev.reason || ev.tag || "something"} has faded)`;
+    case "first_meeting": {
+      const who = ev.with_name || (ev.with_pubkey ? ev.with_pubkey.slice(0, 8) : "someone");
+      return `(this is the first time you've shared a room with ${who} — say hello.)`;
+    }
+    case "follow_received": {
+      const who = ev.from_name || (ev.from_pubkey ? ev.from_pubkey.slice(0, 8) : "someone");
+      return `(${who} just started following you on Nostr)`;
+    }
+    case "post_seen": {
+      const who = ev.from_name || (ev.from_pubkey ? ev.from_pubkey.slice(0, 8) : "someone");
+      const img = ev.image_url ? " [photo]" : "";
+      return `(${who} posted publicly${img}: "${truncate(ev.text || "", 200)}")`;
+    }
     default:
       return null;
   }
@@ -193,7 +223,6 @@ function formatOne(ev, selfPubkey) {
 const NEED_LOW_FLAVOR = {
   energy: "feeling drained",
   social: "feeling withdrawn",
-  curiosity: "feeling bored, restless",
 };
 
 const SCENE_CLOSE_REASONS = {

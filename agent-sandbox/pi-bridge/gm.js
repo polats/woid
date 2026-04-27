@@ -42,6 +42,7 @@
  * can opt out; production wires them.
  */
 import { sceneMatesOf as rawSceneMatesOf, inScene as rawInScene, resolveRecipient } from "./scenes.js";
+import { OBJECT_TYPES } from "./objects.js";
 
 const SAY_LIMIT = 1000;
 const POST_LIMIT = 1000;
@@ -58,13 +59,21 @@ const WAIT_MAX = 600;
  *   - args:    object describing field validators (see `validateArgs`).
  *   - effects: keys this verb is documented to mutate. Informational
  *              for now; later phases use it for conflict detection.
+ *   - prompt:  one-line description used to auto-generate the verbs
+ *              section of the system prompt. Keep terse; rules /
+ *              philosophy live in buildContext.js.
  *   - handler: (deps, ctx, args) => Promise<void>. May throw; the GM
  *              catches and returns { ok: false } with the message.
+ *
+ * Adding a verb is a single-file edit — the prompt section auto-
+ * regenerates from this registry on the next bridge boot.
  */
 export const VERBS = {
   say: {
     args: { text: { type: "string", required: true, max: SAY_LIMIT } },
     effects: ["room.message", "perception.speech"],
+    prompt: "speak in the room. Heard by anyone present. NOT broadcast publicly.",
+    piExample: `.pi/skills/post/scripts/post.sh "your message"`,
     handler: async (deps, ctx, args) => {
       deps.roomSay(ctx.agentId, args.text);
       const snapshot = (ctx?.snapshot ?? deps.getSnapshot?.());
@@ -90,6 +99,7 @@ export const VERBS = {
       text: { type: "string", required: true, max: SAY_LIMIT },
     },
     effects: ["room.message", "perception.speech"],
+    prompt: "addressed speech. ONLY works for someone in scene with you. If they're farther away, use `move` to get closer first or `say` (which everyone in the room hears).",
     handler: async (deps, ctx, args) => {
       const snapshot = (ctx?.snapshot ?? deps.getSnapshot?.());
       const recipientPubkey = resolveRecipient(snapshot, args.recipient);
@@ -127,6 +137,8 @@ export const VERBS = {
       y: { type: "number", required: true, integer: true },
     },
     effects: ["room.position", "perception.movement"],
+    prompt: "walk to tile (x,y) within the room bounds.",
+    piExample: `.pi/skills/room/scripts/room.sh move 4 5`,
     handler: async (deps, ctx, args) => {
       // Capture the pre-move snapshot so "people who were nearby" see
       // the movement event even if the agent walks out of their scene.
@@ -152,6 +164,7 @@ export const VERBS = {
   face: {
     args: { target: { type: "string", required: true, max: TARGET_LIMIT } },
     effects: [],
+    prompt: "turn toward another character or position.",
     handler: async () => {
       // Intent only. Future slice will store `facing` on AgentPresence
       // and broadcast it through the room schema.
@@ -161,6 +174,7 @@ export const VERBS = {
   wait: {
     args: { seconds: { type: "number", required: false, min: WAIT_MIN, max: WAIT_MAX } },
     effects: [],
+    prompt: "pass time without speaking. Useful for letting silence sit.",
     handler: async () => {
       // Intent only. The orchestrator (slice 5) honours the duration when
       // pacing the next turn.
@@ -170,6 +184,7 @@ export const VERBS = {
   emote: {
     args: { kind: { type: "string", required: true, max: EMOTE_LIMIT } },
     effects: [],
+    prompt: "gesture or expression (e.g. shrug, nod, smile, sigh).",
     handler: async () => {
       // Intent only. Renderer hook lands later.
     },
@@ -178,6 +193,8 @@ export const VERBS = {
   set_state: {
     args: { value: { type: "string", required: true, max: STATE_LIMIT } },
     effects: ["character.state"],
+    prompt: "update your own short mood/context note (private, persistent across turns).",
+    piExample: `.pi/skills/state/scripts/update.sh "new mood"`,
     handler: async (deps, ctx, args) => {
       deps.saveCharacterManifest(ctx.pubkey, { state: args.value });
     },
@@ -189,6 +206,7 @@ export const VERBS = {
       social: { type: "number", required: false, min: 0, max: 100, integer: true },
     },
     effects: ["character.mood", "needs.energy", "needs.social"],
+    prompt: "adjust your energy / social need axes directly (0–100 each). Other axes drift on their own.",
     handler: async (deps, ctx, args) => {
       const next = {};
       if (typeof args.energy === "number") next.energy = args.energy;
@@ -208,18 +226,262 @@ export const VERBS = {
   },
 
   post: {
-    args: { text: { type: "string", required: true, max: POST_LIMIT } },
-    effects: ["relay.kind1"],
+    args: {
+      text: { type: "string", required: true, max: POST_LIMIT },
+      image_prompt: { type: "string", required: false, max: 400 },
+    },
+    effects: ["relay.kind1", "image.gen"],
+    prompt: "public social post → goes to your Nostr followers' feeds. RARE and DELIBERATE — only when worth broadcasting beyond the room. Pass an optional image_prompt to attach a generated photograph (mundane and specific in good light beats dramatic landscapes; describe what's in frame).",
     handler: async (deps, ctx, args) => {
-      await deps.relayPost(ctx.agentId, args.text, ctx.model);
+      let extraTags;
+      let content = args.text;
+      if (args.image_prompt && args.image_prompt.trim() && deps.generatePostImage) {
+        // Per-character cooldown so a runaway LLM can't chew through
+        // FLUX credits. Sim-time-aware: 60 sim-min between images.
+        const lastAt = deps.imagePostCooldown?.get?.(ctx.pubkey) ?? 0;
+        const nowSim = deps.simClock?.now?.()?.real_ms ?? Date.now();
+        const cadence = deps.simClock?.cadence?.() ?? 60_000;
+        const cooldownMs = 60 * cadence; // 60 sim-min
+        if (nowSim - lastAt < cooldownMs) {
+          // Post the text without the image; surface a perception so
+          // the LLM knows why the image didn't go through.
+          deps.perception?.appendOne?.(ctx.pubkey, {
+            kind: "image_post_throttled",
+            reason: "you're cooling down on photographs — give it some sim-time",
+          });
+        } else {
+          try {
+            const img = await deps.generatePostImage({
+              pubkey: ctx.pubkey,
+              prompt: args.image_prompt,
+            });
+            content = `${args.text}\n\n${img.url}`;
+            extraTags = [
+              ["imeta", `url ${img.url}`, `m ${img.mime}`, `x ${img.sha256}`],
+            ];
+            deps.imagePostCooldown?.set?.(ctx.pubkey, nowSim);
+          } catch (err) {
+            console.warn(`[post:image] ${ctx.pubkey.slice(0, 8)} — ${err?.message || err}`);
+            // Fall through with text-only post.
+            deps.perception?.appendOne?.(ctx.pubkey, {
+              kind: "image_post_failed",
+              reason: err?.message?.slice(0, 120) || "image gen unavailable",
+            });
+          }
+        }
+      }
+      const event = await deps.relayPost(ctx.agentId, content, ctx.model, extraTags);
+      // Return shape carries image fields so the session-event hook
+      // in server.js can include them in the recap window.
+      return {
+        ok: true,
+        verb: "post",
+        args: extraTags
+          ? { text: args.text, image_prompt: args.image_prompt, image_url: extraTags[0][1].slice(4) }
+          : { text: args.text },
+        event_id: event?.id,
+      };
     },
   },
 
   idle: {
     args: {},
     effects: [],
+    prompt: "explicit no-op. Use when you genuinely have nothing to do.",
     handler: async () => {
       // Pure no-op. Recorded in the action log for honest accounting.
+    },
+  },
+
+  follow: {
+    args: {
+      target_pubkey: { type: "string", required: true, max: 64 },
+    },
+    effects: ["relay.kind3"],
+    prompt: "follow another character on Nostr (kind:3 contact list update). Use after a meaningful first meeting.",
+    handler: async (deps, ctx, args) => {
+      const target = String(args.target_pubkey || "").trim();
+      if (!/^[0-9a-f]{64}$/i.test(target)) return { ok: false, reason: "target_pubkey must be 64-char hex" };
+      if (target === ctx.pubkey) return { ok: false, reason: "cannot follow yourself" };
+      const c = deps.loadCharacter(ctx.pubkey);
+      if (!c) return { ok: false, reason: "your character record is gone" };
+      const next = [...new Set([...(c.follows || []), target])];
+      deps.saveCharacterManifest(ctx.pubkey, { follows: next });
+      try { await deps.publishCharacterFollows?.(ctx.pubkey); }
+      catch (err) { console.warn(`[follow] kind:3 publish failed: ${err?.message}`); }
+      // Emit perception on the followed character so they see it next turn.
+      deps.perception?.appendOne?.(target, {
+        kind: "follow_received",
+        from_pubkey: ctx.pubkey,
+        from_name: ctx.name,
+      });
+      // Subscribe this follower to the followee's kind:1 stream so future
+      // posts surface as `post_seen` perception events. The bridge keeps
+      // this subscription open across turns; no per-turn cost.
+      try { deps.subscribeToFollowee?.(ctx.pubkey, target); }
+      catch (err) { console.warn(`[follow] subscribe failed: ${err?.message}`); }
+      return { ok: true, verb: "follow", args: { target_pubkey: target, target_name: deps.loadCharacter(target)?.name || null } };
+    },
+  },
+
+  reply: {
+    args: {
+      to_event_id: { type: "string", required: true, max: 64 },
+      text: { type: "string", required: true, max: POST_LIMIT },
+      to_pubkey: { type: "string", required: false, max: 64 },
+      image_prompt: { type: "string", required: false, max: 400 },
+    },
+    effects: ["relay.kind1"],
+    prompt: "reply publicly to a post you've seen (NIP-10 reply chain). Don't reply to everything — only when you have something specific to say. Pass an optional image_prompt to attach a generated photograph.",
+    handler: async (deps, ctx, args) => {
+      const eid = String(args.to_event_id || "").trim();
+      if (!/^[0-9a-f]{64}$/i.test(eid)) return { ok: false, reason: "to_event_id must be 64-char hex" };
+      const tags = [["e", eid, "", "reply"]];
+      if (args.to_pubkey && /^[0-9a-f]{64}$/i.test(args.to_pubkey)) {
+        tags.push(["p", args.to_pubkey]);
+      }
+      let content = args.text;
+      if (args.image_prompt && args.image_prompt.trim() && deps.generatePostImage) {
+        try {
+          const img = await deps.generatePostImage({ pubkey: ctx.pubkey, prompt: args.image_prompt });
+          content = `${args.text}\n\n${img.url}`;
+          tags.push(["imeta", `url ${img.url}`, `m ${img.mime}`, `x ${img.sha256}`]);
+        } catch (err) {
+          console.warn(`[reply:image] ${ctx.pubkey.slice(0, 8)} — ${err?.message || err}`);
+        }
+      }
+      const event = await deps.relayPost(ctx.agentId, content, ctx.model, tags);
+      return {
+        ok: true,
+        verb: "reply",
+        args: {
+          to_event_id: eid,
+          to_pubkey: args.to_pubkey || null,
+          text: args.text,
+          image_url: tags.find((t) => t[0] === "imeta")?.[1]?.slice(4) || null,
+        },
+        event_id: event?.id,
+      };
+    },
+  },
+
+  use: {
+    args: {
+      object_id: { type: "string", required: true, max: 64 },
+    },
+    effects: ["object.state", "needs.*", "moodlet.add"],
+    prompt: "interact with a smart object you can see (use its id). Beds restore energy and skip you to morning; the fridge has leftovers; chairs let you sit.",
+    handler: async (deps, ctx, args) => {
+      if (!deps.objectsRegistry) return { ok: false, reason: "objects unavailable" };
+      const inst = deps.objectsRegistry.get(args.object_id);
+      if (!inst) return { ok: false, reason: `unknown object: ${args.object_id}` };
+      const type = OBJECT_TYPES[inst.type];
+      if (!type) return { ok: false, reason: `unknown type: ${inst.type}` };
+      const affordance = type.affordances?.[0];
+      if (!affordance) return { ok: false, reason: `${inst.type} has no affordances` };
+
+      // Locate the agent on the map for adjacency check.
+      const snapshot = ctx?.snapshot ?? deps.getSnapshot?.();
+      const me = (snapshot?.agents || []).find((a) => a.npub === ctx.pubkey);
+      const myX = Number.isFinite(me?.x) ? me.x : null;
+      const myY = Number.isFinite(me?.y) ? me.y : null;
+
+      // Validate preconditions.
+      for (const pre of affordance.preconditions || []) {
+        if (pre === "adjacent") {
+          if (myX == null || myY == null) {
+            return { ok: false, reason: "not on the map" };
+          }
+          const dx = Math.abs(inst.x - myX);
+          const dy = Math.abs(inst.y - myY);
+          if (Math.max(dx, dy) > 1) {
+            return {
+              ok: false,
+              reason: `not adjacent to ${inst.type} at (${inst.x}, ${inst.y}) — you're at (${myX}, ${myY}). Move closer first.`,
+            };
+          }
+        }
+        if (pre === "free") {
+          if (inst.state?.occupant) {
+            return { ok: false, reason: `${inst.type} is in use by someone else` };
+          }
+        }
+      }
+
+      // Apply effects in declared order.
+      for (const eff of affordance.effects || []) {
+        switch (eff.kind) {
+          case "occupy":
+            deps.objectsRegistry.patchState(inst.id, { occupant: ctx.pubkey });
+            break;
+          case "instance":
+            if (eff.field) {
+              const next = eff.op === "=" ? eff.value : (inst.state?.[eff.field] ?? null);
+              deps.objectsRegistry.patchState(inst.id, { [eff.field]: next });
+            }
+            break;
+          case "need":
+            if (deps.needsTracker?.setAxis && deps.needsTracker?.adjust) {
+              if (eff.op === "=") {
+                deps.needsTracker.setAxis(ctx.pubkey, eff.axis, eff.amount);
+              } else if (eff.op === "+") {
+                deps.needsTracker.adjust(ctx.pubkey, eff.axis, +eff.amount);
+              } else if (eff.op === "-") {
+                deps.needsTracker.adjust(ctx.pubkey, eff.axis, -eff.amount);
+              }
+            }
+            break;
+          case "moodlet":
+            if (deps.moodletsTracker?.emit) {
+              // duration_sim_min translates to real-ms via the active
+              // sim-clock cadence. Falls back to 4h if no sim-clock.
+              let durationMs = undefined;
+              if (Number.isFinite(eff.duration_sim_min) && deps.simClock?.cadence) {
+                durationMs = eff.duration_sim_min * deps.simClock.cadence();
+              } else if (Number.isFinite(eff.duration_ms)) {
+                durationMs = eff.duration_ms;
+              }
+              deps.moodletsTracker.emit(ctx.pubkey, {
+                tag: eff.tag,
+                weight: eff.weight ?? 0,
+                reason: eff.reason || "",
+                source: "card",
+                duration_ms: durationMs,
+              });
+            }
+            break;
+          case "advance_sim":
+            // Sleep skips boring sim-time forward. Solo-character demo
+            // path; revisit when multi-character days have to coexist.
+            if (deps.simClock?.advance && Number.isFinite(eff.sim_minutes)) {
+              deps.simClock.advance(eff.sim_minutes * 60_000);
+            }
+            break;
+        }
+      }
+
+      // Perception event for scene-mates so they witness the action.
+      const matesPubkeys = deps.sceneMatesOf?.(snapshot, ctx.pubkey) || [];
+      if (matesPubkeys.length > 0) {
+        deps.perception?.broadcastTo?.(
+          matesPubkeys,
+          {
+            kind: "object_used",
+            who_pubkey: ctx.pubkey,
+            who_name: ctx.name,
+            object_id: inst.id,
+            object_type: inst.type,
+            verb: affordance.verb,
+          },
+          ctx.pubkey,
+        );
+      }
+
+      return {
+        ok: true,
+        verb: "use",
+        args: { object_id: inst.id, object_type: inst.type, affordance: affordance.verb },
+      };
     },
   },
 };

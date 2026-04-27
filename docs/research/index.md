@@ -15,6 +15,10 @@ The proven, non-LLM design patterns for autonomous NPCs.
 - [Shadows of Doubt — procedural citizens, schedule-as-investigation](#/docs/shadows-of-doubt)
 - [Stardew Valley — hand-authored schedule files + cascade overrides](#/docs/stardew-valley)
 - [The Elder Scrolls — Radiant AI / AI Packages](#/docs/elder-scrolls-radiant-ai)
+- [Battle Brothers — durable identity as the story engine](#/docs/battle-brothers)
+- [King of Dragon Pass / Six Ages — event cards as systemic narrative](#/docs/king-of-dragon-pass)
+- [Mood systems — event-driven affect across shipped games](#/docs/mood-systems)
+- [Barotrauma — three-clock scenario architecture](#/docs/barotrauma)
 
 ## Persistent multi-user worlds
 
@@ -36,7 +40,7 @@ What experimenting with LLMs as NPC brains has and hasn't validated.
 
 ## Top architectural patterns to take into woid
 
-The same five ideas keep recurring across all of these references:
+The same ideas keep recurring across all of these references:
 
 1. **Put the verbs on the world, not in the prompt.** Smart-object affordances (Sims), wired furni (Habbo), advertised utilities — the world tells the agent what's possible. This bounds the LLM's action space and makes new content additive.
 
@@ -47,6 +51,12 @@ The same five ideas keep recurring across all of these references:
 4. **Cascade-of-overrides for routines.** Stardew's `default → seasonal → friendship-heart → festival` cascade lets you author a baseline once and only patch exceptions. This is how you avoid authoring 365 schedules per NPC.
 
 5. **Veto layer between LLM and engine.** Bethesda's Radiant AI murdered NPCs over forks in pre-release Oblivion. Every LLM-emitted action passes through a hard-coded condition gate (`NoCrime`, `RespectQuestState`, `NoLeaveRoomIfDoorLocked`) before execution. Emergence is always trying to murder NPCs over forks.
+
+6. **Decay for biology, events for psychology.** The cross-game survey of mood systems is unanimous: hunger/energy decay over time, but mood/stress/morale is the *sum of recent events with weights and durations*. Moodlets, not a bar. RimWorld's Thoughts, CK3's Stress, Sims 4 Emotions, PZ Moodles all share this shape.
+
+7. **Durable identity is the story engine.** Battle Brothers, M&B, Wildermyth, Shadow of Mordor's Nemesis — emergent narrative comes from characters whose persistent traits, scars, and relationships *accumulate visibly*. Decay needs aren't story; they're pressure. Story is what the player remembers about *this specific character*.
+
+8. **Hand-authored content + systemic selection.** King of Dragon Pass's event-card pool is the cleanest demonstration: ~500 written cards picked by a small ranker over world-state predicates feels hand-crafted because every word *was* hand-crafted. The system decides *when*; humans decide *what*.
 
 ## Top anti-patterns to avoid
 

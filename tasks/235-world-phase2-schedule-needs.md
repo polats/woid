@@ -1,9 +1,24 @@
 ---
 name: World phase 2 — schedules, needs, and per-day event roll
 description: Cheap deterministic behavior layer. Personality enum picks an activity timetable; needs vector ticks server-side; LLM is consulted only when a need crosses threshold or the timetable advances. Flips the cost model from per-tick to per-event.
-status: todo
+status: blocked
 order: 235
 epic: world
+superseded_by: [275, 295, 305, 315, 325]
+---
+
+> **Status note (2026-04):** This card is **superseded** by the storyteller / vertical-slice design captured in [docs/design/storyteller.md](../docs/design/storyteller.md), [docs/design/vertical-slice.md](../docs/design/vertical-slice.md), and [docs/design/threads-arcs-loops.md](../docs/design/threads-arcs-loops.md). Pieces have moved as follows:
+>
+> - Needs vector → narrowed to `{energy, social}`; curiosity replaced by the **moodlet** system (#275).
+> - Personality enum + activity timetables → **dropped**. Identity lives in `about`; behavior is shaped by moodlets, threads, traits.
+> - Daily event roll → reshaped as the **card pool + director** (#305).
+> - Mood enum → derived **mood band** from moodlet sum (#275).
+> - LLM gate → still a cost lever; now lives inside #305's director.
+>
+> Slice 1 of the original design (3-axis needs + sim-clock decay + low-threshold interrupts) shipped; that's the substrate #275 builds on.
+>
+> Body below preserved for historical reference. **Don't work this card directly** — pick up #275 / #295 / #305 / #315 / #325 instead.
+
 ---
 
 Depends on #225 (verb set + GM). This card is the single biggest cost lever in the world plan: it makes 90%+ of NPC behavior happen *without* an LLM call, while keeping the world feeling alive.

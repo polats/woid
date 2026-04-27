@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import AgentProfile from './AgentProfile.jsx'
+import AgentSchedule from './AgentSchedule.jsx'
 import AgentInspector from './AgentInspector.jsx'
 import AgentSystemPrompt from './AgentSystemPrompt.jsx'
 import config from './config.js'
@@ -107,6 +108,16 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
             <span>Profile</span>
           </button>
           <button
+            className={`agent-drawer-sidetab${tab === 'schedule' ? ' active' : ''}`}
+            role="tab"
+            aria-selected={tab === 'schedule'}
+            onClick={() => handleTabChange('schedule')}
+            title="Schedule — daily timetable + routing status"
+          >
+            <IconSchedule />
+            <span>Schedule</span>
+          </button>
+          <button
             className={`agent-drawer-sidetab${tab === 'context' ? ' active' : ''}`}
             role="tab"
             aria-selected={tab === 'context'}
@@ -207,6 +218,12 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
               ) : (
                 <p className="muted" style={{ padding: 14 }}>No character loaded.</p>
               )
+            ) : tab === 'schedule' ? (
+              character?.pubkey ? (
+                <AgentSchedule pubkey={character.pubkey} />
+              ) : (
+                <p className="muted" style={{ padding: 14 }}>No character loaded.</p>
+              )
             ) : tab === 'system' ? (
               character?.pubkey ? (
                 <AgentSystemPrompt bridgeUrl={bridgeUrl} pubkey={character.pubkey} />
@@ -245,6 +262,15 @@ function IconContext() {
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3.5" y="4" width="17" height="16" rx="1" />
       <path d="M7 9h10M7 13h10M7 17h6" />
+    </svg>
+  )
+}
+
+function IconSchedule() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
     </svg>
   )
 }

@@ -19,16 +19,21 @@ const GEN_MODELS = [
 ]
 
 // Need axes (matches NEED_AXES on the bridge). Order = display order.
-const NEEDS_AXES = ['energy', 'social', 'curiosity']
+// Narrowed from 3-axis (#235) to 2-axis (#275) — psychological state
+// moved to moodlets.
+const NEEDS_AXES = ['energy', 'social']
 
 // Compute the 4-state wellbeing level from a needs vector. Mirrors
 // computeWellbeing() in agent-sandbox/pi-bridge/needs.js — kept
 // duplicated rather than shared because the frontend doesn't import
 // server-side modules.
+// Loosened bands (mirrors needs.js DEFAULTS.wellbeingBands).
+// All axes ≥ 50 → thriving. Below 50 → uneasy. Below 30 → distressed.
+// Below 15 → in_crisis.
 const WELLBEING_BANDS = [
-  { name: 'thriving',   min: 70 },
-  { name: 'uneasy',     min: 50 },
-  { name: 'distressed', min: 30 },
+  { name: 'thriving',   min: 50 },
+  { name: 'uneasy',     min: 30 },
+  { name: 'distressed', min: 15 },
   { name: 'in_crisis',  min: 0  },
 ]
 function wellbeingFromNeeds(needs) {
@@ -129,6 +134,10 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
   const [genModel, setGenModel] = useState('')
   const [streamModel, setStreamModel] = useState(null)
   const streamAbortRef = useRef(null)
+  // Debounce handle for auto-persisting slider changes. Slider drags
+  // produce many onChange events per second; coalesce into a single
+  // PATCH after the user pauses ~250ms.
+  const needsPersistTimer = useRef(null)
 
   // Avatar
   const [avatarLoading, setAvatarLoading] = useState(false)
@@ -147,10 +156,42 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           model: c.model ?? '',
           harness: c.harness ?? 'direct',
           promptStyle: c.promptStyle ?? 'minimal',
+          needs: {
+            energy: c.needs?.energy ?? 75,
+            social: c.needs?.social ?? 75,
+          },
         })
       })
       .catch((err) => setError(err.message || String(err)))
   }, [pubkey])
+
+  // Auto-persist needs after a short debounce — slider drags produce
+  // a flood of onChange events; we coalesce and PATCH once when the
+  // user pauses. This keeps the manifest in sync with what the user
+  // sees, so a drag-to-spawn picks up the correct initial values.
+  function scheduleNeedsPersist(nextNeeds) {
+    if (!cfg.bridgeUrl || !pubkey) return
+    if (needsPersistTimer.current) clearTimeout(needsPersistTimer.current)
+    needsPersistTimer.current = setTimeout(async () => {
+      try {
+        const r = await fetch(`${cfg.bridgeUrl}/characters/${pubkey}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ needs: nextNeeds }),
+        })
+        if (!r.ok) return
+        // Update local character so isDirty() doesn't keep flagging
+        // needs as changed against a now-stale snapshot.
+        setCharacter((c) => (c ? { ...c, needs: nextNeeds } : c))
+      } catch { /* transient — next slider change retries */ }
+    }, 250)
+  }
+
+  // Cancel any pending needs PATCH on unmount so a closing drawer
+  // doesn't leak an in-flight write.
+  useEffect(() => () => {
+    if (needsPersistTimer.current) clearTimeout(needsPersistTimer.current)
+  }, [])
 
   // Live needs poll — character.needs in state is whatever was loaded
   // at fetch time; the bridge persists every 5s after a 2-point drift,
@@ -174,6 +215,28 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
     return () => { cancelled = true; clearInterval(t) }
   }, [pubkey])
 
+  // Live moodlets poll (#275 slice 1.4). Per-character endpoint —
+  // returns active moodlets + derived mood + band. Same 4s cadence
+  // as needs so the Vitals panel reads as a single coherent surface.
+  const [liveMood, setLiveMood] = useState(null)
+  useEffect(() => {
+    if (!cfg.bridgeUrl || !pubkey) return
+    let cancelled = false
+    async function poll() {
+      try {
+        const r = await fetch(`${cfg.bridgeUrl}/moodlets/${pubkey}`)
+        if (!r.ok) return
+        const j = await r.json()
+        if (!cancelled) {
+          setLiveMood({ active: j.active || [], mood: j.mood, band: j.band })
+        }
+      } catch { /* ignore */ }
+    }
+    poll()
+    const t = setInterval(poll, 4000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [pubkey])
+
   // Whether the form has unsaved changes vs the loaded character.
   // Lifts to AgentDrawer + Sandbox via onDirtyChange so they can warn
   // before navigating away (tab switch, dismiss, character change).
@@ -185,7 +248,8 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
       form.state !== (character.state ?? '') ||
       (form.model || null) !== (character.model || null) ||
       (form.harness || 'direct') !== (character.harness || 'direct') ||
-      (form.promptStyle || 'minimal') !== (character.promptStyle || 'minimal')
+      (form.promptStyle || 'minimal') !== (character.promptStyle || 'minimal') ||
+      NEEDS_AXES.some((a) => (form.needs?.[a] ?? 75) !== (character.needs?.[a] ?? 75))
     )
   }, [character, form])
 
@@ -213,6 +277,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           model: form.model || null,
           harness: form.harness || null,
           promptStyle: form.promptStyle || null,
+          needs: form.needs ?? undefined,
         }),
       })
       if (!r.ok) throw new Error(await r.text())
@@ -502,10 +567,18 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
             disabled={saving || generating}
           />
         </label>
-        {/* Vitals — derived wellbeing + three needs bars. Live values
-            poll every 4s. Character voice lives in `about`; there is
-            no personality / vibe enum. */}
-        <Vitals characterNeeds={character?.needs} live={liveNeeds} />
+        {/* Vitals — derived wellbeing badge + 2 needs bars + active
+            moodlets. Live values poll every 4s. Character voice lives
+            in `about`; there is no personality / vibe enum. */}
+        <Vitals
+          form={form}
+          setForm={setForm}
+          characterNeeds={character?.needs}
+          live={liveNeeds}
+          liveMood={liveMood}
+          disabled={saving || generating}
+          onNeedsChange={scheduleNeedsPersist}
+        />
       </fieldset>
 
       {/* Settings — applies on every spawn for this character. Brain
@@ -638,39 +711,157 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
 }
 
 /**
- * Vitals — derived wellbeing badge + three needs bars (energy, social,
- * curiosity). Live values come from /health/needs (polled every 4s);
- * fall back to the manifest's persisted needs while live data loads.
+ * Vitals — derived wellbeing badge + two needs axes (energy, social).
+ * Mood / moodlets are layered on top by slice 4 of #275; this panel
+ * owns the biological-pressure surface.
  *
- * No personality / vibe enum — character voice lives in `about`.
+ * Two modes, picked by whether the character is currently running:
+ *   - RUNNING (live data present)  → read-only bars from the live
+ *                                    tracker, polled every 4s. The
+ *                                    server-side decay loop is the
+ *                                    source of truth.
+ *   - NOT RUNNING (no live data)   → sliders bound to form.needs.
+ *                                    The user dials in INITIAL spawn
+ *                                    values. Wellbeing badge updates
+ *                                    live as you drag. Save persists
+ *                                    via PATCH /characters/:pubkey.
  */
-function Vitals({ characterNeeds, live }) {
-  const needs = live?.needs ?? characterNeeds ?? null
-  const wellbeing = live?.wellbeing ?? wellbeingFromNeeds(needs)
+function Vitals({ form, setForm, characterNeeds, live, liveMood, disabled, onNeedsChange }) {
+  // Editable when no live tracker entry — i.e. character isn't being
+  // ticked yet. As soon as it spawns, /health/needs starts returning
+  // data and the panel flips back to read-only bars.
+  const editable = !live
+
+  // For the badge / bars, prefer the freshest source available.
+  const sourceNeeds = editable
+    ? (form?.needs ?? characterNeeds)
+    : (live?.needs ?? characterNeeds)
+  const wellbeing = !editable && live?.wellbeing
+    ? live.wellbeing
+    : wellbeingFromNeeds(sourceNeeds)
+
+  function setAxis(axis, value) {
+    setForm((f) => {
+      const nextNeeds = { ...(f?.needs || {}), [axis]: value }
+      // Auto-persist the new needs vector so spawn picks them up
+      // without requiring a separate Save click.
+      onNeedsChange?.(nextNeeds)
+      return { ...f, needs: nextNeeds }
+    })
+  }
+
+  // Moodlets are an additional surface — independent of needs. The
+  // mood band derives from sum-of-active-moodlets; we show it as a
+  // small chip under the wellbeing badge so the two are legible at
+  // a glance.
+  const moodletsActive = liveMood?.active || []
+  const moodBand = liveMood?.band || null
 
   return (
     <div className="agent-profile-vitals">
       <div className="agent-profile-vitals-row">
         <span className="agent-profile-field-label">Wellbeing</span>
-        <span className={`agent-profile-wellbeing-badge wellbeing-${wellbeing}`} title="Derived from current needs (worst axis wins)">
+        <span
+          className={`agent-profile-wellbeing-badge wellbeing-${wellbeing}`}
+          title={editable
+            ? 'Initial wellbeing on spawn — drag the sliders to dial it in'
+            : 'Derived from current needs (worst axis wins)'}
+        >
           {wellbeing.replace('_', ' ')}
         </span>
+        {moodBand && (
+          <span
+            className={`agent-profile-mood-badge mood-${moodBand}`}
+            title="Mood — derived from the sum of active moodlets (event-driven, not decay)"
+          >
+            mood: {moodBand}
+          </span>
+        )}
       </div>
       <div className="agent-profile-needs-grid">
         {NEEDS_AXES.map((axis) => {
-          const v = typeof needs?.[axis] === 'number' ? Math.round(needs[axis]) : null
-          const tier = v == null ? null : v >= 70 ? 'thriving' : v >= 50 ? 'uneasy' : v >= 30 ? 'distressed' : 'in_crisis'
+          const v = typeof sourceNeeds?.[axis] === 'number' ? Math.round(sourceNeeds[axis]) : null
+          const tier = v == null ? null : v >= 50 ? 'thriving' : v >= 30 ? 'uneasy' : v >= 15 ? 'distressed' : 'in_crisis'
           return (
-            <div key={axis} className={`agent-profile-need need-${axis}${tier ? ` tier-${tier}` : ''}`}>
+            <div key={axis} className={`agent-profile-need need-${axis}${tier ? ` tier-${tier}` : ''}${editable ? ' editable' : ''}`}>
               <span className="agent-profile-need-label">{axis}</span>
-              <div className="agent-profile-need-bar">
-                <div className="agent-profile-need-fill" style={{ width: `${v ?? 0}%` }} />
-              </div>
+              {editable ? (
+                <input
+                  type="range"
+                  min={0} max={100} step={1}
+                  value={v ?? 75}
+                  onChange={(e) => setAxis(axis, Number(e.target.value))}
+                  disabled={disabled}
+                  className="agent-profile-need-slider"
+                  style={{ '--fill': `${v ?? 75}%` }}
+                  aria-label={`set initial ${axis} need`}
+                />
+              ) : (
+                <div className="agent-profile-need-bar">
+                  <div className="agent-profile-need-fill" style={{ width: `${v ?? 0}%` }} />
+                </div>
+              )}
               <span className="agent-profile-need-value">{v ?? '—'}</span>
             </div>
           )
         })}
       </div>
+      <Moodlets active={moodletsActive} />
     </div>
   )
+}
+
+/**
+ * Active moodlets list — small chips beneath the needs bars showing
+ * what's currently weighing on the character. Each chip carries a
+ * signed-weight pill, the human reason, and a "fades in N" countdown.
+ * Sticky moodlets (expires_at: null) show "ongoing" instead.
+ *
+ * Empty state collapses to a single muted line so the panel doesn't
+ * flap height when the list is empty.
+ */
+function Moodlets({ active }) {
+  const sorted = [...active].sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight))
+  return (
+    <div className="agent-profile-moodlets">
+      <div className="agent-profile-moodlets-header">
+        <span className="agent-profile-field-label">Moodlets</span>
+        <span className="agent-profile-moodlets-count">{sorted.length || 'none active'}</span>
+      </div>
+      {sorted.length > 0 && (
+        <ul className="agent-profile-moodlet-list">
+          {sorted.map((m) => {
+            const sign = m.weight >= 0 ? '+' : ''
+            const polarity = m.weight > 0 ? 'positive' : m.weight < 0 ? 'negative' : 'neutral'
+            return (
+              <li key={m.id} className={`agent-profile-moodlet polarity-${polarity}`}>
+                <span className={`agent-profile-moodlet-weight polarity-${polarity}`}>
+                  {sign}{m.weight}
+                </span>
+                <span className="agent-profile-moodlet-reason" title={m.tag}>
+                  {m.reason || m.tag}
+                </span>
+                <span className="agent-profile-moodlet-fade muted">
+                  {fadesInLabel(m.expires_at)}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function fadesInLabel(expiresAt) {
+  if (expiresAt == null) return 'ongoing'
+  const ms = expiresAt - Date.now()
+  if (ms <= 0) return 'fading'
+  const min = Math.floor(ms / 60_000)
+  if (min < 1) return 'fades soon'
+  if (min < 60) return `fades in ${min}m`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `fades in ${hr}h`
+  const d = Math.floor(hr / 24)
+  return `fades in ${d}d`
 }

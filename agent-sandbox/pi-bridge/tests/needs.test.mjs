@@ -25,8 +25,8 @@ function fakeClock() {
 
 // ── axes ──
 
-test("NEED_AXES is the three-axis set", () => {
-  assert.deepEqual(NEED_AXES, ["energy", "social", "curiosity"]);
+test("NEED_AXES is the two-axis set (energy, social)", () => {
+  assert.deepEqual(NEED_AXES, ["energy", "social"]);
 });
 
 // ── register / get ──
@@ -43,11 +43,13 @@ test("register: creates a fresh record at initial value across all axes", () => 
 test("register: seed needs override defaults; legacy axes are ignored", () => {
   const tracker = createNeedsTracker();
   const rec = tracker.register("alice", {
-    needs: { energy: 80, hunger: 10, hygiene: 5 }, // hunger/hygiene are legacy
+    // hunger/hygiene are legacy from the Sims-shape proposal; curiosity
+    // is legacy from #235's 3-axis intermediate. All silently ignored.
+    needs: { energy: 80, curiosity: 50, hunger: 10, hygiene: 5 },
   });
   assert.equal(rec.needs.energy, 80);
   assert.equal(rec.needs.social, DEFAULTS.initialValue);
-  assert.equal(rec.needs.curiosity, DEFAULTS.initialValue);
+  assert.equal(rec.needs.curiosity, undefined);
   assert.equal(rec.needs.hunger, undefined);
   assert.equal(rec.needs.hygiene, undefined);
 });
@@ -76,15 +78,36 @@ test("get: returns null for unknown pubkey", () => {
 
 test("tickAll: applies decay scaled by elapsed sim-minutes", () => {
   const clock = fakeClock();
-  const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000 });
+  // Use a 1ms-per-sim-min override so the math stays whole numbers.
+  // The default rates target 24h energy / 48h social drain.
+  const tracker = createNeedsTracker({
+    now: clock.now,
+    simMinutePerRealMs: 1,
+    decayPerMin: { energy: 1, social: 0.5 }, // explicit for the test
+  });
   tracker.register("alice");
-  clock.advance(60_000); // 60 sim-minutes
+  clock.advance(60); // 60 sim-minutes worth of ms (since 1ms = 1 sim-min)
   tracker.tickAll(clock.now());
   const r = tracker.get("alice");
+  // energy decay 1.0 × 60 = 60
+  assert.equal(r.needs.energy, DEFAULTS.initialValue - 60);
   // social decay 0.5 × 60 = 30
   assert.equal(r.needs.social, DEFAULTS.initialValue - 30);
-  // curiosity decay 0.4 × 60 = 24
-  assert.equal(r.needs.curiosity, DEFAULTS.initialValue - 24);
+});
+
+test("tickAll: default rates drain to 0 over 24/48 sim-hours", () => {
+  const clock = fakeClock();
+  // 1ms = 1 sim-min so we can step in clean increments.
+  const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1 });
+  tracker.register("alice", { needs: { energy: 100, social: 100 } });
+  // 24 sim-hours = 1440 sim-min worth of ms.
+  clock.advance(24 * 60);
+  tracker.tickAll(clock.now());
+  const r = tracker.get("alice");
+  // energy at default rate (100/1440 per sim-min × 1440 sim-min = 100) → 0
+  assert.equal(Math.round(r.needs.energy), 0);
+  // social only halfway after 24h (drains 48h)
+  assert.equal(Math.round(r.needs.social), 50);
 });
 
 test("tickAll: needs clamp at 0", () => {
@@ -105,7 +128,7 @@ test("tickAll: emits crossing when axis dips below lowThreshold", () => {
   // Seed energy at 31 so a single tick of decay (0.3 × 30 sim-min = 9
   // points lost) drops it to 22 — past the default threshold of 30.
   const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000 });
-  tracker.register("alice", { needs: { energy: 31, social: 80, curiosity: 80 } });
+  tracker.register("alice", { needs: { energy: 31, social: 80 } });
   clock.advance(30_000);
   const out = tracker.tickAll(clock.now());
   const me = out.find((r) => r.pubkey === "alice");
@@ -120,7 +143,7 @@ test("tickAll: no crossing when axis was already below threshold", () => {
   const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000 });
   // Already at 25 — under the threshold. Decay continues but no
   // re-fire (it didn't *cross* anything this tick).
-  tracker.register("alice", { needs: { energy: 25, social: 80, curiosity: 80 } });
+  tracker.register("alice", { needs: { energy: 25, social: 80 } });
   clock.advance(30_000);
   const out = tracker.tickAll(clock.now());
   const me = out.find((r) => r.pubkey === "alice");
@@ -130,7 +153,7 @@ test("tickAll: no crossing when axis was already below threshold", () => {
 test("tickAll: multiple axes can cross in the same tick", () => {
   const clock = fakeClock();
   const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000 });
-  tracker.register("alice", { needs: { energy: 31, social: 31, curiosity: 80 } });
+  tracker.register("alice", { needs: { energy: 31, social: 31 } });
   clock.advance(60_000);
   const out = tracker.tickAll(clock.now());
   const me = out.find((r) => r.pubkey === "alice");
@@ -142,7 +165,7 @@ test("tickAll: multiple axes can cross in the same tick", () => {
 test("tickAll: custom lowThreshold respected", () => {
   const clock = fakeClock();
   const tracker = createNeedsTracker({ now: clock.now, simMinutePerRealMs: 1000, lowThreshold: 50 });
-  tracker.register("alice", { needs: { energy: 51, social: 80, curiosity: 80 } });
+  tracker.register("alice", { needs: { energy: 51, social: 80 } });
   clock.advance(20_000);
   const out = tracker.tickAll(clock.now());
   assert.equal(out[0].crossings.length, 1);
@@ -183,8 +206,9 @@ test("adjust: rejects invalid axis (legacy or unknown)", () => {
   const tracker = createNeedsTracker();
   tracker.register("alice");
   assert.equal(tracker.adjust("alice", "wisdom", 10), null);
-  assert.equal(tracker.adjust("alice", "hunger", 10), null);  // legacy
-  assert.equal(tracker.adjust("alice", "hygiene", 10), null); // legacy
+  assert.equal(tracker.adjust("alice", "hunger", 10), null);    // legacy
+  assert.equal(tracker.adjust("alice", "hygiene", 10), null);   // legacy
+  assert.equal(tracker.adjust("alice", "curiosity", 10), null); // legacy (#235)
 });
 
 test("adjust: rejects unknown pubkey", () => {
@@ -195,8 +219,8 @@ test("adjust: rejects unknown pubkey", () => {
 test("setAxis: replaces value", () => {
   const tracker = createNeedsTracker();
   tracker.register("alice");
-  tracker.setAxis("alice", "curiosity", 42);
-  assert.equal(tracker.get("alice").needs.curiosity, 42);
+  tracker.setAxis("alice", "social", 42);
+  assert.equal(tracker.get("alice").needs.social, 42);
 });
 
 test("setAxis: clamps and rejects non-numbers", () => {
@@ -233,12 +257,16 @@ test("snapshot reports all tracked characters with derived wellbeing", () => {
 // ── computeWellbeing ──
 
 test("computeWellbeing: high needs → thriving", () => {
-  assert.equal(computeWellbeing({ energy: 80, social: 90, curiosity: 75 }), "thriving");
+  assert.equal(computeWellbeing({ energy: 80, social: 90 }), "thriving");
+});
+
+test("computeWellbeing: 50 across the board → thriving", () => {
+  // Loosened bands — the Sims-shape Sims-strict default was harsher.
+  assert.equal(computeWellbeing({ energy: 50, social: 50 }), "thriving");
 });
 
 test("computeWellbeing: one low axis pulls level down", () => {
-  // energy 10 → in_crisis regardless of others
-  assert.equal(computeWellbeing({ energy: 10, social: 99, curiosity: 99 }), "in_crisis");
+  assert.equal(computeWellbeing({ energy: 10, social: 99 }), "in_crisis");
 });
 
 test("computeWellbeing: missing values treated as 100 (no concern)", () => {
@@ -246,27 +274,35 @@ test("computeWellbeing: missing values treated as 100 (no concern)", () => {
 });
 
 test("computeWellbeing: bands are inclusive of their min", () => {
-  // Exactly 50 → uneasy
-  assert.equal(computeWellbeing({ energy: 50, social: 100, curiosity: 100 }), "uneasy");
-  // Exactly 30 → distressed
-  assert.equal(computeWellbeing({ energy: 30, social: 100, curiosity: 100 }), "distressed");
+  // Exactly 50 → thriving (just barely)
+  assert.equal(computeWellbeing({ energy: 50, social: 100 }), "thriving");
+  // Exactly 30 → uneasy
+  assert.equal(computeWellbeing({ energy: 30, social: 100 }), "uneasy");
+  // Exactly 15 → distressed
+  assert.equal(computeWellbeing({ energy: 15, social: 100 }), "distressed");
 });
 
-test("computeWellbeing: below 30 → in_crisis", () => {
-  assert.equal(computeWellbeing({ energy: 25, social: 100, curiosity: 100 }), "in_crisis");
+test("computeWellbeing: below 15 → in_crisis", () => {
+  assert.equal(computeWellbeing({ energy: 10, social: 100 }), "in_crisis");
+});
+
+test("computeWellbeing: legacy curiosity field is ignored", () => {
+  // A manifest with a stale curiosity field should still derive
+  // wellbeing from the live two axes only.
+  assert.equal(computeWellbeing({ energy: 80, social: 90, curiosity: 5 }), "thriving");
 });
 
 // ── describeNeeds ──
 
 test("describeNeeds: all-fine reports just the wellbeing level", () => {
-  const out = describeNeeds({ energy: 85, social: 90, curiosity: 75 });
+  const out = describeNeeds({ energy: 85, social: 90 });
   assert.match(out, /Wellbeing: thriving/);
   assert.ok(!/Pressing/.test(out));
 });
 
 test("describeNeeds: lists axes below 50 sorted ascending", () => {
-  const out = describeNeeds({ energy: 80, social: 35, curiosity: 20 });
-  assert.match(out, /Pressing: curiosity 20, social 35/);
+  const out = describeNeeds({ energy: 20, social: 35 });
+  assert.match(out, /Pressing: energy 20, social 35/);
 });
 
 test("describeNeeds: empty input returns empty string", () => {

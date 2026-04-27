@@ -84,18 +84,44 @@ export function createJournal({ workspacePath, fs, now } = {}) {
     }
   }
 
-  function closeScene({ sceneId, endedAt, endReason }) {
+  /**
+   * Pull a scene out of the open map and stamp it with end metadata,
+   * but do NOT persist yet. Callers that want to attach derived data
+   * (e.g. moodlets emitted by scene-summary) call this first, mutate
+   * the returned record, then call `persistScene(rec)` to write.
+   */
+  function finalizeScene({ sceneId, endedAt, endReason }) {
     const rec = open.get(sceneId);
     if (!rec) return null;
     open.delete(sceneId);
     rec.ts_end = endedAt ?? nowFn();
     rec.end_reason = endReason ?? "unknown";
+    return rec;
+  }
+
+  /**
+   * Append a finalized scene record as a JSONL line. Idempotent on
+   * the in-memory side (`open` no longer contains the id); the file
+   * grows by one line. Callers should mutate `rec` (e.g. attach
+   * `moodlets`) before calling.
+   */
+  function persistScene(rec) {
+    if (!rec || !rec.scene_id) return;
     try {
       fsImpl.mkdirSync(dirname(path), { recursive: true });
       fsImpl.appendFileSync(path, JSON.stringify(rec) + "\n");
     } catch (err) {
       console.error(`[journal] failed to write ${path}:`, err?.message || err);
     }
+  }
+
+  /**
+   * Convenience: finalize + persist in one call. Used by callers that
+   * don't need to attach derived data.
+   */
+  function closeScene({ sceneId, endedAt, endReason }) {
+    const rec = finalizeScene({ sceneId, endedAt, endReason });
+    if (rec) persistScene(rec);
     return rec;
   }
 
@@ -185,6 +211,8 @@ export function createJournal({ workspacePath, fs, now } = {}) {
     openScene,
     appendTurn,
     appendTurnForActor,
+    finalizeScene,
+    persistScene,
     closeScene,
     listScenes,
     getScene,

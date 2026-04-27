@@ -145,8 +145,14 @@ function Waterfall({ turn, fallbackModel, contextWindow }) {
       <div className="wf-stage">
         <div className="wf-stage-head"><span className="wf-stage-icon" style={{ background: 'var(--amber)' }}>1</span>Trigger</div>
         <div className="wf-kv">
-          <div><small>Trigger</small><strong>{sections.find((s) => s.label === 'Trigger')?.content?.replace(/^Trigger:\s*/, '').trim().slice(0, 120) || turn.user?.text?.split('\n')[0] || '—'}</strong></div>
-          <div><small>When</small><code>{new Date(turn.startedAt).toLocaleTimeString()}</code></div>
+          <div><small>Trigger</small><strong>{extractTriggerText(turn.user?.text) || '—'}</strong></div>
+          <div>
+            <small>When</small>
+            <code>{new Date(turn.startedAt).toLocaleTimeString()}</code>
+            {extractSimTime(turn.user?.text) && (
+              <code className="muted wf-when-sim">{extractSimTime(turn.user?.text)}</code>
+            )}
+          </div>
           <div><small>Duration</small><code>{turn.durationMs ? `${(turn.durationMs/1000).toFixed(1)}s` : '—'}</code></div>
         </div>
       </div>
@@ -277,6 +283,28 @@ export default function AgentWaterfall({ bridgeUrl, pubkey, model, currentModel 
       </div>
     </div>
   )
+}
+
+/**
+ * Extract just the Trigger line (one-liner under "Trigger: ...").
+ * The user-turn prompt may also include `When:` and other lines that
+ * the Trigger section parser sweeps in; we only want the trigger
+ * sentence itself for the inspector card.
+ */
+function extractTriggerText(text = '') {
+  const m = text.match(/^Trigger:\s*([^\n]+)/m)
+  return m ? m[1].trim().slice(0, 120) : ''
+}
+
+/**
+ * Pull the sim-time portion out of the prompt's `When:` line.
+ * Format set by buildContext.formatRealClock + simNow:
+ *   When: 2026-04-26 21:46 UTC (real) · Day 11 · 09:14 morning (sim)
+ * Returns "Day 11 · 09:14 morning" or "" if not present.
+ */
+function extractSimTime(text = '') {
+  const m = text.match(/^When:[^\n]*?·\s*([^\n]+?)\s*\(sim\)/m)
+  return m ? m[1].trim() : ''
 }
 
 function extractTriggerKind(text = '') {

@@ -1,45 +1,59 @@
 /**
  * Needs vector — server-tracked per-character drives that decay
- * over sim-time. Three axes (`energy`, `social`, `curiosity`),
- * uniform decay rates across all characters. Personality lives in
- * the character bible (`about` field), not in a metabolic profile.
+ * over sim-time. Two axes (`energy`, `social`) with uniform decay
+ * rates. Identity lives in the character bible (`about` field), not
+ * in a metabolic profile.
  *
- * Slice 1 of #235 ships the foundation: tracking, decay, derived
- * "wellbeing" level. Slice 2 will fire LLM-gate interrupts when an
- * axis crosses a threshold; slice 3 adds activity timetables; slice
- * 4 the daily event roll.
+ * Slice 1 of #275 narrows this to two axes — energy and social —
+ * after #235's curiosity axis was deemed wrong for the audience
+ * (cozy narrative sandbox, not a Sims-style needs sim). The
+ * "what your mind is up to" surface lives in moodlets.js (event-
+ * driven, not decay-driven). See docs/research/mood-systems.md and
+ * docs/design/storyteller.md.
  *
- * Why these three (and not the Sims' five):
- *   energy     — drained ↔ wired. Universal across game shapes.
- *   social     — withdrawn ↔ eager. Drives talkativeness.
- *   curiosity  — bored ↔ absorbed. Drives "do something new."
+ * Why these two:
+ *   energy  — drained ↔ wired. Pulls the character toward rest.
+ *   social  — withdrawn ↔ eager. Pulls the character toward people.
  *
- * Hunger and hygiene are deliberately deferred. They earn their
- * place when smart objects (#245) provide affordances to satisfy
- * them; until then, "hunger 35" in a prompt is empty noise.
+ * Both have natural pull-toward-object semantics (bed for energy,
+ * other characters for social) which makes them ideal scene-framers.
+ * Mood / friction / drama is the moodlet system's job.
  *
- * Why "wellbeing" rather than emotion labels:
- *   The decay-driven scale measures BASELINE wellness — how is your
- *   inner weather right now. Emotions like anger / joy / fear are
- *   event-driven spikes that come from social or environmental
- *   triggers, not from your need vector. Mixing them confuses both
- *   the model and the player.
- *
- * Mapping to the manifest: legacy fields (`personality`,
- * `needs.hunger`, `needs.fun`, `needs.hygiene`) are ignored on read.
+ * Mapping to the manifest: legacy fields (`personality`, `needs.hunger`,
+ * `needs.fun`, `needs.hygiene`, `needs.curiosity`) are ignored on
+ * read; old `curiosity` values may still appear in legacy manifests
+ * but the tracker silently drops them.
  */
 
-export const NEED_AXES = ["energy", "social", "curiosity"];
+export const NEED_AXES = ["energy", "social"];
+
+/**
+ * One-line per-axis description used in the system prompt. Drift
+ * direction reads as "<low end> ↔ <high end>". Adding a new axis
+ * means adding to this map + decayPerMin below — the system prompt
+ * picks it up automatically.
+ */
+export const NEED_AXIS_DOCS = {
+  energy: "drained ↔ wired",
+  social: "withdrawn ↔ eager",
+};
 
 export const DEFAULTS = {
+  // Decay rates calibrated against #275 slice 2's sim-clock cadence.
+  // Energy drains 100→0 over 24 sim-hours (1 sim-day); social over
+  // 48 sim-hours. Energy depletion is universal — everyone gets
+  // tired by bedtime — while social is slower and more personality-
+  // dependent (the traits system in docs/design/traits.md modulates
+  // these per character).
   decayPerMin: {
-    energy: 0.3,
-    social: 0.5,
-    curiosity: 0.4,
+    energy: 100 / (24 * 60),   // ≈ 0.0694 per sim-min
+    social: 100 / (48 * 60),   // ≈ 0.0347 per sim-min
   },
-  // Wall-clock to sim-time conversion. 1000ms = 1 sim-min by default
-  // (so 30 real-sec ≈ 30 sim-min ≈ a noticeable need drop).
-  simMinutePerRealMs: 1000,
+  // Wall-clock to sim-time conversion. 1:1 by default — 1 real-min
+  // is 1 sim-min, so 24 real-hours = 24 sim-hours = a full energy
+  // drain. Override via NEEDS_SIM_MS_PER_MIN for dev (e.g. 2500 for
+  // ~10 min real-time = 1 sim-day demos).
+  simMinutePerRealMs: 60_000,
   // Initial value for any axis on first registration.
   initialValue: 75,
   // Threshold at which an axis is considered "low" — crossing from
@@ -51,9 +65,13 @@ export const DEFAULTS = {
   // ordering (higher band wins). Keep band names short and stable —
   // they appear in prompts, the inspector, and the map badge.
   wellbeingBands: [
-    { name: "thriving",   min: 70 },
-    { name: "uneasy",     min: 50 },
-    { name: "distressed", min: 30 },
+    // Thriving when the worst axis is still ≥ 50. Tuned more
+    // forgiving than the Sims-shape default — characters spend
+    // most of their time fine; only sustained inattention pushes
+    // them into uneasy or below.
+    { name: "thriving",   min: 50 },
+    { name: "uneasy",     min: 30 },
+    { name: "distressed", min: 15 },
     { name: "in_crisis",  min: 0  },
   ],
 };

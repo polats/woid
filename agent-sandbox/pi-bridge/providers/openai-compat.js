@@ -20,7 +20,7 @@
  * @param {number} [opts.timeoutMs]
  * @returns {Promise<{ text: string, usage?: {input:number,output:number,totalTokens:number,cost?:number} }>}
  */
-export async function generateJson({ endpoint, apiKey, systemPrompt, messages, model, timeoutMs = 60_000 }) {
+export async function generateJson({ endpoint, apiKey, systemPrompt, messages, model, timeoutMs = 60_000, maxTokens = 1024 }) {
   if (!endpoint) throw new Error("openai-compat: endpoint required");
   const url = endpoint.replace(/\/+$/, "") + "/chat/completions";
   const controller = new AbortController();
@@ -35,9 +35,9 @@ export async function generateJson({ endpoint, apiKey, systemPrompt, messages, m
     ],
     response_format: { type: "json_object" },
     temperature: 0.7,
-    // NIM's Llama family handles quite a lot of output; 1024 is a
-    // comfortable ceiling for the small Action JSON schema we expect.
-    max_tokens: 1024,
+    // Default 1024 covers small Action JSON schemas. Recap and other
+    // prose-heavy callers should bump this so JSON doesn't truncate.
+    max_tokens: maxTokens,
   };
   try {
     const res = await fetch(url, {
