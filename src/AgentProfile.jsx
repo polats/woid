@@ -283,6 +283,22 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
       if (!r.ok) throw new Error(await r.text())
       const next = await r.json()
       setCharacter(next)
+      // Re-sync form with the server's normalised response. Without
+      // this, trim()/null-coercion on the bridge can leave form and
+      // character disagreeing on whitespace or empty strings, which
+      // keeps isDirty stuck at true and the Save button never flips
+      // to "Saved". Symptom seen on prod: 4 PATCH calls in 6s because
+      // the user kept hitting Save expecting the label to change.
+      setForm((f) => ({
+        ...f,
+        name: next.name ?? f.name,
+        about: next.about ?? '',
+        state: next.state ?? '',
+        model: next.model ?? '',
+        harness: next.harness ?? 'direct',
+        promptStyle: next.promptStyle ?? 'minimal',
+        needs: { ...(f.needs || {}), ...(next.needs || {}) },
+      }))
       onUpdated?.(next)
       if (next.relayPublished === false) {
         // Relay rejected the publish — show the error, don't close.
