@@ -4592,11 +4592,36 @@ body {
     letter-spacing: 0.08em;
   }
 
-  /* RoomMap — let it scroll horizontally when wider than viewport. */
+  /* RoomMap — drop the "fit to frame" sizing on mobile and use a
+     fixed, comfortable tile size; the frame scrolls in both axes
+     and `touch-action: pan-x pan-y` enables native drag. The map
+     element gets a generous minimum so tiles aren't squashed; if
+     the frame grows (landscape, tablet) it can use the available
+     width. */
   .sandbox3-map-frame {
     overflow: auto;
     -webkit-overflow-scrolling: touch;
     touch-action: pan-x pan-y;
+  }
+  .room-map-wrap {
+    display: block;
+    width: max-content;
+    height: max-content;
+    min-width: 100%;
+    padding: var(--sp-2);
+  }
+  .room-map {
+    /* Override the container-query sizing — let the map be its own
+       size and let the frame scroll. 28px tiles × 16 wide = 448px,
+       × 12 high = 336px. Comfortable on a 375px-wide viewport with
+       horizontal pan. */
+    width: max(100%, 28px * 16);
+    height: auto;
+    min-width: calc(28px * 16);
+    min-height: calc(28px * 12);
+    max-width: none;
+    max-height: none;
+    aspect-ratio: 4 / 3;
   }
   .sandbox3-recap-pane { padding: var(--sp-2); }
 
