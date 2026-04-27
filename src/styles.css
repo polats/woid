@@ -4530,3 +4530,145 @@ body {
   color: var(--paper); background: var(--violet);
   border-radius: 8px;
 }
+
+/* ── Mobile responsive (#425 slice 2) ──────────────────────────────
+   Single breakpoint at 768px. The desktop 3-column Sandbox grid
+   collapses to a stack: cards aside on top (horizontal scroll
+   strip), stage below. Drawers go fullscreen. Sidebar overlays
+   instead of taking flex space. */
+@media (max-width: 768px) {
+  /* App shell — sidebar overlays content. The reopen ‹›› button
+     stays on top so the user can always toggle. */
+  .app { flex-direction: column; }
+  .app .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: min(280px, 85vw);
+    z-index: 40;
+    box-shadow: 4px 0 0 var(--ink);
+  }
+  .app:not(.sidebar-collapsed) .sidebar { display: block; }
+  .app.sidebar-collapsed .sidebar { width: 0; padding: 0; box-shadow: none; }
+  .sidebar-reopen { top: 8px; }
+
+  /* Sandbox — single column. Cards become a horizontal strip
+     across the top; stage takes the remaining height. */
+  .sandbox3 {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    padding: var(--sp-2);
+    gap: var(--sp-2);
+  }
+  .sandbox3:has(.agent-drawer:not(.closing)) {
+    grid-template-columns: 1fr;
+  }
+  .sandbox3-cards {
+    width: 100%;
+    max-height: 32vh;
+    padding: var(--sp-2);
+    overflow-x: auto;
+    overflow-y: auto;
+  }
+  .sandbox3-card-list {
+    flex-direction: row;
+    gap: var(--sp-2);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sandbox3-card {
+    flex: 0 0 220px;
+    max-width: 220px;
+  }
+
+  /* Stage — tabs wrap, paddings shrink. */
+  .sandbox3-stage { padding: var(--sp-2); overflow: hidden; }
+  .sandbox3-stage header {
+    flex-wrap: wrap;
+    gap: var(--sp-1);
+  }
+  .sandbox3-stage-tabs { flex-wrap: wrap; }
+  .sandbox3-stage-tab {
+    padding: 6px 10px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+
+  /* RoomMap — let it scroll horizontally when wider than viewport. */
+  .sandbox3-map-frame {
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+  }
+  .sandbox3-recap-pane { padding: var(--sp-2); }
+
+  /* Agent drawer — fullscreen overlay. The desktop animation pulls
+     it out of the cards column, which doesn't exist on mobile;
+     replace with a simple slide-in from the right edge of viewport. */
+  .agent-drawer {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    padding-left: 0;
+    z-index: 50;
+    animation: agent-drawer-mobile-slide 200ms ease-out;
+  }
+  @keyframes agent-drawer-mobile-slide {
+    from { transform: translateX(100%); }
+    to   { transform: translateX(0); }
+  }
+  .agent-drawer-main {
+    width: 100vw;
+    max-width: 100vw;
+    border-right: none;
+  }
+  .agent-drawer-dimmer {
+    position: fixed; inset: 0; z-index: 49;
+  }
+
+  /* Storyteller tab — sections, gauge, fire log all good with flex
+     wrap; just tighten paddings and drop the meta row to a column
+     when very narrow. */
+  .storyteller { padding: 4px 2px 16px; }
+  .st-section-head { padding: 8px 10px; gap: 6px; }
+  .st-section-subtitle { display: none; }   /* recover horizontal space */
+  .st-section-body { padding: 4px 10px 12px; }
+  .st-meta { gap: 12px; }
+  .st-log-meta { margin-left: 0; flex-basis: 100%; }
+  .st-card-window { font-size: 9px; flex-basis: 100%; margin-left: 0; }
+
+  /* Image Posts view — detail pane drops below the grid as a full
+     row instead of a right rail. Tile target size shrinks. */
+  .image-posts-view {
+    flex-direction: column;
+    padding: 14px;
+    gap: 14px;
+    overflow: auto;
+  }
+  .image-posts-main { overflow: visible; }
+  .image-posts-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+  .image-posts-detail {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--ink-faint);
+    padding: 12px 0 0;
+  }
+  .image-posts-detail dl { grid-template-columns: 70px 1fr; }
+
+  /* Personas view — let the table scroll horizontally instead of
+     squeezing columns. */
+  .personas-view {
+    flex-direction: column;
+    padding: 14px;
+    gap: 14px;
+    overflow: auto;
+  }
+  .personas-view > div:first-child { overflow-x: auto; }
+  .personas-view aside {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #ddd;
+    padding-left: 0;
+    padding-top: 12px;
+  }
+}

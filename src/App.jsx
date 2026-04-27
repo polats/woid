@@ -63,7 +63,17 @@ export default function App() {
   const [diagrams, setDiagrams] = useState([])
   const [references, setReferences] = useState([])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try { return localStorage.getItem(SIDEBAR_KEY) === '1' } catch { return false }
+    // Persist across sessions; default to collapsed on narrow viewports
+    // (≤768px) so the sandbox isn't immediately squeezed by the side nav.
+    try {
+      const saved = localStorage.getItem(SIDEBAR_KEY)
+      if (saved === '1') return true
+      if (saved === '0') return false
+    } catch { /* ignore */ }
+    if (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 768px)').matches) {
+      return true
+    }
+    return false
   })
 
   useEffect(() => {
