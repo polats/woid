@@ -270,7 +270,7 @@ export const VERBS = {
       image_prompt: { type: "string", required: false, max: 400 },
     },
     effects: ["relay.kind1", "image.gen"],
-    prompt: "public social post → goes to your Nostr followers' feeds. RARE and DELIBERATE — only when worth broadcasting beyond the room. Pass an optional image_prompt to attach a generated photograph (mundane and specific in good light beats dramatic landscapes; describe what's in frame).",
+    prompt: "public social post → goes to your Nostr followers' feeds. RARE and DELIBERATE — only when worth broadcasting beyond the room. `image_prompt` is optional but include it whenever you have something visual to show — especially when a recent storyteller cue mentions an image, a photo, a moment, or someone in scene with you. Mundane and specific in good light beats dramatic landscapes; describe what's actually in frame, including people. Text-only posts are fine for plain announcements; reach for the image whenever the post is about a *thing you're looking at*.",
     handler: async (deps, ctx, args) => {
       let extraTags;
       let content = args.text;

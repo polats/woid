@@ -9,7 +9,7 @@
     "speaker": { "select": "random_with_scene_mate" }
   },
   "actions": [
-    { "type": "Suggest", "target": "speaker", "text": "You're not alone in this moment. A photo with whoever's in scene with you — or just of them, the way you're seeing them right now — might want to be posted. Use post(text, image_prompt) and put them in the frame." }
+    { "type": "Suggest", "target": "speaker", "text": "Whoever is in scene with you is part of this moment. Reach for `post` with both `text` (a short caption naming the moment) and `image_prompt` describing the frame: them, what they're doing, the room's light. Concrete beats poetic. Skip if it doesn't feel right." }
   ],
   "description": "Plants the impulse to make an image post featuring the speaker's scene-mate. Only fires when the bound speaker has at least one scene-mate."
 }

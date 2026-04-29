@@ -9,7 +9,7 @@
     "host": { "select": "random_character" }
   },
   "actions": [
-    { "type": "Suggest", "target": "host", "text": "Something in front of you might be worth showing — small, mundane, specific. If it lands a `post` with an image_prompt, write it; otherwise let it pass." }
+    { "type": "Suggest", "target": "host", "text": "Something specific in front of you is worth showing. Reach for `post` and include both `text` (a short caption in your voice) and `image_prompt` (concrete: the object, the surface it's sitting on, the light). Skip if nothing is genuinely visual right now." }
   ],
   "description": "Plants the impulse to make an image post. Solo (no scene-mate needed — posting is offstage). The character decides whether to act on it."
 }
