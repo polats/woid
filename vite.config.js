@@ -10,6 +10,10 @@ import { testingApi } from './server/testing.js'
 export default defineConfig({
   plugins: [react(), tasksApi(), diagramsApi(), githubApi(), referencesApi(), chatApi(), testingApi()],
   server: {
+    // Bind to 0.0.0.0 so the dev server is reachable from other
+    // devices on the LAN (phones, tablets) — Vite prints a Network:
+    // URL alongside Local: when this is enabled.
+    host: true,
     // HMR is on by default; declared explicitly so it's documented and
     // overridable. The WebSocket runs over the same dev port so any
     // browser tab connected to /<port> picks up changes automatically.

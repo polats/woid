@@ -4,7 +4,7 @@ services:
   relay:
     build: ./relay
     ports:
-      - "127.0.0.1:17777:7777"
+      - "17777:7777"
     volumes:
       - relay-db:/app/strfry-db
     restart: unless-stopped
@@ -12,17 +12,24 @@ services:
   room-server:
     build: ./room-server
     ports:
-      - "127.0.0.1:12567:2567"
+      - "12567:2567"
     environment:
       PORT: "2567"
+    volumes:
+      - ./room-server/src:/app/src
+    command: ["npm", "run", "dev"]
     restart: unless-stopped
 
   pi-bridge:
     build: ./pi-bridge
     ports:
-      - "127.0.0.1:13457:3457"
+      - "13457:3457"
     environment:
       PORT: "3457"
+      # LAN-reachable URL the bridge stamps into avatar / post-image
+      # URLs so phones on the network can load them. Override via env
+      # if your LAN IP changes.
+      PUBLIC_BRIDGE_URL: "${PUBLIC_BRIDGE_URL:-http://10.0.0.36:13457}"
       RELAY_URL: "ws://relay:7777"
       ROOM_SERVER_URL: "ws://room-server:2567"
       WORKSPACE: "/workspace"
@@ -53,6 +60,12 @@ services:
       PUBLIC_JUMBLE_URL: "${PUBLIC_JUMBLE_URL:-http://localhost:18089}"
     volumes:
       - pi-workspace:/workspace
+      # Bind-mount source so edits hot-reload via `node --watch`. The
+      # anonymous volume on node_modules keeps the image's installed
+      # deps intact (host has no node_modules in this dir).
+      - ./pi-bridge:/app/bridge
+      - /app/bridge/node_modules
+    command: ["npm", "run", "dev"]
     # Let the bridge reach a llama.cpp server running on the host via
     # host.docker.internal:18080 (set LOCAL_LLM_BASE_URL accordingly).
     extra_hosts:
@@ -70,7 +83,7 @@ services:
         VITE_COMMUNITY_RELAYS: "ws://localhost:17777/"
         VITE_COMMUNITY_RELAY_SETS: '[{"id":"woid-sandbox","name":"Woid Sandbox","relayUrls":["ws://localhost:17777/"]}]'
     ports:
-      - "127.0.0.1:18089:80"
+      - "18089:80"
     restart: unless-stopped
 
 volumes:

@@ -1,0 +1,48 @@
+{
+  "grid": { "width": 12, "height": 16 },
+  "rooms": [
+    { "id": "kitchen", "name": "Kitchen",        "type": "communal",  "color": "#f4d99a", "x":  0, "y":  0, "w": 12, "h":  2,
+      "sceneObjects": ["Table.001", "Tea Cup.001", "Tea Pot.001"] },
+    { "id": "hallway", "name": "Hallway",        "type": "hallway",   "color": "#d8cfb9", "x":  5, "y":  3, "w":  2, "h":  9,
+      "sceneObjects": [] },
+    { "id": "apt-1A",  "name": "1A — apartment", "type": "apartment", "color": "#c5d8e8", "x":  0, "y":  3, "w":  4, "h":  4,
+      "sceneObjects": ["Picture Frame - 4 Shells in the Sand.001", "Sidetable.001", "Cat in a Blanket.001"] },
+    { "id": "apt-1B",  "name": "1B — apartment", "type": "apartment", "color": "#c8e0c8", "x":  8, "y":  3, "w":  4, "h":  4,
+      "sceneObjects": ["Picture Frame - 3 Windmill X.001", "Sidetable.001", "Potted Plant - Bracken.001"] },
+    { "id": "apt-1C",  "name": "1C — apartment", "type": "apartment", "color": "#e8c8d8", "x":  0, "y":  8, "w":  4, "h":  4,
+      "sceneObjects": ["Picture Frame - 5 Francks Razor.001", "Curtains.001"] },
+    { "id": "apt-1D",  "name": "1D — apartment", "type": "apartment", "color": "#d4c8e0", "x":  8, "y":  8, "w":  4, "h":  4,
+      "sceneObjects": ["Sidetable.001", "Potted Plant - Bracken.001"] },
+    { "id": "lobby",   "name": "Lobby",          "type": "communal",  "color": "#f0c4a3", "x":  0, "y": 13, "w": 12, "h":  2,
+      "sceneObjects": ["Sidetable.001", "Picture Frame - 4 Shells in the Sand.001"] }
+  ],
+  "doors": [
+    { "id": "door-kitchen-l", "between": ["kitchen", "hallway"], "x": 5, "y":  2 },
+    { "id": "door-kitchen-r", "between": ["kitchen", "hallway"], "x": 6, "y":  2 },
+    { "id": "door-apt-1A",    "between": ["apt-1A",  "hallway"], "x": 4, "y":  5 },
+    { "id": "door-apt-1B",    "between": ["apt-1B",  "hallway"], "x": 7, "y":  5 },
+    { "id": "door-apt-1C",    "between": ["apt-1C",  "hallway"], "x": 4, "y": 10 },
+    { "id": "door-apt-1D",    "between": ["apt-1D",  "hallway"], "x": 7, "y": 10 },
+    { "id": "door-lobby-l",   "between": ["hallway", "lobby"],   "x": 5, "y": 12 },
+    { "id": "door-lobby-r",   "between": ["hallway", "lobby"],   "x": 6, "y": 12 },
+    { "id": "door-exit-l",    "between": ["lobby",   "outside"], "x": 5, "y": 15 },
+    { "id": "door-exit-r",    "between": ["lobby",   "outside"], "x": 6, "y": 15 }
+  ],
+  "objects": [
+    { "type": "fridge",    "x":  1, "y":  0 },
+    { "type": "table",     "x":  5, "y":  0 },
+    { "type": "chair",     "x":  4, "y":  1 },
+    { "type": "chair",     "x":  7, "y":  1 },
+    { "type": "bed",       "x":  1, "y":  4 },
+    { "type": "bookshelf", "x":  3, "y":  3 },
+    { "type": "bed",       "x": 10, "y":  4 },
+    { "type": "chair",     "x":  8, "y":  5 },
+    { "type": "bed",       "x":  1, "y":  9 },
+    { "type": "bookshelf", "x":  3, "y":  8 },
+    { "type": "bed",       "x": 10, "y":  9 },
+    { "type": "chair",     "x":  8, "y": 10 },
+    { "type": "jukebox",   "x":  5, "y": 13 },
+    { "type": "chair",     "x":  2, "y": 14 },
+    { "type": "chair",     "x":  9, "y": 14 }
+  ]
+}

@@ -1,62 +1,80 @@
 /**
  * Rooms — named regions on the existing tile grid.
  *
- * Slice-1 representation: each room is a rectangle on the same flat
- * grid the tile renderer already uses. Characters' positions stay
- * `{x, y}` (no schema migration); we *derive* `currentRoomFor(x, y)`
- * by lookup. This keeps Phase A of #285's plan minimal — rooms are
- * additive metadata over the existing world, no canvas redesign yet.
+ * Levels are pure data: each `levels/<name>.json` file declares a
+ * grid, a list of rooms (with optional `color`), a list of doors,
+ * and an optional list of object placements. Add a new level by
+ * dropping a new JSON file in `levels/`; nothing here needs to change.
  *
- * Default building (16×12 grid):
+ * Doors become first-class single-tile rooms with `type: "door"`.
+ * `roomAt(x, y)` checks doors first so a door tile resolves to the
+ * door id, not the room it's carved into.
  *
- *     0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
- *   ┌─────────────┬───────────────────┬─────────────┐
- *   │   apt-1A    │     hallway       │    apt-1B   │   y=0..3
- *   │  (owner 1)  │                   │  (owner 2)  │
- *   ├─────────────┴───────────────────┴─────────────┤
- *   │                  hallway                      │   y=4..5
- *   ├─────────────────────────────────────────────  │
- *   │                                               │
- *   │              kitchen (communal)               │   y=6..9
- *   │                                               │
- *   ├───────────────────────────┬───────────────────┤
- *   │           apt-1C          │     hallway       │   y=10..11
- *   │         (owner 3)         │                   │
- *   └───────────────────────────┴───────────────────┘
- *
- * Three named apartments + a hallway that wraps the kitchen + a big
- * communal kitchen. This is the "Tomodachi-shape" baseline for
- * scheduled meetings: characters whose schedule says "morning kitchen"
- * collide naturally because there's only one kitchen.
- *
- * `owner_pubkey` is bound at first-spawn (assignDefaultApartment) so
- * the first three characters created automatically claim 1A/1B/1C.
+ * `owner_pubkey` is bound at first-spawn (assignOwnership) so the
+ * first N characters created automatically claim apartments in order.
  */
 
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const FILE_NAME = "rooms.json";
-
-export const DEFAULT_GRID = { width: 16, height: 12 };
+const LEVELS_DIR = join(dirname(fileURLToPath(import.meta.url)), "levels");
 
 /**
- * Default room rectangles for a fresh workspace. Each rect is
- * inclusive of x..x+w-1, y..y+h-1.
+ * Read every `levels/*.json` file into the LAYOUTS map. Door entries
+ * get the standard `name`/`type`/`w`/`h` fields applied so callers
+ * can treat them as just-another-room.
  */
-export const DEFAULT_ROOMS = [
-  { id: "apt-1A",  name: "1A — apartment",       type: "apartment", x:  0, y:  0, w: 5,  h: 4 },
-  { id: "hallway", name: "Hallway",              type: "hallway",   x:  5, y:  0, w: 6,  h: 6 },
-  { id: "apt-1B",  name: "1B — apartment",       type: "apartment", x: 11, y:  0, w: 5,  h: 4 },
-  { id: "kitchen", name: "Kitchen (communal)",   type: "communal",  x:  0, y:  6, w: 16, h: 4 },
-  { id: "apt-1C",  name: "1C — apartment",       type: "apartment", x:  0, y: 10, w: 9,  h: 2 },
-  { id: "hallway-south", name: "South hallway",  type: "hallway",   x:  9, y: 10, w: 7,  h: 2 },
-];
+function loadLayoutsFromDisk() {
+  const out = {};
+  let files = [];
+  try { files = readdirSync(LEVELS_DIR).filter((f) => f.endsWith(".json")); }
+  catch { return out; }
+  for (const f of files) {
+    const name = f.replace(/\.json$/, "");
+    const filePath = join(LEVELS_DIR, f);
+    try {
+      const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+      const mtime = statSync(filePath).mtimeMs;
+      const doors = (raw.doors ?? []).map((d) => ({
+        ...d,
+        name: d.name ?? `Door (${(d.between ?? []).join(" ↔ ")})`,
+        type: "door",
+        w: 1, h: 1,
+      }));
+      out[name] = {
+        grid: raw.grid,
+        rooms: raw.rooms ?? [],
+        doors,
+        objects: raw.objects ?? [],
+        mtime,
+      };
+    } catch (err) {
+      console.error(`[rooms] failed to load level ${f}:`, err?.message || err);
+    }
+  }
+  return out;
+}
+
+export const LAYOUTS = loadLayoutsFromDisk();
+
+export const DEFAULT_LAYOUT = "simple";
+
+// Back-compat exports — point at the active default layout.
+export const DEFAULT_GRID = LAYOUTS[DEFAULT_LAYOUT].grid;
+export const DEFAULT_ROOMS = LAYOUTS[DEFAULT_LAYOUT].rooms;
+
+/** Object placements declared in the level file (used to seed objects-registry). */
+export function defaultObjectPlacements(layoutName = DEFAULT_LAYOUT) {
+  return LAYOUTS[layoutName]?.objects ?? [];
+}
 
 /**
  * @param {{
  *   workspacePath: string,
  *   fs?: { mkdirSync, existsSync, readFileSync, writeFileSync },
+ *   layout?: keyof typeof LAYOUTS,
  *   gridWidth?: number,
  *   gridHeight?: number,
  * }} opts
@@ -64,19 +82,35 @@ export const DEFAULT_ROOMS = [
 export function createRoomsRegistry(opts = {}) {
   if (!opts.workspacePath) throw new Error("createRoomsRegistry: workspacePath required");
   const fsImpl = opts.fs ?? { mkdirSync, existsSync, readFileSync, writeFileSync };
+  const layoutName = opts.layout ?? DEFAULT_LAYOUT;
+  const layout = LAYOUTS[layoutName];
+  if (!layout) throw new Error(`createRoomsRegistry: unknown layout "${layoutName}"`);
+
   const grid = {
-    width:  opts.gridWidth  ?? DEFAULT_GRID.width,
-    height: opts.gridHeight ?? DEFAULT_GRID.height,
+    width:  opts.gridWidth  ?? layout.grid.width,
+    height: opts.gridHeight ?? layout.grid.height,
   };
   const path = join(opts.workspacePath, FILE_NAME);
 
-  /** @type {Map<string, object>} id → room */
+  /** @type {Map<string, object>} id → room (includes door rooms) */
   const rooms = new Map();
   /** @type {{ pubkey: string, room_id: string }[]} */
   let ownerships = [];
+  /** mtime of the level file the persisted rooms.json was seeded from */
+  let persistedSourceMtime = 0;
 
   loadFromDisk();
-  if (rooms.size === 0) seed(DEFAULT_ROOMS);
+  // Reseed when the level file on disk is newer than the snapshot
+  // we persisted last — lets a JSON edit propagate without needing
+  // a manual `rm /workspace/rooms.json`. Ownerships live in their
+  // own array and survive the reseed unchanged.
+  const layoutMtime = layout.mtime ?? 0;
+  if (rooms.size === 0) {
+    seed([...layout.rooms, ...layout.doors]);
+  } else if (layoutMtime > persistedSourceMtime) {
+    console.log(`[rooms] level "${layoutName}" is newer than persisted snapshot — reseeding`);
+    seed([...layout.rooms, ...layout.doors]);
+  }
 
   function seed(defs) {
     rooms.clear();
@@ -87,7 +121,6 @@ export function createRoomsRegistry(opts = {}) {
   }
 
   function listAll() {
-    // Resolve ownership map onto each room each time we list.
     const map = ownershipMap();
     return [...rooms.values()].map((r) => ({
       ...r,
@@ -103,20 +136,27 @@ export function createRoomsRegistry(opts = {}) {
   }
 
   /**
-   * Which room (id) contains the tile (x, y)? First-match wins —
-   * default layout is non-overlapping so this is unambiguous.
-   * Returns null if the tile is outside every room.
+   * Which room (id) contains the tile (x, y)? Doors are checked first
+   * so a tile carved into a wall resolves to the door, not the room
+   * the door rect overlaps. Returns null if outside every room.
    */
   function roomAt(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     for (const r of rooms.values()) {
+      if (r.type !== "door") continue;
+      if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return r.id;
+    }
+    for (const r of rooms.values()) {
+      if (r.type === "door") continue;
       if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return r.id;
     }
     return null;
   }
 
   /**
-   * Iterate every (x, y) tile inside `roomId`. Cheap for our grid.
+   * Iterate every (x, y) tile inside `roomId` whose `roomAt` resolves
+   * back to `roomId`. This naturally excludes door tiles that overlap
+   * the room rect.
    */
   function tilesIn(roomId) {
     const r = rooms.get(roomId);
@@ -124,17 +164,14 @@ export function createRoomsRegistry(opts = {}) {
     const out = [];
     for (let y = r.y; y < r.y + r.h; y++) {
       for (let x = r.x; x < r.x + r.w; x++) {
-        out.push({ x, y });
+        if (roomAt(x, y) === roomId) out.push({ x, y });
       }
     }
     return out;
   }
 
   /**
-   * A free tile inside `roomId`, prefer-anything-not-occupied. The
-   * snapshot is the room-server's presence array; we treat any tile
-   * with an agent on it as taken so two characters don't stack.
-   * Falls back to a random tile inside the room when fully occupied.
+   * A free tile inside `roomId`, prefer-anything-not-occupied.
    *
    * @param {string} roomId
    * @param {{ agents?: Array<{ x: number, y: number }> }} [snapshot]
@@ -152,22 +189,12 @@ export function createRoomsRegistry(opts = {}) {
     return pool[Math.floor(random() * pool.length)];
   }
 
-  /**
-   * Center tile of a room — used for "rough" target moves and for UI
-   * rendering room labels.
-   */
   function centerTile(roomId) {
     const r = rooms.get(roomId);
     if (!r) return null;
     return { x: Math.floor(r.x + r.w / 2), y: Math.floor(r.y + r.h / 2) };
   }
 
-  /**
-   * Bind a character to an apartment. Idempotent — if the pubkey
-   * already owns a room, nothing changes. If the requested room
-   * is occupied, returns null. Default apartments are claimed in
-   * order (1A → 1B → 1C) when no roomId is given.
-   */
   function assignOwnership(pubkey, roomId) {
     if (!pubkey) return null;
     const existing = ownerships.find((o) => o.pubkey === pubkey);
@@ -189,9 +216,6 @@ export function createRoomsRegistry(opts = {}) {
     return rec;
   }
 
-  /**
-   * Drop the binding for `pubkey`. Returns the released room id (if any).
-   */
   function releaseOwnership(pubkey) {
     const idx = ownerships.findIndex((o) => o.pubkey === pubkey);
     if (idx < 0) return null;
@@ -220,6 +244,7 @@ export function createRoomsRegistry(opts = {}) {
   function snapshot() {
     return {
       grid: { ...grid },
+      layout: layoutName,
       rooms: listAll(),
       ownerships: [...ownerships],
     };
@@ -239,6 +264,9 @@ export function createRoomsRegistry(opts = {}) {
       if (Array.isArray(data?.ownerships)) {
         ownerships = data.ownerships.filter((o) => o?.pubkey && o?.room_id);
       }
+      if (typeof data?.sourceMtime === "number") {
+        persistedSourceMtime = data.sourceMtime;
+      }
     } catch (err) {
       console.error(`[rooms] load ${path} failed:`, err?.message || err);
     }
@@ -249,6 +277,8 @@ export function createRoomsRegistry(opts = {}) {
       fsImpl.mkdirSync(dirname(path), { recursive: true });
       fsImpl.writeFileSync(path, JSON.stringify({
         grid,
+        layout: layoutName,
+        sourceMtime: layout.mtime ?? null,
         rooms: [...rooms.values()],
         ownerships,
       }, null, 2));
@@ -263,5 +293,6 @@ export function createRoomsRegistry(opts = {}) {
     snapshot,
     _path: path,
     _grid: grid,
+    _layout: layoutName,
   };
 }

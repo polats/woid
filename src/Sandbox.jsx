@@ -15,6 +15,7 @@ export default function Sandbox() {
   const [characters, setCharacters] = useState([])
   const [objects, setObjects] = useState([])
   const [rooms, setRooms] = useState([])
+  const [grid, setGrid] = useState(null) // { width, height } from /rooms
   // Stage view toggle — tabs sit on the stage header so the user can
   // switch between the room (the live map) and Recap (the daily
   // session summary). Default to room since that's the main surface.
@@ -71,6 +72,7 @@ export default function Sandbox() {
       setCharacters(chars.characters || [])
       setObjects(objs.objects || [])
       setRooms(rms.rooms || [])
+      if (rms.grid) setGrid(rms.grid)
     } catch {
       /* transient fetch errors are fine */
     }
@@ -468,8 +470,8 @@ export default function Sandbox() {
           <RoomMap
             objects={objects}
             rooms={rooms}
-            width={roomState.width}
-            height={roomState.height}
+            width={grid?.width ?? roomState.width}
+            height={grid?.height ?? roomState.height}
             characters={characters}
             roomAgents={roomState.agents}
             adminPubkey={adminInfo?.pubkey}

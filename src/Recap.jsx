@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import config from './config.js'
 import { eventUrl } from './lib/jumble.js'
+import { lanUrl } from './lib/lanUrl.js'
 
 const cfg = config.agentSandbox || {}
 const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'
@@ -222,10 +223,10 @@ function RecapImageStrip({ posts }) {
   return (
     <div className="recap-images">
       {visible.map((p) => (
-        <a key={p.url} href={p.link || p.url} target="_blank" rel="noreferrer"
+        <a key={p.url} href={p.link || lanUrl(p.url)} target="_blank" rel="noreferrer"
           className="recap-image-link"
           title={p.actor ? `${p.actor}: ${p.alt} — open on Jumble` : 'open on Jumble'}>
-          <img src={p.url} alt={p.alt} loading="lazy" />
+          <img src={lanUrl(p.url)} alt={p.alt} loading="lazy" />
         </a>
       ))}
       {overflow > 0 && (

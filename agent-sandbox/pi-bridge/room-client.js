@@ -31,8 +31,8 @@ function snapshotState(room) {
     messages,
     agents,
     roomName: room?.state?.roomName ?? null,
-    width: room?.state?.width ?? 16,
-    height: room?.state?.height ?? 12,
+    width: room?.state?.width ?? 12,
+    height: room?.state?.height ?? 16,
   };
 }
 

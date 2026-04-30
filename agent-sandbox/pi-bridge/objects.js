@@ -106,6 +106,25 @@ export const OBJECT_TYPES = {
     ],
   },
 
+  table: {
+    description: "a table",
+    // Communal centerpiece — multiple people can be at the table
+    // together. No active affordance yet; ambient social flavor.
+    capacity: 4,
+    glyph: "🍽️",
+    defaultState: {},
+    affordances: [
+      {
+        verb: "eat_at_table",
+        utility: { axis: "social", attractor: "low", max: 40 },
+        preconditions: ["adjacent"],
+        effects: [
+          { kind: "need", axis: "social", op: "+", amount: 10 },
+        ],
+      },
+    ],
+  },
+
   jukebox: {
     description: "a jukebox",
     // Many-occupant passive — anyone in range gets the effect of it

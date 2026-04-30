@@ -181,12 +181,8 @@ export function createObjectsRegistry({ workspacePath, fs, now, id } = {}) {
  */
 export function seedDefaults(registry, opts = {}) {
   if (registry.listAll().length > 0) return [];
-  const placements = opts.placements ?? [
-    { type: "bed",       x: 2,  y: 2  },  // apt-1A (Maya's by ownership order)
-    { type: "fridge",    x: 8,  y: 7  },  // kitchen — eat affordance
-    { type: "chair",     x: 7,  y: 6  },  // kitchen
-    { type: "bookshelf", x: 12, y: 3  },  // apt-1B
-    { type: "jukebox",   x: 4,  y: 9  },  // kitchen
-  ];
+  // Placements come from the active level file (levels/<name>.json).
+  // Pass `opts.placements` to override (used by tests).
+  const placements = opts.placements ?? [];
   return placements.map((p) => registry.placeOne(p));
 }

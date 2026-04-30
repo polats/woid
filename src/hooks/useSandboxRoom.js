@@ -14,7 +14,7 @@ import { Client } from 'colyseus.js'
  */
 export function useSandboxRoom({ url, roomName }) {
   const [status, setStatus] = useState('idle')
-  const [state, setState] = useState({ agents: [], messages: [], width: 16, height: 12 })
+  const [state, setState] = useState({ agents: [], messages: [], width: 12, height: 16 })
   const [error, setError] = useState(null)
   const roomRef = useRef(null)
   const retryRef = useRef(null)
@@ -76,8 +76,8 @@ export function useSandboxRoom({ url, roomName }) {
             setState({
               agents,
               messages,
-              width: room.state?.width ?? 16,
-              height: room.state?.height ?? 12,
+              width: room.state?.width ?? 12,
+              height: room.state?.height ?? 16,
             })
           }
           room.onStateChange(sync)

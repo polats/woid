@@ -45,8 +45,8 @@ class SandboxState extends Schema {
     this.messages = new ArraySchema();
     this.roomName = "sandbox";
     this.createdAt = 0;
-    this.width = 16;
-    this.height = 12;
+    this.width = 12;
+    this.height = 16;
   }
 }
 defineTypes(SandboxState, {

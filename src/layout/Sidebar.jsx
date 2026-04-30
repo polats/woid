@@ -36,6 +36,15 @@ export default function Sidebar({
         {config.description && <p>{config.description}</p>}
       </div>
 
+      <h2>Game</h2>
+      <ul>
+        <li>
+          <a href="#/game" className={linkClass(route.view === 'game')}>
+            Phone
+          </a>
+        </li>
+      </ul>
+
       {config.features?.agentSandbox && (
         <>
           <h2>Sandbox</h2>

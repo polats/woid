@@ -22,7 +22,7 @@ import { createJournal } from "./journal.js";
 import { buildMemoryBlock } from "./memory.js";
 import { createNeedsTracker, describeNeeds, NEED_AXES } from "./needs.js";
 import { createMoodletsTracker, describeMood, seedDemoMoodlets } from "./moodlets.js";
-import { createRoomsRegistry } from "./rooms.js";
+import { createRoomsRegistry, defaultObjectPlacements } from "./rooms.js";
 import { createScheduler as createScheduleRegistry, slotForHour, SLOTS as SCHEDULE_SLOTS } from "./schedule.js";
 import { summarizeSceneToMoodlets, buildSceneSummaryPrompt } from "./scene-summary.js";
 import { generateJson as openaiCompatGenerateJson } from "./providers/openai-compat.js";
@@ -1134,7 +1134,9 @@ const objectsRegistry = createObjectsRegistry({ workspacePath: WORKSPACE });
 // Seed a small starter set on first boot so the demo isn't empty.
 // Idempotent — only fires when the registry has zero placed objects.
 if (process.env.WOID_OBJECTS_SEED !== "0") {
-  const seeded = seedDefaultObjects(objectsRegistry);
+  const seeded = seedDefaultObjects(objectsRegistry, {
+    placements: defaultObjectPlacements(),
+  });
   if (seeded.length > 0) {
     console.log(`[objects] seeded ${seeded.length} default objects`);
   }

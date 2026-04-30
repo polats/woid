@@ -13,6 +13,7 @@ import Personas from './views/Personas.jsx'
 import ImagePosts from './views/ImagePosts.jsx'
 import Network from './views/Network.jsx'
 import Journal from './views/Journal.jsx'
+import Game from './views/Game.jsx'
 
 // Top-level docs (Docs section).
 const modules = import.meta.glob('../docs/*.md', { query: '?raw', import: 'default', eager: true })
@@ -48,6 +49,7 @@ function parseHash() {
   if (h === 'image-posts') return { view: 'image-posts' }
   if (h === 'network') return { view: 'network' }
   if (h === 'journal') return { view: 'journal' }
+  if (h === 'game') return { view: 'game' }
   if (h === 'testing') return { view: 'testing' }
   if (h.startsWith('testing/')) return { view: 'testing', sessionName: decodeURIComponent(h.slice(8)) }
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
@@ -79,6 +81,16 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? '1' : '0') } catch {}
   }, [sidebarCollapsed])
+
+  // On mobile the sidebar overlays content, so navigating into the
+  // Game view should auto-dismiss it — otherwise the phone screen
+  // stays hidden behind the nav.
+  useEffect(() => {
+    if (route.view !== 'game') return
+    if (typeof window === 'undefined') return
+    if (!window.matchMedia?.('(max-width: 768px)').matches) return
+    setSidebarCollapsed(true)
+  }, [route.view])
 
   // Both endpoints are served by a Vite dev plugin and are absent in
   // prod builds. Swallow failures so the Dev-section nav simply shows
@@ -145,9 +157,20 @@ export default function App() {
       <button
         type="button"
         className="sidebar-reopen"
-        onClick={() => setSidebarCollapsed(false)}
-        title="Show sidebar"
-        aria-label="Show sidebar"
+        onClick={() => {
+          // On mobile, the Game view fills the screen — the only sensible
+          // affordance for the top-left button is "leave the game" rather
+          // than "open the sidebar over the phone".
+          const isMobile = typeof window !== 'undefined'
+            && window.matchMedia?.('(max-width: 768px)').matches
+          if (route.view === 'game' && isMobile) {
+            window.location.hash = `#/docs/${encodeURIComponent(homeDoc?.name ?? '')}`
+            return
+          }
+          setSidebarCollapsed(false)
+        }}
+        title={route.view === 'game' ? 'Back to home' : 'Show sidebar'}
+        aria-label={route.view === 'game' ? 'Back to home' : 'Show sidebar'}
         hidden={!sidebarCollapsed}
       >
         ›
@@ -160,10 +183,25 @@ export default function App() {
         {route.view === 'image-posts' && config.features?.agentSandbox && <ImagePosts />}
         {route.view === 'network' && config.features?.agentSandbox && <Network />}
         {route.view === 'journal' && config.features?.agentSandbox && <Journal />}
+        {/* Game stays mounted across route changes so the Stage3D
+            WebGL context survives navigation. Mobile browsers cap
+            WebGL contexts (iOS Safari ~8) and even with perfect
+            disposal, rapid create/destroy crashes the page. Hide
+            via CSS instead of unmounting. */}
+        <div className="game-mount" hidden={route.view !== 'game'}>
+          <Game />
+        </div>
         {route.view === 'testing' && <Testing initialSession={route.sessionName} />}
         {route.view === 'diagram' && <Diagram key={route.id} id={route.id} />}
         {route.view === 'reference' && <Reference key={route.id} id={route.id} />}
-        {route.view === 'doc' && <Doc content={currentDoc?.content} />}
+        {route.view === 'doc' && (
+          <Doc
+            content={currentDoc?.content}
+            cta={currentDoc?.name === homeDoc?.name ? (
+              <a className="welcome-cta" href="#/game">▶ Open the Game</a>
+            ) : null}
+          />
+        )}
       </main>
     </div>
   )

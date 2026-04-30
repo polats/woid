@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import config from '../config.js'
 import { eventUrl } from '../lib/jumble.js'
+import { lanUrl } from '../lib/lanUrl.js'
 
 const PAGE = 50
 const JUMBLE_URL = config.agentSandbox?.jumbleUrl || 'http://localhost:18089'
@@ -99,7 +100,7 @@ export default function ImagePosts() {
                 title={`${row.actor_name}: ${row.text}`}
               >
                 <div className="image-posts-tile-thumb">
-                  <img src={row.image_url} alt={row.text} loading="lazy" />
+                  <img src={lanUrl(row.image_url)} alt={row.text} loading="lazy" />
                 </div>
                 <div className="image-posts-tile-meta">
                   <strong>{row.actor_name}</strong>
@@ -137,13 +138,13 @@ export default function ImagePosts() {
         {selected && (
           <div className="image-posts-detail-body">
             <a
-              href={selected.image_url}
+              href={lanUrl(selected.image_url)}
               target="_blank"
               rel="noreferrer"
               className="image-posts-detail-imgwrap"
               title="Open full-size image"
             >
-              <img src={selected.image_url} alt={selected.text} />
+              <img src={lanUrl(selected.image_url)} alt={selected.text} />
             </a>
             <dl>
               <dt>actor</dt>
