@@ -35,6 +35,9 @@ services:
       WORKSPACE: "/workspace"
       NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY}"
       GEMINI_API_KEY: "${GEMINI_API_KEY}"
+      # Self-hosted FLUX.1-Kontext-dev URL (image editing). Powers the
+      # Assets tab T-pose generator. Leave blank to disable that feature.
+      FLUX_KONTEXT_URL: "${FLUX_KONTEXT_URL:-}"
       # Optional. Point at an OpenAI-compat llama.cpp/vLLM/Ollama server
       # to expose a `local` provider in the sandbox. See
       # agent-sandbox/llama-cpp/ for a turnkey llama.cpp stack.

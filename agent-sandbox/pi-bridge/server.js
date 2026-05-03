@@ -54,6 +54,7 @@ const PI_BIN = process.env.PI_BIN || "pi";
 const WORKSPACE = process.env.WORKSPACE || join(tmpdir(), "woid-agent-sandbox");
 const RELAY_URL = process.env.RELAY_URL || "ws://localhost:7777";
 const NVIDIA_NIM_API_KEY = process.env.NVIDIA_NIM_API_KEY || "";
+const FLUX_KONTEXT_URL = process.env.FLUX_KONTEXT_URL || "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 // When set, pi-bridge exposes an OpenAI-compat llama.cpp (or vLLM/Ollama)
 // server as a third provider called `local`. No auth — the served model is
@@ -996,6 +997,71 @@ async function generateAvatar({ pubkey, name, about, promptOverride }) {
 
   const avatarUrl = `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/avatar?t=${Date.now()}`;
   return { avatarUrl, prompt, filename };
+}
+
+// ── T-pose generation (FLUX.1-Kontext, self-hosted) ──
+//
+// Reads the persisted avatar bytes for a character, sends them to the
+// flux1-kontext Cloud Run service with a T-pose edit instruction, and
+// writes the result to tpose.png in the char dir. Single file, gets
+// overwritten on regenerate. S3 storage intentionally skipped for v1.
+
+const TPOSE_PROMPT =
+  "Convert this character into a clean full-body T-pose reference: " +
+  "feet shoulder-width apart on the ground, both arms extended straight " +
+  "out horizontally to the sides, palms facing down, fingers together, " +
+  "facing the camera directly. Orthographic front view, neutral expression, " +
+  "plain off-white background, even soft lighting, no shadows on the floor. " +
+  "Preserve the character's face, outfit, colors, and proportions exactly.";
+
+function readAvatarBytesFromDisk(pubkey) {
+  const dir = getCharDir(pubkey);
+  for (const ext of ["jpeg", "jpg", "png", "webp", "gif"]) {
+    const path = join(dir, `avatar.${ext}`);
+    if (existsSync(path)) {
+      const mime =
+        ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+        : ext === "webp" ? "image/webp"
+        : ext === "png" ? "image/png"
+        : ext === "gif" ? "image/gif"
+        : "image/jpeg";
+      return { buffer: readFileSync(path), mime };
+    }
+  }
+  return null;
+}
+
+async function generateTpose({ pubkey }) {
+  if (!FLUX_KONTEXT_URL) throw new Error("FLUX_KONTEXT_URL not configured");
+  const avatar = readAvatarBytesFromDisk(pubkey);
+  if (!avatar) throw new Error("character has no avatar yet — generate one first");
+
+  const dataUri = `data:${avatar.mime};base64,${avatar.buffer.toString("base64")}`;
+  const res = await fetch(`${FLUX_KONTEXT_URL.replace(/\/$/, "")}/v1/infer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      prompt: TPOSE_PROMPT,
+      image: dataUri,
+      seed: Math.floor(Math.random() * 2_147_483_647),
+      steps: 30,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`flux-kontext ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const b64 = data.artifacts?.[0]?.base64;
+  if (!b64) throw new Error("flux-kontext returned no image");
+  const buffer = Buffer.from(b64, "base64");
+
+  const dir = getCharDir(pubkey);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "tpose.png"), buffer);
+
+  const tposeUrl = `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/tpose?t=${Date.now()}`;
+  return { tposeUrl };
 }
 
 function deleteCharacter(pubkey) {
@@ -4007,6 +4073,19 @@ app.get("/characters/:pubkey/avatar", async (req, res) => {
   res.status(404).json({ error: "no avatar" });
 });
 
+app.get("/characters/:pubkey/tpose", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const dir = getCharDir(pubkey);
+  const path = join(dir, "tpose.png");
+  if (existsSync(path)) {
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return createReadStream(path).pipe(res);
+  }
+  res.status(404).json({ error: "no tpose" });
+});
+
 // Post-image serving (#355). Filename pattern: <shortId>.<ext>.
 // Prefers S3 when configured; falls back to disk under the character
 // dir for local dev. Immutable URLs — no cache-buster needed.
@@ -4083,6 +4162,136 @@ app.post("/characters/:pubkey/generate-avatar", apiQuota.middleware, async (req,
     });
     console.error("[char:avatar]", err.message);
     res.status(502).json({ error: err.message });
+  }
+});
+
+app.post("/characters/:pubkey/generate-tpose", apiQuota.middleware, async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) {
+    apiQuota.refund();
+    return res.status(404).json({ error: "not found" });
+  }
+  try {
+    const { tposeUrl } = await generateTpose({ pubkey });
+    apiQuota.recordSuccess();
+    res.json({ tposeUrl });
+  } catch (err) {
+    apiQuota.refund();
+    console.error("[char:tpose]", err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// SSE variant — emits stage transitions and heartbeats so the client
+// can show elapsed time and warn the user about Cloud Run cold-starts
+// (the NIM downloads ~30 GB of weights from NGC on every cold boot).
+app.post("/characters/:pubkey/generate-tpose/stream", apiQuota.middleware, async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) {
+    apiQuota.refund();
+    send("error", { error: "not found" });
+    return res.end();
+  }
+
+  let heartbeat = null;
+  try {
+    if (!FLUX_KONTEXT_URL) throw new Error("FLUX_KONTEXT_URL not configured");
+    const avatar = readAvatarBytesFromDisk(pubkey);
+    if (!avatar) throw new Error("character has no avatar yet — generate one first");
+
+    const base = FLUX_KONTEXT_URL.replace(/\/$/, "");
+    send("stage", { stage: "probing", message: "checking flux service" });
+
+    // Probe /v1/health/ready. Cloud Run cold-starts refuse TCP or hang
+    // until the container reports ready, so the timeout itself is the
+    // cold-start signal.
+    async function probeReady(timeoutMs = 4000) {
+      try {
+        const r = await fetch(`${base}/v1/health/ready`, { signal: AbortSignal.timeout(timeoutMs) });
+        return r.ok;
+      } catch { return false; }
+    }
+
+    let warm = await probeReady(4000);
+    if (warm) {
+      send("stage", { stage: "warm", message: "service is warm", etaSeconds: 15 });
+    } else {
+      send("stage", {
+        stage: "cold-start",
+        message: "service is cold — pulling model weights, this can take 3–6 minutes on first call",
+        etaSeconds: 300,
+      });
+      // Poll until ready or 10 min budget elapses. Polling avoids holding
+      // a single fetch open through the entire cold-start window — Node's
+      // undici tends to return a generic "fetch failed" if the LB drops
+      // the connection mid-startup.
+      const probeStarted = Date.now();
+      const COLD_BUDGET_MS = 10 * 60 * 1000;
+      while (!warm) {
+        const elapsed = Date.now() - probeStarted;
+        if (elapsed > COLD_BUDGET_MS) {
+          throw new Error(`flux service did not become ready within ${COLD_BUDGET_MS / 1000}s`);
+        }
+        send("heartbeat", { elapsedMs: elapsed, phase: "cold-start" });
+        await new Promise((r) => setTimeout(r, 5000));
+        warm = await probeReady(4000);
+      }
+      send("stage", { stage: "warm", message: "service ready — starting inference", etaSeconds: 15 });
+    }
+
+    const startedAt = Date.now();
+    send("stage", { stage: "generating", message: "generating t-pose", startedAt });
+    heartbeat = setInterval(() => {
+      send("heartbeat", { elapsedMs: Date.now() - startedAt });
+    }, 5000);
+
+    const dataUri = `data:${avatar.mime};base64,${avatar.buffer.toString("base64")}`;
+    const r = await fetch(`${base}/v1/infer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        prompt: TPOSE_PROMPT,
+        image: dataUri,
+        seed: Math.floor(Math.random() * 2_147_483_647),
+        steps: 30,
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`flux-kontext ${r.status}: ${body.slice(0, 200)}`);
+    }
+    const data = await r.json();
+    const b64 = data.artifacts?.[0]?.base64;
+    if (!b64) throw new Error("flux-kontext returned no image");
+    const buffer = Buffer.from(b64, "base64");
+    const dir = getCharDir(pubkey);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "tpose.png"), buffer);
+
+    apiQuota.recordSuccess();
+    send("done", {
+      tposeUrl: `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/tpose?t=${Date.now()}`,
+      elapsedMs: Date.now() - startedAt,
+    });
+  } catch (err) {
+    apiQuota.refund();
+    console.error("[char:tpose:stream]", err.message);
+    send("error", { error: err.message });
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    res.end();
   }
 });
 

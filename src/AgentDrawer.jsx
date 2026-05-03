@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import AgentProfile from './AgentProfile.jsx'
+import AgentAssets from './AgentAssets.jsx'
 import AgentSchedule from './AgentSchedule.jsx'
 import AgentInspector from './AgentInspector.jsx'
 import AgentSystemPrompt from './AgentSystemPrompt.jsx'
@@ -106,6 +107,16 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
           >
             <IconProfile />
             <span>Profile</span>
+          </button>
+          <button
+            className={`agent-drawer-sidetab${tab === 'assets' ? ' active' : ''}`}
+            role="tab"
+            aria-selected={tab === 'assets'}
+            onClick={() => handleTabChange('assets')}
+            title="Assets — generated character imagery"
+          >
+            <IconAssets />
+            <span>Assets</span>
           </button>
           <button
             className={`agent-drawer-sidetab${tab === 'schedule' ? ' active' : ''}`}
@@ -218,6 +229,12 @@ export default function AgentDrawer({ bridgeUrl, character, agent, initialTab = 
               ) : (
                 <p className="muted" style={{ padding: 14 }}>No character loaded.</p>
               )
+            ) : tab === 'assets' ? (
+              character?.pubkey ? (
+                <AgentAssets bridgeUrl={bridgeUrl} character={character} />
+              ) : (
+                <p className="muted" style={{ padding: 14 }}>No character loaded.</p>
+              )
             ) : tab === 'schedule' ? (
               character?.pubkey ? (
                 <AgentSchedule pubkey={character.pubkey} />
@@ -262,6 +279,16 @@ function IconContext() {
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3.5" y="4" width="17" height="16" rx="1" />
       <path d="M7 9h10M7 13h10M7 17h6" />
+    </svg>
+  )
+}
+
+function IconAssets() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" />
+      <path d="M3.5 16l5-5 4 4 3-3 5 5" />
+      <circle cx="9" cy="9" r="1.5" />
     </svg>
   )
 }

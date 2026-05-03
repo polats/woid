@@ -1247,6 +1247,238 @@ body {
   background: var(--ink);
   color: var(--paper);
 }
+/* ──────── Agent Assets tab ──────── */
+.agent-assets {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 100%;
+}
+.agent-assets-section {
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.agent-assets-section.is-locked {
+  background: var(--paper-2);
+  border-style: dashed;
+  border-color: var(--ink-faint);
+  color: var(--ink-3);
+}
+.agent-assets-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+.agent-assets-section-head h4 {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: 18px;
+  margin: 0;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+.is-locked .agent-assets-section-head h4 { color: var(--ink-3); }
+.agent-assets-step {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--ink-faint);
+  border: 1px solid var(--ink-faint);
+  padding: 1px 5px;
+  text-transform: uppercase;
+}
+.agent-assets-status {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border: 1px solid var(--ink);
+  background: var(--paper-2);
+  color: var(--ink-2);
+}
+.agent-assets-status.is-loading { background: var(--violet); color: var(--paper); border-color: var(--ink); }
+.agent-assets-status.is-ready   { background: var(--ink); color: var(--paper); }
+.agent-assets-status.is-soon    {
+  background: var(--paper);
+  color: var(--ink-faint);
+  border-color: var(--ink-faint);
+  border-style: dashed;
+}
+.agent-assets-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+.is-locked .agent-assets-desc { color: var(--ink-muted); }
+
+/* Pipeline ─ tile → arrow → tile. Wraps on narrow viewports. */
+.agent-assets-pipeline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  flex-wrap: wrap;
+}
+.agent-assets-tile {
+  margin: 0;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agent-assets-tile-frame {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-3);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.is-muted .agent-assets-tile-frame {
+  border-style: dashed;
+  border-color: var(--ink-faint);
+  box-shadow: none;
+  background: var(--paper-2);
+}
+.agent-assets-tile-frame img {
+  width: 100%; height: 100%; object-fit: contain; display: block;
+}
+.is-muted .agent-assets-tile-frame img { opacity: 0.5; filter: grayscale(0.4); }
+.agent-assets-tile figcaption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.agent-assets-tile-label { color: var(--ink-2); font-weight: 600; }
+.agent-assets-tile-caption { color: var(--ink-faint); }
+.agent-assets-tile-empty {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.agent-assets-arrow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-2);
+  width: 24px;
+}
+.agent-assets-arrow.is-muted { color: var(--ink-faint); }
+
+.agent-assets-soon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* Progress overlay inside the result tile. */
+.agent-assets-progress {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.agent-assets-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--paper-2);
+  border: 1px solid var(--ink);
+  position: relative;
+  overflow: hidden;
+}
+.agent-assets-progress-fill {
+  height: 100%;
+  background: var(--violet);
+  transition: width 250ms linear;
+}
+.agent-assets-progress-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  text-align: center;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* Action row + buttons (mirrors agent-profile-actions). */
+.agent-assets-actions {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.agent-assets-btn {
+  padding: 6px 14px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 120ms, box-shadow 120ms;
+}
+.agent-assets-btn:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.agent-assets-btn.primary { background: var(--ink); color: var(--paper); }
+.agent-assets-btn.primary:hover:not(:disabled) { box-shadow: 2px 2px 0 var(--transmit); }
+.agent-assets-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.agent-assets-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+/* Mobile — stack pipeline vertically, rotate the arrow. */
+@media (max-width: 640px) {
+  .agent-assets { padding: var(--sp-2); gap: var(--sp-3); }
+  .agent-assets-section { padding: var(--sp-2); }
+  .agent-assets-pipeline { flex-direction: column; align-items: stretch; }
+  .agent-assets-tile { flex: 0 0 auto; }
+  .agent-assets-tile-frame {
+    aspect-ratio: auto;
+    height: min(48vw, 220px);
+  }
+  .agent-assets-arrow { width: 100%; height: 24px; transform: rotate(90deg); }
+}
+
 .agent-drawer-avatar {
   flex: 0 0 36px;
   width: 36px;
