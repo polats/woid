@@ -21,3 +21,14 @@ references/Woid Design System-handoff/
 /playwright-report/
 /playwright/.cache/
 testing/sessions/
+
+# Local e2e pipeline outputs (intermediates: avatar/tpose/model/rig per
+# character, plus report.json). Trivially regenerable; large GLBs.
+/scripts/e2e-runs/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Bridge probe scripts — ad-hoc debug helpers, never source-of-truth.
+agent-sandbox/pi-bridge/probe*.mjs

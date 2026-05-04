@@ -38,6 +38,14 @@ services:
       # Self-hosted FLUX.1-Kontext-dev URL (image editing). Powers the
       # Assets tab T-pose generator. Leave blank to disable that feature.
       FLUX_KONTEXT_URL: "${FLUX_KONTEXT_URL:-}"
+      # Self-hosted Microsoft TRELLIS image-to-3D on Cloud Run. Powers
+      # the Assets tab 3D model generator. Leave blank to disable.
+      TRELLIS_URL: "${TRELLIS_URL:-}"
+      # Self-hosted Tencent Hunyuan3D-2 image-to-3D on Cloud Run.
+      # Alternate mesh backend for the Assets tab — selectable via
+      # body.backend on /generate-model/stream. See API docs at
+      # ../google-cloud/gemma-4-self-hosted/hunyuan3d/API.md.
+      HUNYUAN3D_URL: "${HUNYUAN3D_URL:-}"
       # Optional. Point at an OpenAI-compat llama.cpp/vLLM/Ollama server
       # to expose a `local` provider in the sandbox. See
       # agent-sandbox/llama-cpp/ for a turnkey llama.cpp stack.

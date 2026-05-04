@@ -10,6 +10,7 @@ import RelayFeed from './RelayFeed.jsx'
 import Testing from './Testing.jsx'
 import Doc from './views/Doc.jsx'
 import Personas from './views/Personas.jsx'
+import ApiStatusPage from './views/ApiStatusPage.jsx'
 import ImagePosts from './views/ImagePosts.jsx'
 import Network from './views/Network.jsx'
 import Journal from './views/Journal.jsx'
@@ -55,6 +56,7 @@ function parseHash() {
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
   if (h.startsWith('references/')) return { view: 'reference', id: decodeURIComponent(h.slice(11)) }
   if (h.startsWith('docs/')) return { view: 'doc', name: decodeURIComponent(h.slice(5)) }
+  if (h.startsWith('services/')) return { view: 'service', name: decodeURIComponent(h.slice(9)) }
   return { view: 'doc', name: homeDoc?.name ?? null }
 }
 
@@ -180,6 +182,7 @@ export default function App() {
         {route.view === 'agent-sandbox' && config.features?.agentSandbox && <Sandbox />}
         {route.view === 'relay-feed' && config.features?.agentSandbox && <RelayFeed />}
         {route.view === 'personas' && config.features?.agentSandbox && <Personas />}
+        {route.view === 'service' && config.features?.agentSandbox && <ApiStatusPage service={route.name} />}
         {route.view === 'image-posts' && config.features?.agentSandbox && <ImagePosts />}
         {route.view === 'network' && config.features?.agentSandbox && <Network />}
         {route.view === 'journal' && config.features?.agentSandbox && <Journal />}

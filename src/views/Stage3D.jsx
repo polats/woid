@@ -7,6 +7,79 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 
 /**
+ * Replace a live agent group's template avatar with a clone of a
+ * loaded custom GLB (e.g. a Trellis-generated character model).
+ * Stops the placeholder's animation mixer, removes the template,
+ * adds a centered + scaled clone of the custom model, then
+ * repositions the profile-pic sprite to the new height.
+ *
+ * Trellis GLBs have no skeleton, so plain Object3D.clone() is fine —
+ * SkeletonUtils.clone is only required for rigged meshes.
+ */
+function applyCustomModel(group, entry) {
+  if (!group || !entry || entry.status !== 'ready') return
+  if (group.userData.customApplied) return
+
+  // Tear down placeholder + its mixer.
+  if (group.userData.mixer) {
+    group.userData.mixer.stopAllAction()
+    group.userData.mixer = null
+  }
+  const placeholder = group.userData.placeholder
+  if (placeholder) {
+    group.remove(placeholder)
+    placeholder.traverse((o) => {
+      if (o.geometry) o.geometry.dispose?.()
+      if (o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material]
+        for (const m of mats) {
+          if (m.map?.dispose) m.map.dispose()
+          m.dispose?.()
+        }
+      }
+    })
+    group.userData.placeholder = null
+  }
+
+  // Add a centered, ground-aligned clone of the custom model.
+  // Object3D.clone() shares geometry/material with the source — when
+  // an agent later leaves the room and the live group is disposed,
+  // those shared resources would be freed under the cached source's
+  // feet. Deep-clone meshes so per-agent disposal is local.
+  const inst = entry.root.clone(true)
+  inst.traverse((o) => {
+    if (o.isMesh) {
+      if (o.geometry) o.geometry = o.geometry.clone()
+      o.material = Array.isArray(o.material)
+        ? o.material.map((m) => m.clone())
+        : o.material.clone()
+    }
+  })
+  const localBox = new THREE.Box3().setFromObject(inst)
+  const ctr = localBox.getCenter(new THREE.Vector3())
+  // Three.js composes the local matrix as T·R·S, so position is
+  // applied in inst's *parent* space — the translation has to use the
+  // scaled bbox bounds, not the raw ones, or the mesh sinks below
+  // y=0 by `min.y * (scale - 1)`. Set scale first, then translate by
+  // the scaled offset.
+  inst.scale.setScalar(entry.scale)
+  inst.position.set(
+    -ctr.x * entry.scale,
+    -localBox.min.y * entry.scale,
+    -ctr.z * entry.scale,
+  )
+  group.add(inst)
+  group.userData.customApplied = true
+  group.userData.customMesh = inst
+
+  // Move the profile sprite to the top of the now-final figure.
+  const finalHeight = entry.baseHeight * entry.scale
+  if (group.userData.sprite) {
+    group.userData.sprite.position.y = finalHeight + 0.25
+  }
+}
+
+/**
  * Three.js scene viewer mirroring ../3d-stage/viewer/index.html. Loads
  * /scene.glb (copied from references/3d-stage), frames the model, and
  * lets the user orbit it. The container fills its parent so the same
@@ -134,6 +207,12 @@ export default function Stage3D({
   const avatarClipsRef = useRef([])
   const avatarsRef = useRef(new Map())
   const clockRef = useRef(null)
+  // Per-character Trellis GLBs, keyed by their bridge URL.
+  // Value shape: { status: 'pending' | 'absent' | 'failed' | 'ready',
+  //                root?: THREE.Group, baseHeight?: number, scale?: number }
+  // Once 'ready', any agent group flagged with this modelUrl gets the
+  // generic template swapped out for a clone of the custom model.
+  const customModelCacheRef = useRef(new Map())
 
   useEffect(() => {
     const host = hostRef.current
@@ -426,8 +505,65 @@ export default function Stage3D({
           mixer.clipAction(happy).reset().play()
           group.userData.mixer = mixer
         }
+        // Track refs so we can swap in a custom Trellis model later.
+        group.userData.placeholder = inst
+        group.userData.sprite = sprite
+        group.userData.modelUrl = agent.modelUrl ?? null
         scene.add(group)
         live.set(npub, group)
+
+        // If this character has a custom GLB, kick off the load (or
+        // pull from cache). When ready, swap the template out.
+        if (agent.modelUrl) {
+          const cache = customModelCacheRef.current
+          const cached = cache.get(agent.modelUrl)
+          if (cached?.status === 'ready') {
+            applyCustomModel(group, cached)
+          } else if (!cached) {
+            cache.set(agent.modelUrl, { status: 'pending' })
+            // HEAD-probe first so 404s don't trip the loader's
+            // console.error path. Only kick the loader on 200.
+            fetch(agent.modelUrl, { method: 'HEAD' })
+              .then((r) => {
+                if (!r.ok) {
+                  cache.set(agent.modelUrl, { status: 'absent' })
+                  return
+                }
+                // Trellis output isn't Draco-compressed, so a plain
+                // GLTFLoader is enough; we don't need access to the
+                // mount effect's draco instance from here.
+                const customLoader = new GLTFLoader()
+                customLoader.load(
+                  agent.modelUrl,
+                  (gltf) => {
+                    const root = gltf.scene
+                    root.updateMatrixWorld(true)
+                    const box = new THREE.Box3().setFromObject(root)
+                    const size = box.getSize(new THREE.Vector3())
+                    const baseHeight = size.y || 1
+                    const targetHeight = avatarTemplateRef.current?.userData?.avatarHeight ?? 1.6
+                    // Match the template's apparent on-stage height. The
+                    // template gets root.scale.setScalar(0.7) at load
+                    // time, and avatarHeight is measured *after* that —
+                    // so just match it directly here.
+                    const scale = targetHeight / baseHeight
+                    const entry = { status: 'ready', root, baseHeight, scale }
+                    cache.set(agent.modelUrl, entry)
+                    // Swap into any live agent group that's still
+                    // showing the placeholder for this URL.
+                    for (const [, g] of avatarsRef.current) {
+                      if (g.userData.modelUrl === agent.modelUrl && !g.userData.customApplied) {
+                        applyCustomModel(g, entry)
+                      }
+                    }
+                  },
+                  undefined,
+                  () => cache.set(agent.modelUrl, { status: 'failed' }),
+                )
+              })
+              .catch(() => cache.set(agent.modelUrl, { status: 'failed' }))
+          }
+        }
       }
       // Ring placement (radius scales with agent count).
       const radius = total > 1 ? Math.min(0.6, 0.25 * total) : 0

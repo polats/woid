@@ -36,6 +36,16 @@ What experimenting with LLMs as NPC brains has and hasn't validated.
 
 - [Generative Agents (Smallville) and AI Town](#/docs/llm-agent-prior-work)
 
+## Infra & pipeline research
+
+Notes on model selection, deploy patterns, and pipeline tradeoffs for
+the asset-generation side of woid (avatars, T-poses, 3D meshes, rigs,
+animations). Captured during build-out of the Assets tab and the
+self-hosted Cloud Run NIMs.
+
+- [T-pose generation: model landscape](#/docs/tpose-generation-models)
+- Pre-baking NIM caches — research notes — `../google-cloud/gemma-4-self-hosted/WARM-NIM-CACHE-RESEARCH.md`. Companion to `WARM-NIM-CACHE.md`; covers the three failure modes our derived-image build was hitting and the GCS-FUSE alternative.
+
 ---
 
 ## Top architectural patterns to take into woid

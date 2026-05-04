@@ -93,6 +93,13 @@ function PhoneScreen() {
           npub: a.npub,
           name: a.name || c?.name || '?',
           avatarUrl: c?.avatarUrl || null,
+          // If the character has a Trellis-generated GLB on disk, the
+          // bridge serves it from this path. Stage3D HEADs the URL
+          // before loading and falls back to the generic template if
+          // missing — so passing it unconditionally is safe.
+          modelUrl: cfg.bridgeUrl && a.npub
+            ? `${cfg.bridgeUrl}/characters/${a.npub}/model`
+            : null,
         }
       })
   }, [selectedRoom, roomState?.agents, characters])

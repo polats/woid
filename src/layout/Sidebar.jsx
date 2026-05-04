@@ -1,4 +1,5 @@
 import PersonaApiStatus from './PersonaApiStatus.jsx'
+import ApiStatusBadge from './ApiStatusBadge.jsx'
 import ImagePostsStatus from './ImagePostsStatus.jsx'
 
 export default function Sidebar({
@@ -81,6 +82,20 @@ export default function Sidebar({
                 active={route.view === 'image-posts'}
               />
             </li>
+          </ul>
+
+          <h2>Asset services</h2>
+          <ul>
+            {['flux-kontext', 'trellis', 'hunyuan3d', 'unirig'].map((svc) => (
+              <li key={svc}>
+                <ApiStatusBadge
+                  bridgeUrl={config.agentSandbox?.bridgeUrl}
+                  service={svc}
+                  route={route}
+                  view="service"
+                />
+              </li>
+            ))}
           </ul>
 
           <h2>Nostr Relay</h2>

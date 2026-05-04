@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import sharp from "sharp";
 import { spawn } from "child_process";
 import { createInterface } from "readline";
 import { EventEmitter } from "events";
@@ -13,6 +14,8 @@ import * as piPool from "./pi-pool.js";
 import * as rateLimiter from "./rate-limiter.js";
 import * as apiQuota from "./api-quota.js";
 import * as personaLog from "./persona-log.js";
+import * as services from "./service-state.js";
+import { SERVICES as SERVICE_REGISTRY } from "./service-registry.js";
 import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/index.js";
 import { createGM } from "./gm.js";
 import { createPerception, formatPerceptionEvents } from "./perception.js";
@@ -55,6 +58,8 @@ const WORKSPACE = process.env.WORKSPACE || join(tmpdir(), "woid-agent-sandbox");
 const RELAY_URL = process.env.RELAY_URL || "ws://localhost:7777";
 const NVIDIA_NIM_API_KEY = process.env.NVIDIA_NIM_API_KEY || "";
 const FLUX_KONTEXT_URL = process.env.FLUX_KONTEXT_URL || "";
+const TRELLIS_URL = process.env.TRELLIS_URL || "";
+const HUNYUAN3D_URL = process.env.HUNYUAN3D_URL || "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 // When set, pi-bridge exposes an OpenAI-compat llama.cpp (or vLLM/Ollama)
 // server as a third provider called `local`. No auth — the served model is
@@ -279,7 +284,7 @@ async function probeAndFixLocalLlmUrl() {
     const t = setTimeout(() => ctrl.abort(), 1500);
     try {
       const r = await fetch(url.replace(/\/v1\/?$/, "") + "/health", { signal: ctrl.signal });
-      return r.ok;
+      return r.ok || r.status === 429;
     } catch { return false; }
     finally { clearTimeout(t); }
   };
@@ -1006,13 +1011,135 @@ async function generateAvatar({ pubkey, name, about, promptOverride }) {
 // writes the result to tpose.png in the char dir. Single file, gets
 // overwritten on regenerate. S3 storage intentionally skipped for v1.
 
+// Path to the bundled T-pose reference render (kimodo male_stylized).
+// We composite this side-by-side with the avatar before calling Kontext
+// so the model has correct anatomy + proportions to copy from instead of
+// inventing a body from a portrait crop. See assets/render_tpose_reference.py.
+const TPOSE_REFERENCE_PATH = join(__dirname, "assets", "tpose_reference.png");
+
+// Off-white background to match what the prompt asks for, so the
+// composite seam between avatar and reference reads as one scene.
+const BG_RGB = { r: 245, g: 240, b: 230 };
+
+// Build the side-by-side composite that Kontext receives. Each half is a
+// 768×1024 panel: [ avatar (left) | T-pose reference (right) ]. Avatar is
+// resized to fit the left panel preserving aspect, padded with off-white;
+// reference is loaded as-is. Result: 1536×1024 PNG.
+async function buildTposeComposite(avatarBuffer, avatarMime) {
+  const PANEL_W = 768;
+  const PANEL_H = 1024;
+  const referenceBuf = readFileSync(TPOSE_REFERENCE_PATH);
+
+  // Left panel: avatar resized to fit the panel preserving aspect, padded
+  // with the same off-white we describe to Kontext.
+  const leftPanel = await sharp(avatarBuffer)
+    .resize(PANEL_W, PANEL_H, { fit: "contain", background: BG_RGB })
+    .png()
+    .toBuffer();
+
+  // Right panel: the rendered reference (already 768×1024, off-white bg).
+  // Resize defensively in case the reference asset gets re-rendered at a
+  // different size.
+  const rightPanel = await sharp(referenceBuf)
+    .resize(PANEL_W, PANEL_H, { fit: "contain", background: BG_RGB })
+    .png()
+    .toBuffer();
+
+  // Composite onto a 1536×1024 canvas.
+  const composite = await sharp({
+    create: {
+      width: PANEL_W * 2,
+      height: PANEL_H,
+      channels: 3,
+      background: BG_RGB,
+    },
+  })
+    .composite([
+      { input: leftPanel, top: 0, left: 0 },
+      { input: rightPanel, top: 0, left: PANEL_W },
+    ])
+    .png()
+    .toBuffer();
+
+  return { buffer: composite, mime: "image/png" };
+}
+
+// Crop the right half out of Kontext's response. The prompt asks Kontext
+// to redraw only the right side, but it returns the full canvas with both
+// figures still present. We slice the right half so callers see just the
+// transformed character.
+async function cropRightHalf(buffer) {
+  const meta = await sharp(buffer).metadata();
+  const w = meta.width || 0;
+  const h = meta.height || 0;
+  if (!w || !h) throw new Error(`cropRightHalf: bad metadata (${w}x${h})`);
+  const halfW = Math.floor(w / 2);
+  return sharp(buffer)
+    .extract({ left: halfW, top: 0, width: w - halfW, height: h })
+    .png()
+    .toBuffer();
+}
+
+// Composite input is 1536×1024 (3:2 landscape), but Kontext doesn't
+// preserve the layout in its output — it produces a single full-figure
+// T-pose centered on the canvas, so the output aspect can be set
+// independently of the input. T-pose figures have arm-span ≈ body
+// height (~square bbox); pure 1:1 made Kontext stretch the torso to
+// fill the canvas vertically when arms came out slightly drooped.
+// 7:6 helped but still left a slight stretch — bumping to 4:3 (1.33:1)
+// gives Kontext a clearer "wider than tall" canvas where arm-span at
+// full extension fits horizontally and there's room above + below the
+// figure rather than the figure being scaled to fill the height.
+const TPOSE_ASPECT_RATIO = "4:3";
+// CFG scale on Kontext NIM ranges 1<x≤9 (default 3.5). 5.0 was the value
+// that produced the cleanest combine results in probing — high enough
+// to pin down the pose / palm orientation, low enough to avoid noise
+// and to leave the model room to make stylistic choices about outfit
+// transfer (which it does well at moderate CFG).
+const TPOSE_CFG_SCALE = 5.0;
+
+// Edit prompt for Kontext. Frames the request as a "3D character rigging
+// reference sheet" so the model pulls from its Mixamo / Blender / Maya
+// training cluster, where palm-down anatomy and standard humanoid
+// proportions are the dominant pattern. Two pitfalls fixed:
+//  · "palms facing down" got read as palms-toward-camera in earlier
+//    versions. The Mixamo-Y-Bot anchor + airplane analogy + explicit
+//    two-sided phrasing ("palms toward floor / back of hands toward
+//    ceiling") leave no room for the upright-palms misread.
+//  · "preserve proportions exactly" forced the avatar's chibi
+//    proportions through the edit. Dropped — only face/outfit/colors
+//    are preserved; the pose AND proportions are explicitly redrawn.
+// The input to Kontext is a side-by-side composite:
+//   LEFT panel  = the character's avatar (portrait — head/shoulders)
+//   RIGHT panel = a clean rendered T-pose reference figure (kimodo
+//                 mixamo paladin — correct anatomy, fully clothed in
+//                 armor, humanoid proportions)
+//
+// Prompt phrasing matters a LOT here. Three traps we hit and now avoid:
+//   1. "left figure / right figure / redraw" → Kontext's safety filter
+//      reads identity-transfer wording as a deepfake concern and returns
+//      all-black ~6KB JPEGs.
+//   2. "Character reference sheet" → Kontext interprets it literally
+//      and produces a 4-pose turnaround sheet (front / side / back /
+//      3/4 view) instead of a single figure.
+//   3. No explicit "no armor" → the paladin reference's armor leaks
+//      into the output's pants/legs.
+//
+// The phrasing below threads all three: avoids identity-transfer
+// trigger words, avoids "reference sheet" language, and explicitly
+// negates multi-view layouts and armor. Verified across 5 random seeds
+// to produce consistent single-figure full T-poses with palms-down.
 const TPOSE_PROMPT =
-  "Convert this character into a clean full-body T-pose reference: " +
-  "feet shoulder-width apart on the ground, both arms extended straight " +
-  "out horizontally to the sides, palms facing down, fingers together, " +
-  "facing the camera directly. Orthographic front view, neutral expression, " +
-  "plain off-white background, even soft lighting, no shadows on the floor. " +
-  "Preserve the character's face, outfit, colors, and proportions exactly.";
+  "Single full-body T-pose illustration of ONE character matching the portrait. " +
+  "Only one figure in the image, centered on a plain off-white background. " +
+  "Same face, hairstyle, and casual everyday clothing as the portrait. " +
+  "Arms straight out horizontal at shoulder height, palms facing down toward the ground. " +
+  "Realistic adult human proportions — about 7 to 8 head-heights tall, normal stocky build. " +
+  "Do NOT stretch or elongate the torso, legs, or neck. NOT thin and tall, NOT anime-stretched. " +
+  "Arm-span equals body height (the bounding box of the figure is roughly square). " +
+  "No armor, no weapons. " +
+  "Do NOT draw multiple figures, multiple views, or a turnaround sheet. " +
+  "Just one single figure in T-pose, front view.";
 
 function readAvatarBytesFromDisk(pubkey) {
   const dir = getCharDir(pubkey);
@@ -1036,25 +1163,40 @@ async function generateTpose({ pubkey }) {
   const avatar = readAvatarBytesFromDisk(pubkey);
   if (!avatar) throw new Error("character has no avatar yet — generate one first");
 
-  const dataUri = `data:${avatar.mime};base64,${avatar.buffer.toString("base64")}`;
-  const res = await fetch(`${FLUX_KONTEXT_URL.replace(/\/$/, "")}/v1/infer`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      prompt: TPOSE_PROMPT,
-      image: dataUri,
-      seed: Math.floor(Math.random() * 2_147_483_647),
-      steps: 30,
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`flux-kontext ${res.status}: ${body.slice(0, 200)}`);
+  const composite = await buildTposeComposite(avatar.buffer, avatar.mime);
+  const dataUri = `data:${composite.mime};base64,${composite.buffer.toString("base64")}`;
+
+  let buffer = null;
+  let lastBytes = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(`${FLUX_KONTEXT_URL.replace(/\/$/, "")}/v1/infer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        prompt: TPOSE_PROMPT,
+        image: dataUri,
+        seed: Math.floor(Math.random() * 2_147_483_647),
+        steps: 30,
+        aspect_ratio: TPOSE_ASPECT_RATIO,
+        resize_response_image: false,
+        cfg_scale: TPOSE_CFG_SCALE,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`flux-kontext ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const b64 = data.artifacts?.[0]?.base64;
+    if (!b64) throw new Error("flux-kontext returned no image");
+    const buf = Buffer.from(b64, "base64");
+    lastBytes = buf.length;
+    if (buf.length >= 15_000) { buffer = buf; break; }
+    console.warn(`[char:tpose] attempt ${attempt + 1}: ${buf.length}B — safety-blocked, retrying`);
   }
-  const data = await res.json();
-  const b64 = data.artifacts?.[0]?.base64;
-  if (!b64) throw new Error("flux-kontext returned no image");
-  const buffer = Buffer.from(b64, "base64");
+  if (!buffer) {
+    throw new Error(`flux-kontext kept returning safety-blocked images (last: ${lastBytes}B)`);
+  }
 
   const dir = getCharDir(pubkey);
   mkdirSync(dir, { recursive: true });
@@ -1062,6 +1204,19 @@ async function generateTpose({ pubkey }) {
 
   const tposeUrl = `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/tpose?t=${Date.now()}`;
   return { tposeUrl };
+}
+
+// ── 3D model generation (Microsoft TRELLIS via NVIDIA NIM) ──
+//
+// Reads the persisted T-pose for a character, sends it to the Trellis
+// Cloud Run service, and writes the resulting GLB to model.glb in the
+// char dir. Single file, overwrites on regenerate. Disk-only for v1.
+
+function readTposeBytesFromDisk(pubkey) {
+  const dir = getCharDir(pubkey);
+  const path = join(dir, "tpose.png");
+  if (existsSync(path)) return { buffer: readFileSync(path), mime: "image/png" };
+  return null;
 }
 
 function deleteCharacter(pubkey) {
@@ -3366,6 +3521,58 @@ app.get("/v1/personas/log/:id", (req, res) => {
   res.json(row);
 });
 
+// ── External services (flux-kontext, trellis, hunyuan3d, unirig) ──
+//
+// Surface the per-service state cache from service-state.js. Three
+// shapes:
+//   GET  /v1/services                  list all (sidebar dots fetch this)
+//   GET  /v1/services/:name/status     single-service snapshot
+//   POST /v1/services/:name/wake       SSE-streamed warmup; idempotent
+//                                      via single-flight in service-state.
+
+app.get("/v1/services", (_req, res) => {
+  res.json({ services: services.snapshotAll() });
+});
+
+app.get("/v1/services/:name/status", (req, res) => {
+  const snap = services.snapshot(req.params.name);
+  if (!snap) return res.status(404).json({ error: `unknown service '${req.params.name}'` });
+  res.json(snap);
+});
+
+app.post("/v1/services/:name/wake", async (req, res) => {
+  const name = req.params.name;
+  if (!SERVICE_REGISTRY[name]) {
+    return res.status(404).json({ error: `unknown service '${name}'` });
+  }
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  const startedAt = Date.now();
+  try {
+    const result = await services.ensureWarm(name, {
+      onStage: (s) => send("stage", s),
+      onHeartbeat: (hb) => send("heartbeat", hb),
+    });
+    send("done", {
+      ...result,
+      service: name,
+      elapsedMs: Date.now() - startedAt,
+      snapshot: services.snapshot(name),
+    });
+  } catch (err) {
+    console.error(`[services:${name}:wake]`, err.message);
+    send("error", { error: err.message, service: name });
+  } finally {
+    res.end();
+  }
+});
+
 function jumbleProfileUrl(pubkey) {
   if (!PUBLIC_JUMBLE_URL) return null;
   try { return `${PUBLIC_JUMBLE_URL.replace(/\/$/, "")}/${npubEncode(pubkey)}`; }
@@ -4086,6 +4293,19 @@ app.get("/characters/:pubkey/tpose", async (req, res) => {
   res.status(404).json({ error: "no tpose" });
 });
 
+app.get("/characters/:pubkey/model", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const dir = getCharDir(pubkey);
+  const path = join(dir, "model.glb");
+  if (existsSync(path)) {
+    res.setHeader("Content-Type", "model/gltf-binary");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return createReadStream(path).pipe(res);
+  }
+  res.status(404).json({ error: "no model" });
+});
+
 // Post-image serving (#355). Filename pattern: <shortId>.<ext>.
 // Prefers S3 when configured; falls back to disk under the character
 // dir for local dev. Immutable URLs — no cache-buster needed.
@@ -4206,50 +4426,28 @@ app.post("/characters/:pubkey/generate-tpose/stream", apiQuota.middleware, async
   }
 
   let heartbeat = null;
+  let endInflight = null;
   try {
     if (!FLUX_KONTEXT_URL) throw new Error("FLUX_KONTEXT_URL not configured");
     const avatar = readAvatarBytesFromDisk(pubkey);
     if (!avatar) throw new Error("character has no avatar yet — generate one first");
 
     const base = FLUX_KONTEXT_URL.replace(/\/$/, "");
-    send("stage", { stage: "probing", message: "checking flux service" });
+    send("stage", { stage: "probing", message: "checking flux-kontext service" });
 
-    // Probe /v1/health/ready. Cloud Run cold-starts refuse TCP or hang
-    // until the container reports ready, so the timeout itself is the
-    // cold-start signal.
-    async function probeReady(timeoutMs = 4000) {
-      try {
-        const r = await fetch(`${base}/v1/health/ready`, { signal: AbortSignal.timeout(timeoutMs) });
-        return r.ok;
-      } catch { return false; }
-    }
-
-    let warm = await probeReady(4000);
-    if (warm) {
-      send("stage", { stage: "warm", message: "service is warm", etaSeconds: 15 });
-    } else {
-      send("stage", {
-        stage: "cold-start",
-        message: "service is cold — pulling model weights, this can take 3–6 minutes on first call",
-        etaSeconds: 300,
-      });
-      // Poll until ready or 10 min budget elapses. Polling avoids holding
-      // a single fetch open through the entire cold-start window — Node's
-      // undici tends to return a generic "fetch failed" if the LB drops
-      // the connection mid-startup.
-      const probeStarted = Date.now();
-      const COLD_BUDGET_MS = 10 * 60 * 1000;
-      while (!warm) {
-        const elapsed = Date.now() - probeStarted;
-        if (elapsed > COLD_BUDGET_MS) {
-          throw new Error(`flux service did not become ready within ${COLD_BUDGET_MS / 1000}s`);
-        }
-        send("heartbeat", { elapsedMs: elapsed, phase: "cold-start" });
-        await new Promise((r) => setTimeout(r, 5000));
-        warm = await probeReady(4000);
-      }
-      send("stage", { stage: "warm", message: "service ready — starting inference", etaSeconds: 15 });
-    }
+    // Single-flight warmup — concurrent SSE flows share one probe loop
+    // via the per-service emitter inside ensureWarm.
+    await services.ensureWarm("flux-kontext", {
+      onStage: (s) => send("stage", s),
+      onHeartbeat: (hb) => send("heartbeat", hb),
+    });
+    const tposeCall = services.startCall("flux-kontext", {
+      pubkey,
+      characterName: c.name,
+      kind: "tpose",
+      prompt: TPOSE_PROMPT,
+    });
+    endInflight = (info = {}) => tposeCall.end(info);
 
     const startedAt = Date.now();
     send("stage", { stage: "generating", message: "generating t-pose", startedAt });
@@ -4257,30 +4455,63 @@ app.post("/characters/:pubkey/generate-tpose/stream", apiQuota.middleware, async
       send("heartbeat", { elapsedMs: Date.now() - startedAt });
     }, 5000);
 
-    const dataUri = `data:${avatar.mime};base64,${avatar.buffer.toString("base64")}`;
-    const r = await fetch(`${base}/v1/infer`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        prompt: TPOSE_PROMPT,
-        image: dataUri,
-        seed: Math.floor(Math.random() * 2_147_483_647),
-        steps: 30,
-      }),
-    });
-    if (!r.ok) {
-      const body = await r.text().catch(() => "");
-      throw new Error(`flux-kontext ${r.status}: ${body.slice(0, 200)}`);
+    // Build [avatar | reference] side-by-side composite as the input.
+    // Kontext doesn't preserve the layout in its output — it produces a
+    // single full-figure T-pose centered on the canvas, drawing identity
+    // from the avatar half and pose/anatomy from the reference half. So
+    // we save the full response (no cropping); the result is already a
+    // standalone character image at the canvas's aspect ratio.
+    const composite = await buildTposeComposite(avatar.buffer, avatar.mime);
+    const dataUri = `data:${composite.mime};base64,${composite.buffer.toString("base64")}`;
+
+    // Retry on safety blocks. Flux returns a ~6KB near-uniform JPEG when
+    // its safety filter trips on a particular seed. Probing showed ~80%
+    // of random seeds clear the filter cleanly, so 3 attempts effectively
+    // never fails. We re-roll the seed each attempt; the prompt and
+    // composite stay constant.
+    let buffer = null;
+    let lastBytes = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await fetch(`${base}/v1/infer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          prompt: TPOSE_PROMPT,
+          image: dataUri,
+          seed: Math.floor(Math.random() * 2_147_483_647),
+          steps: 30,
+          aspect_ratio: TPOSE_ASPECT_RATIO,
+          resize_response_image: false,
+          cfg_scale: TPOSE_CFG_SCALE,
+        }),
+      });
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        throw new Error(`flux-kontext ${r.status}: ${body.slice(0, 200)}`);
+      }
+      const data = await r.json();
+      const b64 = data.artifacts?.[0]?.base64;
+      if (!b64) throw new Error("flux-kontext returned no image");
+      const buf = Buffer.from(b64, "base64");
+      lastBytes = buf.length;
+      if (buf.length >= 15_000) {
+        buffer = buf;
+        break;
+      }
+      console.warn(`[char:tpose:stream] attempt ${attempt + 1}: ${buf.length}B — safety-blocked, retrying with new seed`);
     }
-    const data = await r.json();
-    const b64 = data.artifacts?.[0]?.base64;
-    if (!b64) throw new Error("flux-kontext returned no image");
-    const buffer = Buffer.from(b64, "base64");
+    if (!buffer) {
+      throw new Error(
+        `flux-kontext kept returning safety-blocked images (last: ${lastBytes}B) after 3 attempts`
+      );
+    }
     const dir = getCharDir(pubkey);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "tpose.png"), buffer);
 
     apiQuota.recordSuccess();
+    if (endInflight) endInflight({ ok: true, bytes: buffer.length });
+    endInflight = null;
     send("done", {
       tposeUrl: `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/tpose?t=${Date.now()}`,
       elapsedMs: Date.now() - startedAt,
@@ -4288,9 +4519,180 @@ app.post("/characters/:pubkey/generate-tpose/stream", apiQuota.middleware, async
   } catch (err) {
     apiQuota.refund();
     console.error("[char:tpose:stream]", err.message);
+    if (endInflight) endInflight({ ok: false, error: err.message });
+    endInflight = null;
     send("error", { error: err.message });
   } finally {
     if (heartbeat) clearInterval(heartbeat);
+    if (endInflight) endInflight({ ok: false, error: "stream terminated unexpectedly" });
+    res.end();
+  }
+});
+
+// SSE 3D-model generation. Reads the saved T-pose, calls Trellis,
+// writes model.glb. Same staging/heartbeat pattern as the T-pose flow:
+// probe → optional cold-start poll → generate → done. Trellis cold
+// starts run 5–10 min; warm calls are 20–30 s.
+// Mesh-generation backend dispatch. Each backend is its own callable
+// that takes the t-pose buffer + an SSE `send` callback and returns
+// the GLB bytes. Differences between backends:
+//   trellis    NIM /v1/infer, data-URI image, JSON {artifacts[0].base64}
+//   hunyuan3d  Tencent /generate, bare-base64 image, binary GLB body
+async function callTrellisMesh({ tpose, send }) {
+  if (!TRELLIS_URL) throw new Error("TRELLIS_URL not configured");
+  const base = TRELLIS_URL.replace(/\/$/, "");
+  send("stage", { stage: "probing", message: "checking trellis service" });
+
+  await services.ensureWarm("trellis", {
+    onStage: (s) => send("stage", s),
+    onHeartbeat: (hb) => send("heartbeat", hb),
+  });
+
+  const startedAt = Date.now();
+  send("stage", { stage: "generating", message: "generating 3D model (trellis)", startedAt, backend: "trellis" });
+
+  const dataUri = `data:${tpose.mime};base64,${tpose.buffer.toString("base64")}`;
+  const r = await fetch(`${base}/v1/infer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      image: dataUri,
+      seed: Math.floor(Math.random() * 2_147_483_647),
+      output_format: "glb",
+    }),
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`trellis ${r.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await r.json();
+  const b64 = data.artifacts?.[0]?.base64;
+  if (!b64) throw new Error("trellis returned no artifact");
+  return { buffer: Buffer.from(b64, "base64"), startedAt };
+}
+
+async function callHunyuan3dMesh({ tpose, send }) {
+  if (!HUNYUAN3D_URL) throw new Error("HUNYUAN3D_URL not configured");
+  const base = HUNYUAN3D_URL.replace(/\/$/, "");
+  send("stage", { stage: "probing", message: "checking hunyuan3d service" });
+
+  await services.ensureWarm("hunyuan3d", {
+    onStage: (s) => send("stage", s),
+    onHeartbeat: (hb) => send("heartbeat", hb),
+  });
+
+  const startedAt = Date.now();
+  send("stage", { stage: "generating", message: "generating 3D model (hunyuan3d)", startedAt, backend: "hunyuan3d" });
+
+  // Hunyuan3d expects a bare base64 string, NOT a data URI.
+  const r = await fetch(`${base}/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image: tpose.buffer.toString("base64"),
+      seed: Math.floor(Math.random() * 2_147_483_647),
+      texture: true,
+      octree_resolution: 256,
+      num_inference_steps: 5,
+      guidance_scale: 5.0,
+      type: "glb",
+    }),
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`hunyuan3d ${r.status}: ${body.slice(0, 200)}`);
+  }
+  // Hunyuan upstream returns the GLB directly as the body. It also
+  // signals all internal failures via HTTP 404 with JSON body
+  // {"error_code": 1, "text": "..."} — surface that distinctly so
+  // we don't confuse it with routing 404s.
+  const ct = r.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    const body = await r.json().catch(() => null);
+    if (body?.error_code === 1) {
+      throw new Error(`hunyuan3d internal failure: ${body.text || "unknown"} (check Cloud Run logs)`);
+    }
+    throw new Error(`hunyuan3d returned JSON instead of GLB: ${JSON.stringify(body).slice(0, 200)}`);
+  }
+  const ab = await r.arrayBuffer();
+  if (!ab.byteLength) throw new Error("hunyuan3d returned empty body");
+  return { buffer: Buffer.from(ab), startedAt };
+}
+
+const MESH_BACKENDS = {
+  trellis: callTrellisMesh,
+  hunyuan3d: callHunyuan3dMesh,
+};
+
+app.post("/characters/:pubkey/generate-model/stream", apiQuota.middleware, async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) {
+    apiQuota.refund();
+    send("error", { error: "not found" });
+    return res.end();
+  }
+
+  // Backend selector — defaults to trellis for back-compat with the
+  // existing UI which doesn't yet send a body.
+  const backend = (req.body?.backend ?? "trellis").toLowerCase();
+  const backendFn = MESH_BACKENDS[backend];
+  if (!backendFn) {
+    apiQuota.refund();
+    send("error", { error: `unknown backend '${backend}' (want one of: ${Object.keys(MESH_BACKENDS).join(", ")})` });
+    return res.end();
+  }
+
+  let heartbeat = null;
+  let endInflight = null;
+  try {
+    const tpose = readTposeBytesFromDisk(pubkey);
+    if (!tpose) throw new Error("character has no t-pose yet — generate one first");
+
+    const meshCall = services.startCall(backend, {
+      pubkey,
+      characterName: c.name,
+      kind: "mesh",
+      // Mesh backends don't take a text prompt — record the source
+      // (tpose bytes) instead so we can trace which character image
+      // produced which mesh.
+      extra: { tposeBytes: tpose.buffer.length },
+    });
+    endInflight = (info = {}) => meshCall.end(info);
+    const { buffer, startedAt } = await backendFn({ tpose, send });
+
+    const dir = getCharDir(pubkey);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "model.glb"), buffer);
+
+    apiQuota.recordSuccess();
+    if (endInflight) endInflight({ ok: true, bytes: buffer.length });
+    endInflight = null;
+    send("done", {
+      modelUrl: `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/model?t=${Date.now()}`,
+      backend,
+      elapsedMs: Date.now() - startedAt,
+      bytes: buffer.length,
+    });
+  } catch (err) {
+    apiQuota.refund();
+    console.error(`[char:model:stream:${backend}]`, err.message);
+    if (endInflight) endInflight({ ok: false, error: err.message });
+    endInflight = null;
+    send("error", { error: err.message, backend });
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    if (endInflight) endInflight({ ok: false, error: "stream terminated unexpectedly" });
     res.end();
   }
 });
