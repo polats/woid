@@ -61,7 +61,12 @@ export const SERVICES = {
     description: "Image-to-3D mesh (alt backend; better textures).",
     kind: "tencent",
     urlEnv: "HUNYUAN3D_URL",
-    coldBudgetMs: 5 * 60 * 1000,
+    // The API doc quotes ~90–150s cold start, but real Cloud Run
+    // behavior runs longer when the image cache has been evicted
+    // (full pull + GPU init + weight load). 5 min was timing out the
+    // wake endpoint repeatedly. Match flux-kontext / trellis at 18 min
+    // — same Cloud Run + GPU stack, same worst-case budget.
+    coldBudgetMs: 18 * 60 * 1000,
     warmEtaSeconds: 70,
     coldEtaSeconds: 150,
     idleTimeoutMs: 15 * 60 * 1000,
