@@ -4469,37 +4469,53 @@ app.post("/characters/:pubkey/generate-tpose/stream", apiQuota.middleware, async
     // of random seeds clear the filter cleanly, so 3 attempts effectively
     // never fails. We re-roll the seed each attempt; the prompt and
     // composite stay constant.
+    //
+    // The whole retry loop runs inside withSerializedCall so a caller
+    // owns the upstream Cloud Run instance for all 3 attempts. Cloud
+    // Run is concurrency=1 — interleaving callers would just trade
+    // safety-block 429s for "no available instance" 429s.
     let buffer = null;
     let lastBytes = 0;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const r = await fetch(`${base}/v1/infer`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          prompt: TPOSE_PROMPT,
-          image: dataUri,
-          seed: Math.floor(Math.random() * 2_147_483_647),
-          steps: 30,
-          aspect_ratio: TPOSE_ASPECT_RATIO,
-          resize_response_image: false,
-          cfg_scale: TPOSE_CFG_SCALE,
-        }),
-      });
-      if (!r.ok) {
-        const body = await r.text().catch(() => "");
-        throw new Error(`flux-kontext ${r.status}: ${body.slice(0, 200)}`);
+    await services.withSerializedCall("flux-kontext", async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await fetch(`${base}/v1/infer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            prompt: TPOSE_PROMPT,
+            image: dataUri,
+            seed: Math.floor(Math.random() * 2_147_483_647),
+            steps: 30,
+            aspect_ratio: TPOSE_ASPECT_RATIO,
+            resize_response_image: false,
+            cfg_scale: TPOSE_CFG_SCALE,
+          }),
+        });
+        if (!r.ok) {
+          const body = await r.text().catch(() => "");
+          throw new Error(`flux-kontext ${r.status}: ${body.slice(0, 200)}`);
+        }
+        const data = await r.json();
+        const b64 = data.artifacts?.[0]?.base64;
+        if (!b64) throw new Error("flux-kontext returned no image");
+        const buf = Buffer.from(b64, "base64");
+        lastBytes = buf.length;
+        if (buf.length >= 15_000) {
+          buffer = buf;
+          return;
+        }
+        console.warn(`[char:tpose:stream] attempt ${attempt + 1}: ${buf.length}B — safety-blocked, retrying with new seed`);
       }
-      const data = await r.json();
-      const b64 = data.artifacts?.[0]?.base64;
-      if (!b64) throw new Error("flux-kontext returned no image");
-      const buf = Buffer.from(b64, "base64");
-      lastBytes = buf.length;
-      if (buf.length >= 15_000) {
-        buffer = buf;
-        break;
-      }
-      console.warn(`[char:tpose:stream] attempt ${attempt + 1}: ${buf.length}B — safety-blocked, retrying with new seed`);
-    }
+    }, {
+      onQueued: ({ queuedAt }) => send("stage", {
+        stage: "queued", message: "another flux-kontext call in progress; queued",
+      }),
+      onAcquired: ({ waitMs }) => {
+        if (waitMs > 0) send("stage", {
+          stage: "acquired", message: `acquired flux-kontext after ${Math.round(waitMs / 1000)}s wait`,
+        });
+      },
+    });
     if (!buffer) {
       throw new Error(
         `flux-kontext kept returning safety-blocked images (last: ${lastBytes}B) after 3 attempts`
@@ -4551,24 +4567,39 @@ async function callTrellisMesh({ tpose, send }) {
   const startedAt = Date.now();
   send("stage", { stage: "generating", message: "generating 3D model (trellis)", startedAt, backend: "trellis" });
 
+  // Cloud Run trellis is concurrency=1 max-instances=1; serialize at
+  // the bridge so concurrent SSE flows queue here instead of hitting
+  // upstream and getting 429 "no available instance".
   const dataUri = `data:${tpose.mime};base64,${tpose.buffer.toString("base64")}`;
-  const r = await fetch(`${base}/v1/infer`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      image: dataUri,
-      seed: Math.floor(Math.random() * 2_147_483_647),
-      output_format: "glb",
+  const buf = await services.withSerializedCall("trellis", async () => {
+    const r = await fetch(`${base}/v1/infer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        image: dataUri,
+        seed: Math.floor(Math.random() * 2_147_483_647),
+        output_format: "glb",
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`trellis ${r.status}: ${body.slice(0, 200)}`);
+    }
+    const data = await r.json();
+    const b64 = data.artifacts?.[0]?.base64;
+    if (!b64) throw new Error("trellis returned no artifact");
+    return Buffer.from(b64, "base64");
+  }, {
+    onQueued: () => send("stage", {
+      stage: "queued", message: "another trellis call in progress; queued",
     }),
+    onAcquired: ({ waitMs }) => {
+      if (waitMs > 0) send("stage", {
+        stage: "acquired", message: `acquired trellis after ${Math.round(waitMs / 1000)}s wait`,
+      });
+    },
   });
-  if (!r.ok) {
-    const body = await r.text().catch(() => "");
-    throw new Error(`trellis ${r.status}: ${body.slice(0, 200)}`);
-  }
-  const data = await r.json();
-  const b64 = data.artifacts?.[0]?.base64;
-  if (!b64) throw new Error("trellis returned no artifact");
-  return { buffer: Buffer.from(b64, "base64"), startedAt };
+  return { buffer: buf, startedAt };
 }
 
 async function callHunyuan3dMesh({ tpose, send }) {
@@ -4584,39 +4615,52 @@ async function callHunyuan3dMesh({ tpose, send }) {
   const startedAt = Date.now();
   send("stage", { stage: "generating", message: "generating 3D model (hunyuan3d)", startedAt, backend: "hunyuan3d" });
 
-  // Hunyuan3d expects a bare base64 string, NOT a data URI.
-  const r = await fetch(`${base}/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image: tpose.buffer.toString("base64"),
-      seed: Math.floor(Math.random() * 2_147_483_647),
-      texture: true,
-      octree_resolution: 256,
-      num_inference_steps: 5,
-      guidance_scale: 5.0,
-      type: "glb",
-    }),
-  });
-  if (!r.ok) {
-    const body = await r.text().catch(() => "");
-    throw new Error(`hunyuan3d ${r.status}: ${body.slice(0, 200)}`);
-  }
-  // Hunyuan upstream returns the GLB directly as the body. It also
-  // signals all internal failures via HTTP 404 with JSON body
-  // {"error_code": 1, "text": "..."} — surface that distinctly so
-  // we don't confuse it with routing 404s.
-  const ct = r.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    const body = await r.json().catch(() => null);
-    if (body?.error_code === 1) {
-      throw new Error(`hunyuan3d internal failure: ${body.text || "unknown"} (check Cloud Run logs)`);
+  // Cloud Run hunyuan3d is concurrency=1; serialize at the bridge.
+  const buf = await services.withSerializedCall("hunyuan3d", async () => {
+    // Hunyuan3d expects a bare base64 string, NOT a data URI.
+    const r = await fetch(`${base}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image: tpose.buffer.toString("base64"),
+        seed: Math.floor(Math.random() * 2_147_483_647),
+        texture: true,
+        octree_resolution: 256,
+        num_inference_steps: 5,
+        guidance_scale: 5.0,
+        type: "glb",
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`hunyuan3d ${r.status}: ${body.slice(0, 200)}`);
     }
-    throw new Error(`hunyuan3d returned JSON instead of GLB: ${JSON.stringify(body).slice(0, 200)}`);
-  }
-  const ab = await r.arrayBuffer();
-  if (!ab.byteLength) throw new Error("hunyuan3d returned empty body");
-  return { buffer: Buffer.from(ab), startedAt };
+    // Hunyuan upstream returns the GLB directly as the body. It also
+    // signals all internal failures via HTTP 404 with JSON body
+    // {"error_code": 1, "text": "..."} — surface that distinctly so
+    // we don't confuse it with routing 404s.
+    const ct = r.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const body = await r.json().catch(() => null);
+      if (body?.error_code === 1) {
+        throw new Error(`hunyuan3d internal failure: ${body.text || "unknown"} (check Cloud Run logs)`);
+      }
+      throw new Error(`hunyuan3d returned JSON instead of GLB: ${JSON.stringify(body).slice(0, 200)}`);
+    }
+    const ab = await r.arrayBuffer();
+    if (!ab.byteLength) throw new Error("hunyuan3d returned empty body");
+    return Buffer.from(ab);
+  }, {
+    onQueued: () => send("stage", {
+      stage: "queued", message: "another hunyuan3d call in progress; queued",
+    }),
+    onAcquired: ({ waitMs }) => {
+      if (waitMs > 0) send("stage", {
+        stage: "acquired", message: `acquired hunyuan3d after ${Math.round(waitMs / 1000)}s wait`,
+      });
+    },
+  });
+  return { buffer: buf, startedAt };
 }
 
 const MESH_BACKENDS = {

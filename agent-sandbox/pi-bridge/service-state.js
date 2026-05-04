@@ -184,6 +184,69 @@ export async function ensureWarm(name, opts = {}) {
   return { fromCache: false, status: rec.status };
 }
 
+/**
+ * Per-service inference mutex. Cloud Run NIMs are deployed with
+ * concurrency=1 — a second concurrent request hits 429 ("no available
+ * instance") even when there's plenty of capacity, because the LB
+ * won't let two requests share an instance. We serialize at the
+ * bridge so Cloud Run only ever sees one inference call per service
+ * in flight at a time, regardless of how many SSE clients are
+ * waiting.
+ *
+ * Independent from `ensureWarm` (which already single-flights the
+ * cold-start probe). `ensureWarm` synchronizes "is the service up
+ * yet?"; this synchronizes "send the actual /v1/infer". Both are
+ * needed: warm-up coordination doesn't help if N callers all fire
+ * inference once warm.
+ */
+const serializerByService = new Map(); // name -> Promise<void> tail
+
+/**
+ * Serialize an async function against any other in-flight calls for
+ * the same service. Returns whatever fn() returns. Heartbeat-style
+ * progress emits during the wait (if onQueued/onAcquired are passed)
+ * keep the SSE stream alive so clients see "queued" state.
+ */
+export async function withSerializedCall(name, fn, { onQueued, onAcquired } = {}) {
+  const prior = serializerByService.get(name) || Promise.resolve();
+
+  // Build the next link FIRST so subsequent callers chain off us, not
+  // off `prior`, even before we've started running.
+  let release;
+  const next = new Promise((res) => { release = res; });
+  // Chain the catch so a single rejected call doesn't poison every
+  // subsequent caller with the same upstream error.
+  serializerByService.set(name, prior.then(() => next, () => next));
+
+  const queuedAt = Date.now();
+  let waited = false;
+  // Tell the caller they're queued ASAP, before awaiting, so the
+  // first heartbeat reflects the real wait (which may be 0ms).
+  // Calls that find the queue empty skip the "queued" event entirely.
+  // We can't peek at the prior promise state in JS so we race:
+  //   if it resolves immediately (no actual wait), skip onQueued.
+  let queuedFired = false;
+  const fireQueued = () => {
+    if (queuedFired) return;
+    queuedFired = true;
+    waited = true;
+    onQueued?.({ queuedAt });
+  };
+  const tick = setTimeout(fireQueued, 50);
+  try {
+    await prior;
+  } finally {
+    clearTimeout(tick);
+  }
+  onAcquired?.({ queuedAt, waitMs: waited ? Date.now() - queuedAt : 0 });
+
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 /** Caller is starting an inference call against this service. Bumps
  *  inFlight; pair every begin() with end(). Compat shim — prefer
  *  startCall() which carries character + prompt context. */
