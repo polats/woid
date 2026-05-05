@@ -63,10 +63,11 @@ export const SERVICES = {
     urlEnv: "HUNYUAN3D_URL",
     // The API doc quotes ~90–150s cold start, but real Cloud Run
     // behavior runs longer when the image cache has been evicted
-    // (full pull + GPU init + weight load). 5 min was timing out the
-    // wake endpoint repeatedly. Match flux-kontext / trellis at 18 min
-    // — same Cloud Run + GPU stack, same worst-case budget.
-    coldBudgetMs: 18 * 60 * 1000,
+    // (full pull + GPU init + weight load). 18 min still caught a
+    // worst-case eviction; 30 min gives the wake endpoint enough
+    // patience to ride through a fully-cold cache rebuild without
+    // repeatedly re-triggering the cold-start.
+    coldBudgetMs: 30 * 60 * 1000,
     warmEtaSeconds: 70,
     coldEtaSeconds: 150,
     idleTimeoutMs: 15 * 60 * 1000,
