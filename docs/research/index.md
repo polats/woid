@@ -44,6 +44,7 @@ animations). Captured during build-out of the Assets tab and the
 self-hosted Cloud Run NIMs.
 
 - [T-pose generation: model landscape](#/docs/tpose-generation-models)
+- [Spells — VFX research (schema strictness + modern Three.js refs)](#/docs/spells-vfx)
 - Pre-baking NIM caches — research notes — `../google-cloud/gemma-4-self-hosted/WARM-NIM-CACHE-RESEARCH.md`. Companion to `WARM-NIM-CACHE.md`; covers the three failure modes our derived-image build was hitting and the GCS-FUSE alternative.
 
 ---

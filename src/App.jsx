@@ -15,6 +15,8 @@ import ImagePosts from './views/ImagePosts.jsx'
 import Network from './views/Network.jsx'
 import Journal from './views/Journal.jsx'
 import Game from './views/Game.jsx'
+import SpellsSandbox from './SpellsSandbox.jsx'
+import AnimationsSandbox from './AnimationsSandbox.jsx'
 
 // Top-level docs (Docs section).
 const modules = import.meta.glob('../docs/*.md', { query: '?raw', import: 'default', eager: true })
@@ -51,6 +53,8 @@ function parseHash() {
   if (h === 'network') return { view: 'network' }
   if (h === 'journal') return { view: 'journal' }
   if (h === 'game') return { view: 'game' }
+  if (h === 'spells') return { view: 'spells' }
+  if (h === 'animations') return { view: 'animations' }
   if (h === 'testing') return { view: 'testing' }
   if (h.startsWith('testing/')) return { view: 'testing', sessionName: decodeURIComponent(h.slice(8)) }
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
@@ -186,6 +190,8 @@ export default function App() {
         {route.view === 'image-posts' && config.features?.agentSandbox && <ImagePosts />}
         {route.view === 'network' && config.features?.agentSandbox && <Network />}
         {route.view === 'journal' && config.features?.agentSandbox && <Journal />}
+        {route.view === 'spells' && config.features?.agentSandbox && <SpellsSandbox />}
+        {route.view === 'animations' && config.features?.agentSandbox && <AnimationsSandbox />}
         {/* Game stays mounted across route changes so the Stage3D
             WebGL context survives navigation. Mobile browsers cap
             WebGL contexts (iOS Safari ~8) and even with perfect

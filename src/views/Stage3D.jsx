@@ -1,10 +1,29 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { castSpell } from '../lib/spellRuntime.js'
+import { Animator as KimodoAnimator } from '../lib/kimodo/animator.js'
+import { mixamoMapping } from '../lib/kimodo/rigs.js'
+
+// Hardcoded for now — every agent on the stage runs this kimodo motion at
+// idle. While a spell is being cast on them, they swap to the cast motion
+// and revert when the last spell on them finishes.
+const ACTIVE_KIMODO_ANIMATION_ID = '342711ffd11f'
+const CAST_KIMODO_ANIMATION_ID   = '4290481a993e'
+
+// UniRig characters consistently render hovering ~1 ft above the floor in
+// our scene — the rest-pose feet aren't quite at the model's bbox min after
+// the palms-down rebake. Drop the whole figure by this much in metres so
+// they touch the ground. Tune per-rig if needed.
+const KIMODO_FOOT_DROP = 0.15
 
 /**
  * Replace a live agent group's template avatar with a clone of a
@@ -16,15 +35,112 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
  * Trellis GLBs have no skeleton, so plain Object3D.clone() is fine —
  * SkeletonUtils.clone is only required for rigged meshes.
  */
-function applyCustomModel(group, entry) {
-  if (!group || !entry || entry.status !== 'ready') return
-  if (group.userData.customApplied) return
+/**
+ * Swap an agent group's placeholder (or already-applied Trellis rigid mesh)
+ * for the kimodo unirig-rigged GLB. Disposes the previous mesh + animator,
+ * scales the new figure to roughly match the placeholder's height, and
+ * attaches a fresh kimodo Animator using the character's UniRig bone
+ * mapping (NOT the mixamo mapping used on the placeholder).
+ */
+function applyKimodoCharacter(group, charRoot, charConfig, motion, KimodoAnimator, placeholderHeightOnStage) {
+  if (!group || !charRoot || !charConfig || !motion) return
+  if (group.userData.kimodoCharacterApplied) return
 
-  // Tear down placeholder + its mixer.
+  // Tear down whatever's currently in the group: placeholder + its mixer,
+  // any existing kimodo animator (the mixamo one from the swap effect),
+  // and any custom Trellis mesh that may have already been applied.
   if (group.userData.mixer) {
     group.userData.mixer.stopAllAction()
     group.userData.mixer = null
   }
+  group.userData.kimodoAnimator = null
+  for (const key of ['placeholder', 'customMesh']) {
+    const old = group.userData[key]
+    if (!old) continue
+    group.remove(old)
+    old.traverse((o) => {
+      if (o.geometry) o.geometry.dispose?.()
+      if (o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material]
+        for (const m of mats) { if (m.map?.dispose) m.map.dispose(); m.dispose?.() }
+      }
+    })
+    group.userData[key] = null
+  }
+
+  // Deep-clone the cached root + skeleton so per-agent disposal is local
+  // and bone updates from this agent's Animator don't bleed into other
+  // agents that may share the same character.
+  const inst = SkeletonUtils.clone(charRoot)
+  inst.traverse((o) => {
+    if (!o.isMesh) return
+    if (o.geometry) o.geometry = o.geometry.clone()
+    o.material = Array.isArray(o.material)
+      ? o.material.map((m) => m.clone())
+      : o.material.clone()
+  })
+
+  // Measure raw, derive the multiplier to match the placeholder's height,
+  // apply it, re-measure post-scale, and capture the y-lift needed to put
+  // rest feet at 0. The same lift is handed to the Animator so the running
+  // pelvis position cancels back to feet-on-floor — kimodo's motion has
+  // feet-at-0 by convention, so we compensate for the visual lift here.
+  inst.updateMatrixWorld(true)
+  const rawBox = new THREE.Box3().setFromObject(inst)
+  const rawHeight = Math.max(0.1, rawBox.max.y - rawBox.min.y)
+  const scale = placeholderHeightOnStage / rawHeight
+  inst.scale.setScalar(scale)
+  inst.updateMatrixWorld(true)
+  const scaledBox = new THREE.Box3().setFromObject(inst)
+  const groundOffsetY = -scaledBox.min.y
+  inst.position.x = -((scaledBox.max.x + scaledBox.min.x) / 2)
+  inst.position.y = groundOffsetY - KIMODO_FOOT_DROP
+  inst.position.z = -((scaledBox.max.z + scaledBox.min.z) / 2)
+
+  // Find the SkinnedMesh and bind the Animator while inst is still detached
+  // — calling update() before adding to the scene means the first rendered
+  // frame already shows motion frame 0, never the rest (T) pose.
+  let skinned = null
+  inst.traverse((o) => { if (!skinned && o.isSkinnedMesh) skinned = o })
+  if (!skinned) return
+  const animator = new KimodoAnimator(skinned, {
+    mapping: charConfig.mapping,
+    scale: 1.0,
+    groundOffsetY,
+    alignMode: 'rest',
+  })
+  animator.setMotion(motion, { loop: true })
+  // Force frame 0 to be applied so we don't render T-pose for one tick.
+  // The first update() inside the loop derives dt from lastTime; reset it
+  // to "now" so no time elapses between this priming call and that one.
+  animator.update()
+  animator.lastTime = performance.now() / 1000
+
+  group.add(inst)
+  group.userData.kimodoMesh = inst
+  group.userData.kimodoAnimator = animator
+  group.userData.kimodoCharacterApplied = true
+
+  // Slide the profile sprite to sit just above the new figure's head.
+  if (group.userData.sprite) {
+    group.userData.sprite.position.y = rawHeight * scale + 0.25
+  }
+}
+
+function applyCustomModel(group, entry) {
+  if (!group || !entry || entry.status !== 'ready') return
+  if (group.userData.customApplied) return
+  // If a kimodo unirig character has been (or is about to be) applied,
+  // don't overwrite it with the rigid Trellis mesh — kimodo characters
+  // are skinned and animated, Trellis output is rigid and static.
+  if (group.userData.kimodoCharacterApplied || group.userData.skipCustomModel) return
+
+  // Tear down placeholder + its mixer + kimodo animator.
+  if (group.userData.mixer) {
+    group.userData.mixer.stopAllAction()
+    group.userData.mixer = null
+  }
+  group.userData.kimodoAnimator = null
   const placeholder = group.userData.placeholder
   if (placeholder) {
     group.remove(placeholder)
@@ -176,11 +292,12 @@ const STRUCTURAL_NODES = new Set([
   'Camera', 'Empty', 'Scene',
 ].map(sanitizeName))
 
-export default function Stage3D({
+function Stage3D({
   floorColor = null,
   visibleObjects = null,
   agents = [],   // [{ npub, name, avatarUrl }, ...] currently in the room
-} = {}) {
+  onAgentTap = null, // (npub, screenPos:{x,y}) => void — optional click hook
+} = {}, fwdRef) {
   const hostRef = useRef(null)
   const [pct, setPct] = useState(0)
   const [error, setError] = useState(null)
@@ -213,6 +330,66 @@ export default function Stage3D({
   // Once 'ready', any agent group flagged with this modelUrl gets the
   // generic template swapped out for a clone of the custom model.
   const customModelCacheRef = useRef(new Map())
+  // Kimodo motion JSON, fetched once on mount and shared across all agents.
+  // null until loaded; we attach Animators to existing avatars when it arrives.
+  const [kimodoMotion, setKimodoMotion] = useState(null)
+  // Mirror of state for use inside imperative handlers (closures with []
+  // deps), plus the cast motion (no rendering depends on it directly so a
+  // ref is enough).
+  const idleMotionRef = useRef(null)
+  const castMotionRef = useRef(null)
+  useEffect(() => { idleMotionRef.current = kimodoMotion }, [kimodoMotion])
+  // kimodo character registry, indexed by 12-char pubkey prefix (matches the
+  // id format `unirig_<pubkey[:12]>_<backend>`). When an agent's pubkey
+  // matches an entry here, we swap their placeholder avatar for the
+  // unirig-rigged GLB and drive it with the character's own bone mapping.
+  const [kimodoChars, setKimodoChars] = useState(null)
+  // Cache of loaded kimodo GLB roots keyed by character id, so multiple
+  // agents (or remounts) don't re-download the same model.
+  const kimodoCharCacheRef = useRef(new Map())
+  // Active spell instances keyed by id. Each value is { handle, npub }.
+  // The animation loop ticks them and removes finished ones.
+  const activeSpellsRef = useRef(new Map())
+  // Latest onAgentTap from props — kept in a ref so the click handler
+  // (registered once) always sees the current callback.
+  const onAgentTapRef = useRef(onAgentTap)
+  useEffect(() => { onAgentTapRef.current = onAgentTap }, [onAgentTap])
+
+  // Imperative API: parent calls stage.castOnAgent(npub, schema) to spawn
+  // a spell anchored on a live agent. We look up the agent's group in
+  // avatarsRef, derive its world position, and hand it to castSpell.
+  useImperativeHandle(fwdRef, () => ({
+    castOnAgent(npub, schema) {
+      const scene = sceneRef.current
+      const group = avatarsRef.current.get(npub)
+      if (!scene || !group || !schema) return null
+      // basePosition is overwritten each tick from the group's world
+      // position so spells follow agents who walk during the cast.
+      const anchor = {
+        position: new THREE.Vector3(),
+        basePosition: new THREE.Vector3(),
+        target: null,
+      }
+      group.getWorldPosition(anchor.position)
+      anchor.basePosition.copy(anchor.position)
+      anchor.target = anchor.position.clone()
+      const handle = castSpell(scene, schema, anchor)
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      activeSpellsRef.current.set(id, { handle, npub, anchor, group })
+
+      // Swap the target's animator to the cast motion so the agent reacts
+      // visibly. We revert in the render loop once the last spell on this
+      // agent finishes.
+      const animator = group.userData.kimodoAnimator
+      const castMotion = castMotionRef.current
+      if (animator && castMotion) {
+        animator.setMotion(castMotion, { loop: true })
+        animator.update()
+        animator.lastTime = performance.now() / 1000
+      }
+      return id
+    },
+  }), [])
 
   useEffect(() => {
     const host = hostRef.current
@@ -227,6 +404,23 @@ export default function Stage3D({
     renderer.domElement.style.display = 'block'
     renderer.domElement.style.width = '100%'
     renderer.domElement.style.height = '100%'
+
+    // Postprocessing pipeline. HalfFloat target so additive spell particles
+    // can stack past 1.0 in brightness — that's what makes bloom feel
+    // luminous instead of just blurred. Threshold is tuned HIGH (0.85) so
+    // the room geometry, avatars, and environment lighting don't bloom —
+    // only spell hot-spots do.
+    const hdrTarget = new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType,
+      colorSpace: THREE.LinearSRGBColorSpace,
+    })
+    const composer = new EffectComposer(renderer, hdrTarget)
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(1, 1),
+      0.7,  // strength — visible but not dominating
+      0.55, // radius
+      0.85, // threshold — high so existing scene doesn't bloom
+    )
 
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x202327)
@@ -243,10 +437,16 @@ export default function Stage3D({
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
 
+    composer.addPass(new RenderPass(scene, camera))
+    composer.addPass(bloomPass)
+    composer.addPass(new OutputPass())
+
     const resize = () => {
       const w = host.clientWidth || 1
       const h = host.clientHeight || 1
       renderer.setSize(w, h, false)
+      composer.setSize(w, h)
+      bloomPass.setSize(w, h)
       camera.aspect = w / h
       camera.updateProjectionMatrix()
     }
@@ -254,6 +454,45 @@ export default function Stage3D({
 
     const ro = new ResizeObserver(resize)
     ro.observe(host)
+
+    // ── Tap → onAgentTap ────────────────────────────────────────────
+    // Raycast from the tap into avatarsRef. If a hit's ancestor is
+    // one of our agent groups, call onAgentTap with that npub plus
+    // the click's *screen-relative* coords so the parent can render
+    // a popover at the right spot.
+    const raycaster = new THREE.Raycaster()
+    const ndc = new THREE.Vector2()
+    let downX = 0, downY = 0
+    const onPointerDown = (e) => { downX = e.clientX; downY = e.clientY }
+    const onClick = (e) => {
+      const cb = onAgentTapRef.current
+      if (!cb) return
+      // Treat as a tap only if pointer didn't drag — preserves orbit feel.
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return
+      const rect = renderer.domElement.getBoundingClientRect()
+      ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.setFromCamera(ndc, camera)
+      const targets = [...avatarsRef.current.values()]
+      const hits = raycaster.intersectObjects(targets, true)
+      if (!hits.length) return
+      // Walk up to find the agent group (whichever ancestor is in
+      // the avatarsRef Map).
+      let node = hits[0].object
+      let foundNpub = null
+      while (node) {
+        for (const [npub, group] of avatarsRef.current.entries()) {
+          if (group === node) { foundNpub = npub; break }
+        }
+        if (foundNpub) break
+        node = node.parent
+      }
+      if (foundNpub) {
+        cb(foundNpub, { x: e.clientX - rect.left, y: e.clientY - rect.top })
+      }
+    }
+    renderer.domElement.addEventListener('pointerdown', onPointerDown)
+    renderer.domElement.addEventListener('click', onClick)
 
     let cancelled = false
     // scene.glb uses Draco mesh compression. Pull the decoder from
@@ -351,12 +590,41 @@ export default function Stage3D({
     renderer.setAnimationLoop(() => {
       controls.update()
       const delta = clock.getDelta()
-      // Advance every avatar's mixer so the HappyIdle (or other) clip
-      // plays smoothly. Each instance owns its own mixer.
-      for (const group of avatarsRef.current.values()) {
-        group.userData.mixer?.update(delta)
+      // Tick active spells; auto-dispose finished ones. We refresh the
+      // anchor's *base* position from the agent group each tick so static
+      // spells follow walking agents and motion-based spells launch from
+      // wherever the agent currently stands. When a spell ends, revert the
+      // target's animator to idle — but only if no other spell is still
+      // active on the same agent (so chained casts don't snap back early).
+      for (const [id, entry] of [...activeSpellsRef.current.entries()]) {
+        if (entry.group) entry.group.getWorldPosition(entry.anchor.basePosition)
+        const alive = entry.handle.tick(delta, { camera })
+        if (!alive) {
+          entry.handle.dispose()
+          activeSpellsRef.current.delete(id)
+          let stillCasting = false
+          for (const other of activeSpellsRef.current.values()) {
+            if (other.npub === entry.npub) { stillCasting = true; break }
+          }
+          if (!stillCasting) {
+            const animator = entry.group?.userData?.kimodoAnimator
+            const idleMotion = idleMotionRef.current
+            if (animator && idleMotion) {
+              animator.setMotion(idleMotion, { loop: true })
+              animator.update()
+              animator.lastTime = performance.now() / 1000
+            }
+          }
+        }
       }
-      renderer.render(scene, camera)
+      // Tick per-agent kimodo animators (they read time from performance.now()
+      // internally, so no delta needed). Existing AnimationMixer fallback
+      // stays for agents that don't have a kimodo animator attached.
+      for (const group of avatarsRef.current.values()) {
+        if (group.userData.kimodoAnimator) group.userData.kimodoAnimator.update()
+        else group.userData.mixer?.update(delta)
+      }
+      composer.render(delta)
     })
 
     return () => {
@@ -372,7 +640,16 @@ export default function Stage3D({
       cancelled = true
       safe('ro', () => ro.disconnect())
       safe('animLoop', () => renderer.setAnimationLoop(null))
+      safe('clickListener', () => {
+        renderer.domElement.removeEventListener('pointerdown', onPointerDown)
+        renderer.domElement.removeEventListener('click', onClick)
+      })
+      safe('spells', () => {
+        for (const { handle } of activeSpellsRef.current.values()) handle.dispose()
+        activeSpellsRef.current.clear()
+      })
       safe('controls', () => controls.dispose())
+      safe('bloom', () => { bloomPass.dispose?.(); composer.dispose?.(); hdrTarget.dispose() })
       safe('draco', () => draco.dispose())
       safe('pmrem', () => pmrem.dispose())
       safe('scene-traverse', () => {
@@ -404,6 +681,118 @@ export default function Stage3D({
       })
     }
   }, [])
+
+  // Fetch the idle + cast kimodo motions once. The agent-diff effect below
+  // attaches an Animator per agent once the idle motion resolves; the cast
+  // motion is held in a ref and used on demand from castOnAgent().
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/kimodo/animations/${ACTIVE_KIMODO_ANIMATION_ID}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((m) => { if (!cancelled && m) setKimodoMotion(m) })
+      .catch(() => { /* offline kimodo — agents fall back to HappyIdle */ })
+    fetch(`/api/kimodo/animations/${CAST_KIMODO_ANIMATION_ID}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((m) => { if (!cancelled && m) castMotionRef.current = m })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  // Fetch kimodo's character registry on mount. Unirig characters carry their
+  // own bone mapping that's specific to UniRig's auto-rigged output (bone_0,
+  // bone_1, …) — different from mixamoMapping used on the placeholder avatar.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/kimodo/characters')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (cancelled || !data) return
+        const m = new Map()
+        for (const c of data.characters ?? []) {
+          // ids look like `unirig_<pubkey12>_<backend>`. Index by the
+          // prefix so we can match any agent on the stage by pubkey.
+          const match = (c.id ?? '').match(/^unirig_([a-f0-9]{12})_/)
+          if (match) m.set(match[1], c)
+        }
+        setKimodoChars(m)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  // Attach a kimodo Animator to any live agent that has a SkinnedMesh and
+  // doesn't already have one. Runs whenever the motion or the avatar set
+  // changes. Replaces the per-agent AnimationMixer (HappyIdle) so the same
+  // motion drives all of them.
+  useEffect(() => {
+    if (!kimodoMotion) return
+    for (const group of avatarsRef.current.values()) {
+      if (group.userData.kimodoAnimator) continue
+      // Skip agents whose placeholder was already swapped for a custom
+      // (rigid, non-skinned) Trellis model.
+      if (group.userData.customApplied) continue
+      let skinned = null
+      group.traverse((o) => { if (!skinned && o.isSkinnedMesh) skinned = o })
+      if (!skinned) continue
+      // Stop the HappyIdle mixer so the kimodo animator is the only thing
+      // writing to bone quaternions.
+      group.userData.mixer?.stopAllAction()
+      group.userData.mixer = null
+      const animator = new KimodoAnimator(skinned, {
+        mapping: mixamoMapping(),
+        scale: 1.0,
+        groundOffsetY: 0,
+        alignMode: 'rest',
+      })
+      animator.setMotion(kimodoMotion, { loop: true })
+      group.userData.kimodoAnimator = animator
+    }
+  }, [kimodoMotion, loaded, agents])
+
+  // For each live agent that maps to a kimodo unirig character, ensure that
+  // character's GLB is loaded (cached by id) and applied to the group.
+  // Re-runs whenever agents, motion, or the kimodo char registry change.
+  useEffect(() => {
+    if (!kimodoChars || !kimodoMotion || !loaded) return
+    const tmpl = avatarTemplateRef.current
+    // avatarHeight was measured via Box3.setFromObject AFTER the placeholder
+    // template's 0.7 scale was applied, so it already reflects the figure's
+    // on-stage height. Multiplying by tmpl.scale.x again would halve it.
+    const placeholderHeight = tmpl?.userData?.avatarHeight ?? 1.12
+    for (const [npub, group] of avatarsRef.current.entries()) {
+      if (group.userData.kimodoCharacterApplied) continue
+      const charConfig = kimodoChars.get((npub || '').slice(0, 12))
+      if (!charConfig) continue
+      // Skip Trellis swap for this agent — the kimodo character supersedes it.
+      group.userData.skipCustomModel = true
+
+      const cache = kimodoCharCacheRef.current
+      const cached = cache.get(charConfig.id)
+      if (cached?.status === 'ready') {
+        applyKimodoCharacter(group, cached.root, charConfig, kimodoMotion, KimodoAnimator, placeholderHeight)
+        continue
+      }
+      if (cached) continue // pending load
+
+      cache.set(charConfig.id, { status: 'pending' })
+      const url = `/api/kimodo${charConfig.url}`
+      const loader = new GLTFLoader()
+      loader.load(url, (gltf) => {
+        cache.set(charConfig.id, { status: 'ready', root: gltf.scene })
+        // Apply to every live agent that wants this character (handles the
+        // case where multiple agents share a character — currently rare,
+        // but it costs nothing to support).
+        for (const [otherNpub, otherGroup] of avatarsRef.current.entries()) {
+          if (otherGroup.userData.kimodoCharacterApplied) continue
+          if (kimodoChars.get((otherNpub || '').slice(0, 12)) !== charConfig) continue
+          applyKimodoCharacter(otherGroup, gltf.scene, charConfig, kimodoMotion, KimodoAnimator, placeholderHeight)
+        }
+      }, undefined, (err) => {
+        console.warn('[Stage3D] kimodo character load failed:', charConfig.id, err)
+        cache.set(charConfig.id, { status: 'failed' })
+      })
+    }
+  }, [kimodoChars, kimodoMotion, loaded, agents])
 
   // Drive the Floor color from the prop. Runs whenever the prop or
   // the load-state changes (since the Floor material isn't stashed
@@ -445,6 +834,8 @@ export default function Stage3D({
       if (wanted.has(npub)) continue
       group.userData.mixer?.stopAllAction()
       group.userData.mixer = null
+      group.userData.kimodoAnimator = null
+      group.userData.kimodoMesh = null
       scene.remove(group)
       group.traverse((o) => {
         if (o.geometry) o.geometry.dispose?.()
@@ -605,3 +996,5 @@ export default function Stage3D({
     </div>
   )
 }
+
+export default forwardRef(Stage3D)

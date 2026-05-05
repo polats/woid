@@ -5413,3 +5413,915 @@ body {
   }
 }
 
+
+/* ──────── Spells sandbox ──────── */
+.spells {
+  padding: var(--sp-5) var(--sp-5) var(--sp-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  overflow: auto;
+  height: 100%;
+}
+.spells-header h1 {
+  font-family: var(--font-display);
+  font-variation-settings: var(--fvs-display);
+  font-weight: 700;
+  font-stretch: 75%;
+  font-size: 44px;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--ink);
+}
+.spells-tagline {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+  max-width: 60ch;
+}
+
+.spells-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "create  library"
+    "detail  detail";
+  gap: var(--sp-5);
+}
+.spells-create-card  { grid-area: create; }
+.spells-library      { grid-area: library; }
+.spells-detail-pane  { grid-area: detail; }
+
+.spells-create-card,
+.spells-library,
+.spells-detail-pane {
+  background: var(--card);
+  border: 1.5px solid var(--ink);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.spells-create-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.spells-create-head h2 {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: 22px;
+  margin: 0;
+  color: var(--ink);
+}
+.spells-step {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border: 1px solid var(--ink-faint);
+  padding: 1px 6px;
+}
+.spells-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin-left: 4px;
+}
+
+.spells-form { display: flex; flex-direction: column; gap: var(--sp-3); }
+.spells-form textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: var(--sp-3);
+  outline: none;
+  transition: box-shadow 80ms ease;
+}
+.spells-form textarea:focus {
+  box-shadow: 3px 3px 0 var(--transmit);
+}
+.spells-form textarea:disabled {
+  background: var(--paper-2);
+  color: var(--ink-3);
+}
+
+.spells-form-actions {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.spells-btn {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  padding: 8px 14px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 80ms ease, box-shadow 80ms ease, background 80ms ease;
+}
+.spells-btn:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.spells-btn:active:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: none;
+}
+.spells-btn.primary { background: var(--ink); color: var(--paper); }
+.spells-btn.primary:hover:not(:disabled) { box-shadow: 3px 3px 0 var(--transmit); }
+.spells-btn.ghost { background: transparent; }
+.spells-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.spells-status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--violet);
+}
+.spells-error {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--bad-ink);
+  background: var(--bad-bg);
+  padding: 6px 8px;
+  border: 1px solid var(--bad-ink);
+}
+
+.spells-suggestions {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.spells-suggestions li { margin: 0; }
+.spells-suggestions button {
+  width: 100%;
+  text-align: left;
+  background: var(--paper);
+  border: 1.5px dashed var(--ink-faint);
+  padding: var(--sp-3);
+  font-family: var(--font-sans);
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: background 80ms ease, border-color 80ms ease, transform 80ms ease;
+}
+.spells-suggestions button:hover {
+  background: var(--paper-2);
+  border-style: solid;
+  border-color: var(--ink);
+  transform: translate(-1px, -1px);
+}
+.spells-suggestions strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 16px;
+}
+.spells-suggestions span {
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.45;
+}
+
+.spells-empty {
+  margin: 0;
+  font-style: italic;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+.spells-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: 420px;
+  overflow-y: auto;
+}
+.spells-list li {
+  position: relative;
+  margin: 0;
+}
+.spells-list li.is-selected .spells-list-item {
+  background: var(--paper-2);
+  box-shadow: 3px 3px 0 var(--transmit);
+}
+.spells-list-item {
+  width: 100%;
+  text-align: left;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: 10px 36px 10px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  transition: background 80ms ease, transform 80ms ease;
+}
+.spells-list-item:hover {
+  background: var(--paper-2);
+  transform: translate(-1px, -1px);
+}
+.spells-list-item strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 16px;
+}
+.spells-list-prompt {
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.spells-list time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  margin-top: 2px;
+}
+.spells-list-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--ink-faint);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.spells-list-delete:hover {
+  background: var(--transmit);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+/* ──────── Spell detail ──────── */
+.spell-detail { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+.spell-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.spell-detail-head h2 {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: 28px;
+  margin: 0;
+  color: var(--ink);
+}
+.spell-detail-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-left: auto;
+}
+.spell-detail-section h3 {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+.spell-detail-prompt {
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: 90%;
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--paper);
+  border-left: 3px solid var(--transmit);
+  padding: var(--sp-3) var(--sp-4);
+}
+.spell-detail-schema {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre;
+}
+.spell-detail-preview {
+  border: 1.5px dashed var(--ink-faint);
+  background: var(--paper);
+  padding: var(--sp-4);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--ink-3);
+  font-style: italic;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .spells-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "create"
+      "library"
+      "detail";
+  }
+}
+
+/* ──────── Spells: streaming card ──────── */
+.spells-stream {
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+  box-shadow: 3px 3px 0 var(--violet);
+}
+.spells-stream-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+.spells-stream-head strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+.spells-stream-msg {
+  margin-left: auto;
+  color: var(--violet);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.spells-stream-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--transmit);
+  box-shadow: 0 0 0 0 rgba(216, 39, 26, 0.55);
+  animation: spells-pulse 1.1s ease-out infinite;
+}
+@keyframes spells-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(216, 39, 26, 0.55); }
+  70%  { box-shadow: 0 0 0 8px rgba(216, 39, 26, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(216, 39, 26, 0); }
+}
+.spells-stream-prompt {
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: 90%;
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-3);
+  border-left: 2px solid var(--ink-faint);
+  padding-left: 8px;
+}
+.spells-stream-code {
+  margin: 0;
+  background: var(--ink);
+  color: var(--lime);
+  border: 1.5px solid var(--ink);
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ──────── Spells: suggestion skeletons ──────── */
+.spells-suggestions li.is-loading {
+  pointer-events: none;
+}
+.spells-suggestion-skeleton {
+  background: var(--paper);
+  border: 1.5px dashed var(--ink-faint);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.skeleton-line {
+  display: block;
+  height: 12px;
+  background: linear-gradient(90deg, var(--paper-2) 0%, var(--paper-3) 50%, var(--paper-2) 100%);
+  background-size: 200% 100%;
+  animation: spells-shimmer 1.2s linear infinite;
+  border-radius: 1px;
+}
+.skeleton-name { width: 35%; height: 16px; }
+.skeleton-short { width: 60%; }
+@keyframes spells-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ──────── Spell preview canvas ──────── */
+.spell-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.spell-preview-canvas {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: var(--ink);
+  border: 1.5px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--violet);
+  position: relative;
+  overflow: hidden;
+}
+.spell-preview-canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+.spell-preview-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* ──────── Stage spell picker ──────── */
+.spell-picker-backdrop {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  z-index: 19;
+}
+.spell-picker {
+  position: absolute;
+  z-index: 20;
+  min-width: 220px;
+  max-width: 280px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--card);
+  border: 1.5px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  padding: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-sans);
+}
+.spell-picker-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px dashed var(--ink-faint);
+}
+.spell-picker-head strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 14px;
+}
+.spell-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.spell-picker-item {
+  width: 100%;
+  text-align: left;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  transition: background 80ms ease, transform 80ms ease;
+}
+.spell-picker-item:hover {
+  background: var(--paper-2);
+  transform: translate(-1px, -1px);
+  box-shadow: 2px 2px 0 var(--transmit);
+}
+.spell-picker-item strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 13px;
+}
+.spell-picker-item span {
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.spell-picker .spells-empty { padding: 6px 4px; }
+
+/* ──────── Animations sandbox extras ──────── */
+.anim-seconds {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  text-transform: uppercase;
+}
+.anim-seconds input[type="range"] {
+  flex: 1;
+  accent-color: var(--ink);
+}
+.anim-seconds-val {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  font-weight: 700;
+  min-width: 36px;
+  text-align: right;
+}
+.anim-preview {
+  position: relative;
+}
+.anim-preview-canvas {
+  width: 100%;
+  aspect-ratio: 16 / 11;
+  background: var(--ink);
+  border: 1.5px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--violet);
+  overflow: hidden;
+}
+.anim-preview-canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+.anim-preview-hud {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(20, 24, 33, 0.85);
+  color: var(--paper);
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.anim-preview-hud-err { background: var(--bad-ink); }
+
+/* ──────── Studio layout (Ghost powers, Animations) ────────
+   A preview-first sandbox: hero row with the live canvas next to the
+   prompt, and a compact card grid of saved items below it. Replaces the
+   older 3-pane layout where preview/prompt sat in different visual zones. */
+.studio {
+  padding: var(--sp-5) var(--sp-5) var(--sp-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  overflow: auto;
+  height: 100%;
+}
+.studio-header h1 {
+  font-family: var(--font-display);
+  font-variation-settings: var(--fvs-display);
+  font-weight: 700;
+  font-stretch: 75%;
+  font-size: 44px;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--ink);
+}
+.studio-tagline {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+  max-width: 60ch;
+}
+
+.studio-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+  align-items: stretch;
+}
+
+.studio-hero-preview {
+  background: var(--card);
+  border: 1.5px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  display: flex;
+  flex-direction: column;
+  min-height: 360px;
+}
+.studio-hero-preview-frame {
+  flex: 1;
+  position: relative;
+  background: var(--ink);
+  overflow: hidden;
+  min-height: 320px;
+}
+.studio-hero-preview-frame canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+.studio-hero-preview-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.studio-hero-preview-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: 10px 14px;
+  border-top: 1.5px solid var(--ink);
+  background: var(--card);
+}
+.studio-hero-preview-meta strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+}
+.studio-hero-preview-meta .prompt {
+  font-size: 12px;
+  color: var(--ink-3);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.studio-hero-input {
+  background: var(--card);
+  border: 1.5px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.studio-hero-input form { display: flex; flex-direction: column; gap: var(--sp-3); flex: 1; min-height: 0; }
+.studio-hero-input textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: var(--sp-3);
+  outline: none;
+  min-height: 96px;
+  flex: 1;
+  transition: box-shadow 80ms ease;
+}
+.studio-hero-input textarea:focus {
+  box-shadow: 3px 3px 0 var(--transmit);
+}
+
+.studio-hero-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* Grid of saved items below the hero. Auto-fill so it reflows on narrow screens. */
+.studio-grid-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+.studio-grid-head h2 {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: 22px;
+  margin: 0;
+  color: var(--ink);
+}
+
+.studio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--sp-3);
+}
+
+.studio-card {
+  position: relative;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  transition: transform 80ms ease, box-shadow 80ms ease, background 80ms ease;
+}
+.studio-card:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--ink);
+  background: var(--paper-2);
+}
+.studio-card.is-selected {
+  background: var(--paper-2);
+  box-shadow: 4px 4px 0 var(--transmit);
+}
+.studio-card strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.005em;
+  line-height: 1.15;
+}
+.studio-card-prompt {
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+}
+.studio-card-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+.studio-card-swatches {
+  display: flex;
+  gap: 3px;
+  height: 6px;
+  margin-top: 2px;
+}
+.studio-card-swatch {
+  flex: 1;
+  border: 1px solid var(--ink);
+}
+.studio-card-delete {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--ink-faint);
+  background: rgba(243, 235, 220, 0.9);
+  color: var(--ink-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 100ms ease, background 80ms ease, color 80ms ease;
+}
+.studio-card:hover .studio-card-delete { opacity: 1; }
+.studio-card-delete:hover {
+  background: var(--transmit);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.studio-empty {
+  font-style: italic;
+  color: var(--ink-faint);
+  font-size: 13px;
+  padding: var(--sp-4);
+  border: 1.5px dashed var(--ink-faint);
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .studio-hero { grid-template-columns: minmax(0, 1fr); }
+  .studio-hero-preview { min-height: 280px; }
+}
+
+/* ──────── Spell preview — embedded full-bleed in studio-hero ──────── */
+.spell-preview-bleed {
+  position: absolute;
+  inset: 0;
+}
+.spell-preview-bleed canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+.spell-preview-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--paper-2);
+  background: rgba(20, 24, 33, 0.7);
+  color: var(--paper);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  transition: background 80ms ease;
+}
+.spell-preview-toggle:hover { background: rgba(20, 24, 33, 0.95); }
+.spell-preview-err {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: var(--bad-ink);
+  color: var(--paper);
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ──────── Animation preview — full-bleed in studio-hero ──────── */
+.anim-preview-bleed {
+  position: absolute;
+  inset: 0;
+}
+.anim-preview-bleed canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}

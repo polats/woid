@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import config from '../config.js'
 import Stage3D from './Stage3D.jsx'
 import MapView from './MapView.jsx'
+import SpellPicker from './SpellPicker.jsx'
 import { useSandboxRoom } from '../hooks/useSandboxRoom.js'
 
 /**
@@ -30,11 +31,14 @@ function Placeholder({ label }) {
 
 function PhoneScreen() {
   const cfg = config.agentSandbox || {}
-  const [tab, setTab] = useState('stage')
+  const [tab, setTab] = useState('map')
   const [rooms, setRooms] = useState([])
   const [grid, setGrid] = useState(null)
   const [objects, setObjects] = useState([])
   const [characters, setCharacters] = useState([])
+  // Spell picker state — { npub, name, x, y } when an agent is tapped.
+  const [picker, setPicker] = useState(null)
+  const stageRef = useRef(null)
   // Start in the lobby — gives a sensible "you've just walked in"
   // default for the stage view instead of the unbiased full scene.
   const [selectedRoomId, setSelectedRoomId] = useState('lobby')
@@ -115,9 +119,14 @@ function PhoneScreen() {
           <div className="game-stage-pane">
             <div className="game-stage-3d-wrap">
               <Stage3D
+                ref={stageRef}
                 floorColor={selectedRoom?.color ?? null}
                 visibleObjects={selectedRoom?.sceneObjects ?? null}
                 agents={agentsInRoom}
+                onAgentTap={(npub, screenPos) => {
+                  const a = agentsInRoom.find((x) => x.npub === npub)
+                  setPicker({ npub, name: a?.name ?? '?', x: screenPos.x, y: screenPos.y })
+                }}
               />
               {selectedRoom && (
                 <div
@@ -130,6 +139,18 @@ function PhoneScreen() {
                 >
                   {selectedRoom.name}
                 </div>
+              )}
+              {picker && (
+                <SpellPicker
+                  npub={picker.npub}
+                  agentName={picker.name}
+                  screenPos={{ x: picker.x, y: picker.y }}
+                  onPick={(spell) => {
+                    stageRef.current?.castOnAgent(picker.npub, spell.schema)
+                    setPicker(null)
+                  }}
+                  onCancel={() => setPicker(null)}
+                />
               )}
             </div>
           </div>

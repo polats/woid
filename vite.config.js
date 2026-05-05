@@ -6,9 +6,11 @@ import { githubApi } from './server/github.js'
 import { referencesApi } from './server/references.js'
 import { chatApi } from './server/chat.js'
 import { testingApi } from './server/testing.js'
+import { spellsApi } from './server/spells.js'
+import { kimodoApi } from './server/kimodo.js'
 
 export default defineConfig({
-  plugins: [react(), tasksApi(), diagramsApi(), githubApi(), referencesApi(), chatApi(), testingApi()],
+  plugins: [react(), tasksApi(), diagramsApi(), githubApi(), referencesApi(), chatApi(), testingApi(), spellsApi(), kimodoApi()],
   server: {
     // Bind to 0.0.0.0 so the dev server is reachable from other
     // devices on the LAN (phones, tablets) — Vite prints a Network:

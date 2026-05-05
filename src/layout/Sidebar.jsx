@@ -66,6 +66,22 @@ export default function Sidebar({
                 Journal
               </a>
             </li>
+            <li>
+              <a
+                href="#/spells"
+                className={linkClass(route.view === 'spells')}
+              >
+                Ghost powers
+              </a>
+            </li>
+            <li>
+              <a
+                href="#/animations"
+                className={linkClass(route.view === 'animations')}
+              >
+                Animations
+              </a>
+            </li>
           </ul>
 
           <h2>Persona API</h2>
