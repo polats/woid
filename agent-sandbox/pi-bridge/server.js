@@ -60,6 +60,15 @@ const NVIDIA_NIM_API_KEY = process.env.NVIDIA_NIM_API_KEY || "";
 const FLUX_KONTEXT_URL = process.env.FLUX_KONTEXT_URL || "";
 const TRELLIS_URL = process.env.TRELLIS_URL || "";
 const HUNYUAN3D_URL = process.env.HUNYUAN3D_URL || "";
+// UniRig is the local auto-rigging container. service-registry's
+// fallback is the same hostname; mirror it here so the call site
+// can refuse cleanly if neither env nor host.docker.internal is
+// reachable.
+const UNIRIG_URL = process.env.UNIRIG_URL || "http://host.docker.internal:8081";
+// kimodo-tools — sibling compose service (Phase 3). Resolves via
+// service-name DNS inside the docker network. Override in env when
+// the worker lives elsewhere (separate host, different port).
+const KIMODO_TOOLS_URL = process.env.KIMODO_TOOLS_URL || "http://kimodo-tools:8082";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 // When set, pi-bridge exposes an OpenAI-compat llama.cpp (or vLLM/Ollama)
 // server as a third provider called `local`. No auth — the served model is
@@ -4306,6 +4315,22 @@ app.get("/characters/:pubkey/model", async (req, res) => {
   res.status(404).json({ error: "no model" });
 });
 
+// UniRig output (Phase 2) — saved by /generate-rig/stream after the
+// `rigging` stage. Phase 3 will produce `rig_palmsdown.glb` (final
+// output served via /rig?variant=palms or a dedicated route).
+app.get("/characters/:pubkey/rig", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const dir = getCharDir(pubkey);
+  const path = join(dir, "rig.glb");
+  if (existsSync(path)) {
+    res.setHeader("Content-Type", "model/gltf-binary");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return createReadStream(path).pipe(res);
+  }
+  res.status(404).json({ error: "no rig" });
+});
+
 // Post-image serving (#355). Filename pattern: <shortId>.<ext>.
 // Prefers S3 when configured; falls back to disk under the character
 // dir for local dev. Immutable URLs — no cache-buster needed.
@@ -4668,6 +4693,50 @@ const MESH_BACKENDS = {
   hunyuan3d: callHunyuan3dMesh,
 };
 
+// Auto-rig a GLB via the local UniRig service. Mirrors the mesh
+// backends' shape: emits stage events for probing/cold-start/warm,
+// then POSTs `model.glb` as multipart/form-data to `${UNIRIG_URL}/rig`
+// and returns the rigged GLB bytes.
+async function callUniRigService({ modelBytes, send }) {
+  if (!UNIRIG_URL) throw new Error("UNIRIG_URL not configured");
+  const base = UNIRIG_URL.replace(/\/$/, "");
+
+  send("stage", { stage: "probing", message: "checking unirig service" });
+  await services.ensureWarm("unirig", {
+    onStage: (s) => send("stage", s),
+    onHeartbeat: (hb) => send("heartbeat", hb),
+  });
+
+  const startedAt = Date.now();
+  send("stage", { stage: "rigging", message: "auto-rigging via UniRig", startedAt });
+
+  // UniRig is concurrency=1 in our deployment; serialize at the
+  // bridge so concurrent rig requests queue here instead of
+  // hitting upstream.
+  const buf = await services.withSerializedCall("unirig", async () => {
+    const form = new FormData();
+    form.append("file", new Blob([modelBytes]), "model.glb");
+    const r = await fetch(`${base}/rig`, { method: "POST", body: form });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`unirig ${r.status}: ${body.slice(0, 200)}`);
+    }
+    const ab = await r.arrayBuffer();
+    if (!ab.byteLength) throw new Error("unirig returned empty body");
+    return Buffer.from(ab);
+  }, {
+    onQueued: () => send("stage", {
+      stage: "queued", message: "another unirig call in progress; queued",
+    }),
+    onAcquired: ({ waitMs }) => {
+      if (waitMs > 0) send("stage", {
+        stage: "acquired", message: `acquired unirig after ${Math.round(waitMs / 1000)}s wait`,
+      });
+    },
+  });
+  return { buffer: buf, startedAt };
+}
+
 app.post("/characters/:pubkey/generate-model/stream", apiQuota.middleware, async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -4736,6 +4805,196 @@ app.post("/characters/:pubkey/generate-model/stream", apiQuota.middleware, async
     send("error", { error: err.message, backend });
   } finally {
     if (heartbeat) clearInterval(heartbeat);
+    if (endInflight) endInflight({ ok: false, error: "stream terminated unexpectedly" });
+    res.end();
+  }
+});
+
+// PHASE 1 STUB — rig + kimodo finalisation pipeline.
+//
+// Wraps steps 6-8 of `scripts/generate_character.py` (UniRig →
+// palms-down Blender bake → kimodo registry import) behind a single
+// SSE endpoint so the frontend can drive the chain progressively.
+//
+// This phase emits the full stage sequence with `setTimeout`-driven
+// stubs so the Section-03 UI can be built against realistic events
+// in parallel with the back-end work. Real stages land in:
+//   Phase 2: `rigging` (POST to ${UNIRIG_URL}/rig)
+//   Phase 3: `mapping` + `palms-down` + `importing` (kimodo-tools
+//            sibling container) — including the force-gate for
+//            cross-backend regen.
+//
+// Spec: docs/design/asset-pipeline-rig-import.md.
+app.post("/characters/:pubkey/generate-rig/stream", apiQuota.middleware, async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const send = (event, data) => {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
+  };
+  const stage = (name, message, etaSeconds) => {
+    send("stage", { stage: name, message, ...(etaSeconds != null ? { etaSeconds } : {}) });
+  };
+
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) {
+    apiQuota.refund();
+    send("error", { error: "not found" });
+    return res.end();
+  }
+
+  const backend = (req.body?.backend ?? "trellis").toLowerCase();
+  if (!["trellis", "hunyuan3d"].includes(backend)) {
+    apiQuota.refund();
+    send("error", { error: `unknown backend '${backend}'`, stage: "probing" });
+    return res.end();
+  }
+
+  // Heartbeat: 1s tick so the frontend's stale-stream detection has
+  // something to chew on between stage transitions.
+  const startedAt = Date.now();
+  const heartbeat = setInterval(() => {
+    send("heartbeat", { elapsedMs: Date.now() - startedAt });
+  }, 1000);
+
+  // setTimeout helper for the still-stubbed back half of the chain.
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  let endInflight = null;
+  try {
+    // ── Probing — ensure model.glb exists on disk before we burn
+    //    UniRig minutes on a non-existent input.
+    const dir = getCharDir(pubkey);
+    const modelPath = join(dir, "model.glb");
+    if (!existsSync(modelPath)) {
+      throw new Error("character has no 3D model yet — generate one first");
+    }
+    const modelBytes = readFileSync(modelPath);
+
+    // ── Phase 2: real UniRig stage. callUniRigService emits its own
+    //    probing/cold-start/warm/rigging stage events (mirroring the
+    //    mesh backend pattern). It returns the rigged GLB bytes.
+    const rigCall = services.startCall("unirig", {
+      pubkey,
+      characterName: c.name,
+      kind: "rig",
+      extra: { modelBytes: modelBytes.length, backend },
+    });
+    endInflight = (info = {}) => rigCall.end(info);
+
+    const { buffer: rigBytes } = await callUniRigService({ modelBytes, send });
+
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "rig.glb"), rigBytes);
+
+    if (endInflight) endInflight({ ok: true, bytes: rigBytes.length });
+    endInflight = null;
+
+    // ── Phase 3: real kimodo finalisation via the kimodo-tools
+    //    sibling container. Bridge emits the three stage events
+    //    around one blocking POST (kimodo-tools doesn't stream — the
+    //    chain takes ~5-10s end-to-end so per-stage granularity is
+    //    cosmetic). Force-gate fires *before* the upstream call so
+    //    we don't waste the bake on a record we'll refuse to import.
+    const kimodoCharId = `unirig_${pubkey.slice(0, 12)}_${backend}`;
+    const label = `${c.name ?? "Unnamed"} (${backend})`;
+    const npub = npubEncode(pubkey);
+    const kimodoMarkerPath = join(dir, "kimodo.json");
+
+    // Force-gate. If a previous run imported this pubkey under a
+    // *different* backend, refuse unless the caller passes
+    // body.force === true. Same-backend re-runs are silent overwrites
+    // (matches the CLI today; non-destructive — same id either way).
+    if (existsSync(kimodoMarkerPath) && req.body?.force !== true) {
+      try {
+        const prev = JSON.parse(readFileSync(kimodoMarkerPath, "utf8"));
+        if (prev?.backend && prev.backend !== backend) {
+          throw new Error(
+            `character was previously rigged with backend '${prev.backend}'; ` +
+            `pass {force:true} to overwrite the kimodo registry record`,
+          );
+        }
+      } catch (e) {
+        // JSON parse failure on a corrupt marker file shouldn't
+        // permanently lock us out; fall through and let the import
+        // proceed (kimodo's import_unirig_glb.py overwrites by id).
+        if (e?.message?.startsWith("character was previously")) throw e;
+      }
+    }
+
+    const kimodoToolsCall = services.startCall("kimodo-tools", {
+      pubkey, characterName: c.name, kind: "rig-finalize",
+      extra: { backend, id: kimodoCharId },
+    });
+    endInflight = (info = {}) => kimodoToolsCall.end(info);
+
+    stage("mapping", "deriving bone mapping", 2);
+
+    await services.ensureWarm("kimodo-tools", {
+      onStage: (s) => send("stage", s),
+      onHeartbeat: (hb) => send("heartbeat", hb),
+    });
+
+    const finalizeBase = KIMODO_TOOLS_URL.replace(/\/$/, "");
+    const finalizeRes = await fetch(`${finalizeBase}/rig-finalize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pubkey, npub, backend, label, id: kimodoCharId,
+      }),
+    });
+    const finalizeJson = await finalizeRes.json().catch(() => null);
+    if (!finalizeRes.ok || !finalizeJson?.ok) {
+      const stageHint = finalizeJson?.stage || "unknown";
+      const errText = finalizeJson?.error || `kimodo-tools ${finalizeRes.status}`;
+      throw new Error(`kimodo-tools (${stageHint}): ${errText}`);
+    }
+
+    stage("palms-down", "Blender palms-down bake", 0);
+    stage("importing", "registering with kimodo", 0);
+
+    // Persist the import marker so the next bridge restart knows
+    // this character is already imported and the force-gate has
+    // something to compare against.
+    const marker = {
+      id: kimodoCharId,
+      label,
+      backend,
+      importedAt: Date.now(),
+      palmsGlbBytes: finalizeJson.palmsGlbBytes,
+    };
+    writeFileSync(kimodoMarkerPath, JSON.stringify(marker, null, 2));
+
+    if (endInflight) endInflight({ ok: true, bytes: finalizeJson.palmsGlbBytes });
+    endInflight = null;
+
+    apiQuota.recordSuccess();
+    send("done", {
+      // The /rig route still serves rig.glb (the raw UniRig output);
+      // rig_palmsdown.glb (the imported variant) lives at
+      // <char-dir>/rig_palmsdown.glb. Frontend can fetch either as
+      // needed once we add a route variant.
+      rigUrl: `${PUBLIC_BRIDGE_URL}/characters/${pubkey}/rig?t=${Date.now()}`,
+      kimodoCharId,
+      label,
+      backend,
+      elapsedMs: Date.now() - startedAt,
+      bytes: finalizeJson.palmsGlbBytes,
+      mapping: finalizeJson.mapping ?? null,
+      importedAt: marker.importedAt,
+    });
+  } catch (err) {
+    apiQuota.refund();
+    console.error(`[char:rig:stream:${backend}]`, err.message);
+    if (endInflight) endInflight({ ok: false, error: err.message });
+    endInflight = null;
+    send("error", { error: err.message, backend });
+  } finally {
+    clearInterval(heartbeat);
     if (endInflight) endInflight({ ok: false, error: "stream terminated unexpectedly" });
     res.end();
   }

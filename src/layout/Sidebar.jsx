@@ -107,7 +107,7 @@ export default function Sidebar({
 
           <h2>Asset services</h2>
           <ul>
-            {['flux-kontext', 'trellis', 'hunyuan3d', 'unirig'].map((svc) => (
+            {['flux-kontext', 'trellis', 'hunyuan3d', 'unirig', 'kimodo-tools'].map((svc) => (
               <li key={svc}>
                 <ApiStatusBadge
                   bridgeUrl={config.agentSandbox?.bridgeUrl}

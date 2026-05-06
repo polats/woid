@@ -86,6 +86,28 @@ services:
       - room-server
     restart: unless-stopped
 
+  # Rig-finalisation worker (steps 6-8 of the asset pipeline).
+  # Wraps unirig_mapping.py + glb_palms_down.py + import_unirig_glb.py
+  # behind one HTTP endpoint, called by pi-bridge after UniRig.
+  # See docs/design/asset-pipeline-rig-import.md.
+  kimodo-tools:
+    build: ./kimodo-tools
+    ports:
+      - "8082:8082"
+    environment:
+      WORKSPACE: "/workspace"
+      KIMODO_DIR: "/kimodo"
+      WOID_SCRIPTS: "/woid-scripts"
+    volumes:
+      # Same character workspace as pi-bridge — read rig.glb and write
+      # rig_palmsdown.glb in place, no byte-shuffling between containers.
+      - pi-workspace:/workspace
+      # Host bind-mounts for the kimodo + woid checkouts. Override
+      # KIMODO_HOST_DIR / WOID_HOST_DIR if your repos live elsewhere.
+      - "${KIMODO_HOST_DIR:-${HOME}/projects/kimodo}:/kimodo"
+      - "${WOID_HOST_DIR:-${HOME}/projects/woid}/scripts:/woid-scripts:ro"
+    restart: unless-stopped
+
   jumble:
     build:
       context: .

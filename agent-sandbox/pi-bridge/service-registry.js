@@ -88,6 +88,21 @@ export const SERVICES = {
     coldEtaSeconds: 30,
     idleTimeoutMs: null,              // local container, no scale-to-zero
   },
+  "kimodo-tools": {
+    label: "kimodo-tools",
+    description: "Rig finalisation (palms-down bake + kimodo registry import).",
+    kind: "local",
+    // kimodo-tools is a sibling compose service. From inside the
+    // bridge container the service-name DNS works; from the host the
+    // published 8082 does. KIMODO_TOOLS_URL overrides if it lives
+    // elsewhere.
+    urlEnv: "KIMODO_TOOLS_URL",
+    fallbackUrl: "http://kimodo-tools:8082",
+    coldBudgetMs: 60_000,
+    warmEtaSeconds: 5,
+    coldEtaSeconds: 30,
+    idleTimeoutMs: null,
+  },
 };
 
 /** Resolve the runtime URL for a service from its env var. */
