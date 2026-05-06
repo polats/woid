@@ -130,7 +130,6 @@ export function createAvatarFactory({ registry } = {}) {
     const tmpl = await loadTemplate(entry.kimodoUrl)
     const root = SkeletonUtils.clone(tmpl.scene)
     const scale = tmpl.height > 0 ? TARGET_HEIGHT / tmpl.height : 1
-    const footOffset = entry.mapping?.metadata?.footOffset ?? KIMODO_FOOT_DROP
     let skinned = null
     root.traverse((o) => { if (!skinned && o.isSkinnedMesh) skinned = o })
     let animator = null
@@ -144,7 +143,26 @@ export function createAvatarFactory({ registry } = {}) {
       const idle = await animationLibrary.get(animationLibrary.STANDARD_IDS.idle)
       if (idle) animator.setMotion(idle, { loop: true })
     }
-    return { object3d: wrap(root, scale, tmpl.feetY, footOffset), animator, tier: 'kimodo' }
+    // Wrap with no extra drop; static bbox grounding lands feet near
+    // the floor for the bind pose. Then run the animator once and
+    // re-ground from the *deformed* skinned-mesh bbox — UniRig bone
+    // names are auto-generated so we can't pick the foot bone by
+    // name, but `SkinnedMesh.computeBoundingBox()` iterates skinned
+    // vertices and gives us the actual visible extents at the
+    // current pose. Wrapper sits at world origin during construction,
+    // so the world-space mesh bbox min.y is also the wrapper-local y
+    // we need to subtract from root.position to plant feet at floor.
+    const wrapper = wrap(root, scale, tmpl.feetY, 0, false)
+    if (animator) animator.update()
+    root.updateMatrixWorld(true)
+    if (skinned) {
+      skinned.computeBoundingBox()
+      const worldBbox = skinned.boundingBox.clone().applyMatrix4(skinned.matrixWorld)
+      if (Number.isFinite(worldBbox.min.y)) {
+        root.position.y -= worldBbox.min.y
+      }
+    }
+    return { object3d: wrapper, animator, tier: 'kimodo' }
   }
 
   const buildStatic = async (entry) => {
