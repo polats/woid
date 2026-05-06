@@ -29,7 +29,7 @@ function Placeholder({ label }) {
   )
 }
 
-function PhoneScreen() {
+export function PhoneScreen() {
   const cfg = config.agentSandbox || {}
   const [tab, setTab] = useState('map')
   const [rooms, setRooms] = useState([])

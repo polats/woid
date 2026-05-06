@@ -19,6 +19,7 @@ The proven, non-LLM design patterns for autonomous NPCs.
 - [King of Dragon Pass / Six Ages — event cards as systemic narrative](#/docs/king-of-dragon-pass)
 - [Mood systems — event-driven affect across shipped games](#/docs/mood-systems)
 - [Barotrauma — three-clock scenario architecture](#/docs/barotrauma)
+- [Fallout Shelter-likes & the Severance pitch — 2024–2026 genre survey](#/docs/fallout-shelter-likes)
 
 ## Persistent multi-user worlds
 

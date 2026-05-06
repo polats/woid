@@ -41,7 +41,12 @@ export default function Sidebar({
       <ul>
         <li>
           <a href="#/game" className={linkClass(route.view === 'game')}>
-            Phone
+            Sims
+          </a>
+        </li>
+        <li>
+          <a href="#/shelter" className={linkClass(route.view === 'shelter')}>
+            Shelter
           </a>
         </li>
       </ul>

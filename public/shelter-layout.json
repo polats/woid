@@ -1,0 +1,56 @@
+{
+  "cellWidth": 2,
+  "cellHeight": 1.1,
+  "rooms": [
+    {
+      "id": "surface",
+      "name": "Surface",
+      "category": "surface",
+      "gridX": 0,
+      "gridY": 0,
+      "gridW": 2,
+      "gridH": 1,
+      "color": "#6b8aaa"
+    },
+    {
+      "id": "living-1",
+      "name": "Living",
+      "category": "living",
+      "gridX": 0,
+      "gridY": -1,
+      "gridW": 2,
+      "gridH": 1,
+      "color": "#8a6f3a"
+    },
+    {
+      "id": "office-1",
+      "name": "Office",
+      "category": "office",
+      "gridX": 0,
+      "gridY": -2,
+      "gridW": 1,
+      "gridH": 1,
+      "color": "#4a7a4a"
+    },
+    {
+      "id": "break-room-1",
+      "name": "Break Room",
+      "category": "break-room",
+      "gridX": 1,
+      "gridY": -2,
+      "gridW": 1,
+      "gridH": 1,
+      "color": "#aa5a5a"
+    },
+    {
+      "id": "wellness-1",
+      "name": "Wellness",
+      "category": "wellness",
+      "gridX": 0,
+      "gridY": -3,
+      "gridW": 2,
+      "gridH": 1,
+      "color": "#6a4a8a"
+    }
+  ]
+}

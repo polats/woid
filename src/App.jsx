@@ -15,6 +15,7 @@ import ImagePosts from './views/ImagePosts.jsx'
 import Network from './views/Network.jsx'
 import Journal from './views/Journal.jsx'
 import Game from './views/Game.jsx'
+import Shelter from './views/Shelter.jsx'
 import SpellsSandbox from './SpellsSandbox.jsx'
 import AnimationsSandbox from './AnimationsSandbox.jsx'
 
@@ -53,6 +54,7 @@ function parseHash() {
   if (h === 'network') return { view: 'network' }
   if (h === 'journal') return { view: 'journal' }
   if (h === 'game') return { view: 'game' }
+  if (h === 'shelter') return { view: 'shelter' }
   if (h === 'spells') return { view: 'spells' }
   if (h === 'animations') return { view: 'animations' }
   if (h === 'testing') return { view: 'testing' }
@@ -199,6 +201,9 @@ export default function App() {
             via CSS instead of unmounting. */}
         <div className="game-mount" hidden={route.view !== 'game'}>
           <Game />
+        </div>
+        <div className="game-mount" hidden={route.view !== 'shelter'}>
+          {route.view === 'shelter' && <Shelter />}
         </div>
         {route.view === 'testing' && <Testing initialSession={route.sessionName} />}
         {route.view === 'diagram' && <Diagram key={route.id} id={route.id} />}
