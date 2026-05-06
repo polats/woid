@@ -128,6 +128,19 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
       state: partial.state ?? 'idle',
       stateSince: partial.stateSince ?? snapshot.simMinutes,
       pos: partial.pos ?? null,
+      // Lerp endpoints recorded at walk-start — used by the renderer
+      // to smoothly interpolate world position during
+      // `state === 'walking'`. Both cleared by the resolver when the
+      // walk settles.
+      walkFrom: partial.walkFrom ?? null,
+      walkTo: partial.walkTo ?? null,
+      // Intra-room pacing endpoints — set by the resolver each pace
+      // cycle while the agent is in a steady state (rest/work/social).
+      // Lerped by the renderer just like walks. Cleared on state
+      // transition and reset each cycle.
+      paceFrom: partial.paceFrom ?? null,
+      paceTo: partial.paceTo ?? null,
+      paceStartedAt: partial.paceStartedAt ?? null,
       relations: partial.relations ?? { parents: [], children: [] },
       createdAt: snapshot.simMinutes,
     }

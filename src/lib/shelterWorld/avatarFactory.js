@@ -141,7 +141,12 @@ export function createAvatarFactory({ registry } = {}) {
         alignMode: 'rest',
       })
       const idle = await animationLibrary.get(animationLibrary.STANDARD_IDS.idle)
-      if (idle) animator.setMotion(idle, { loop: true })
+      // In-place idle. Shelter's wrapper Group owns world position
+      // (game state tweens it during walks). Letting kimodo's
+      // root_positions translate the pelvis here would double-move
+      // the figure. When we eventually swap in a dance / wave clip,
+      // pass `applyRootTranslation: true` to that setMotion call.
+      if (idle) animator.setMotion(idle, { loop: true, applyRootTranslation: false })
     }
     // Wrap with no extra drop; static bbox grounding lands feet near
     // the floor for the bind pose. Then run the animator once and
@@ -153,6 +158,14 @@ export function createAvatarFactory({ registry } = {}) {
     // so the world-space mesh bbox min.y is also the wrapper-local y
     // we need to subtract from root.position to plant feet at floor.
     const wrapper = wrap(root, scale, tmpl.feetY, 0, false)
+    // Wire the wrapper as the animator's external reference so
+    // wrapper rotations (walk-heading, worldRoot tilt, debug rotate)
+    // actually rotate the visible character. Without this the
+    // animator writes bone world rotations absolutely and any
+    // parent rotation is cancelled — that's the "always face camera"
+    // bug. Set BEFORE the warm-up update() below so the first frame
+    // is already rotated correctly.
+    if (animator) animator.setExternalRef(wrapper)
     if (animator) animator.update()
     root.updateMatrixWorld(true)
     if (skinned) {

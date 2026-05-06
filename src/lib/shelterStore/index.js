@@ -17,5 +17,5 @@ export {
   simDay,
 } from './clock.js'
 export { SCHEDULES, SLOT_ACTIONS, resolveSchedule } from './schedules.js'
-export { WALK_DURATION_MIN, resolveAgentState } from './resolver.js'
+export { WALK_DURATION_MIN, PACE_DURATION_MIN, resolveAgentState } from './resolver.js'
 export { tickAgents } from './tick.js'

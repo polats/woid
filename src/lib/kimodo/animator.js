@@ -62,7 +62,17 @@ export class Animator {
   // arbitrary Object3D root (we collect descendant objects by name). The
   // retargeting math is identical — three.js Bone and Object3D share the
   // quaternion/position/matrixWorld surface.
-  constructor(target, { mapping, blends = {}, scale = 1.0, groundOffsetY = 0, alignMode = 'frame' } = {}) {
+  constructor(target, {
+    mapping, blends = {}, scale = 1.0, groundOffsetY = 0, alignMode = 'frame',
+    // Default for whether to apply the motion's per-frame pelvis
+    // translation. Setting this to false makes the figure animate
+    // in-place — useful when something else owns world position
+    // (e.g. Shelter's wrapper Group). Per-motion overrides via
+    // `setMotion(motion, { applyRootTranslation })` win over this
+    // default, so a session can mix in-place idles with translating
+    // dance/walk clips on the same animator.
+    applyRootTranslation = true,
+  } = {}) {
     this.target = target
     this.mapping = mapping
     // Per-bone blend rules: { kimodo_joint: { with: kimodo_joint, factor: 0..1 } }
@@ -73,6 +83,15 @@ export class Animator {
     this.scale = scale
     this.groundOffsetY = groundOffsetY
     this.alignMode = alignMode
+    this.defaultApplyRootTranslation = applyRootTranslation
+    this.applyRootTranslation = applyRootTranslation
+    // Optional Object3D whose world rotation gets premultiplied onto
+    // every bone's target world quaternion. Without this, the animator
+    // writes bone world rotations *absolutely* — any rotation applied
+    // to a parent Group gets cancelled out. With it set (typically to
+    // the wrapper that owns the avatar in the scene), the character
+    // actually rotates with that Group.
+    this.externalRef = null
 
     let drivable
     if (target.isSkinnedMesh) {
@@ -270,7 +289,16 @@ export class Animator {
     if (this.motion) this._resolvePairsForMotion(this.motion)
   }
 
-  setMotion(motion, { loop = true } = {}) {
+  /**
+   * Set the Object3D whose world rotation should layer on top of the
+   * kimodo motion's world quaternions. Pass `null` to disable.
+   * Typically the wrapper Group that owns the avatar in the scene.
+   */
+  setExternalRef(obj) {
+    this.externalRef = obj ?? null
+  }
+
+  setMotion(motion, { loop = true, applyRootTranslation } = {}) {
     if (!motion.global_quats_xyzw) {
       console.warn('Motion missing global_quats_xyzw; retargeting will not work for non-SMPL-X rigs.')
     }
@@ -280,6 +308,11 @@ export class Animator {
     this.elapsed = 0
     this.lastTime = performance.now() / 1000
     this.playing = true
+    // Per-motion override of root-translation behavior: idles tend
+    // to want in-place; dance / wave / cast clips usually want the
+    // authored translation through. Falls back to the constructor
+    // default when not specified.
+    this.applyRootTranslation = applyRootTranslation ?? this.defaultApplyRootTranslation
     this._resolvePairsForMotion(motion)
   }
 
@@ -311,10 +344,23 @@ export class Animator {
     const tmpQparent = new THREE.Quaternion()
     const tmpPos = new THREE.Vector3()
     const tmpScl = new THREE.Vector3()
+    const tmpQexternal = new THREE.Quaternion()
+
+    // Pull the external reference's world rotation once per frame.
+    // We layer this on top of every bone's target world quaternion
+    // so the character actually rotates with whatever Group we
+    // parented it under (otherwise the bones snap to absolute world
+    // rotations from the motion data and parent rotations are lost).
+    let hasExternalRot = false
+    if (this.externalRef) {
+      this.externalRef.updateMatrixWorld(true)
+      this.externalRef.matrixWorld.decompose(tmpPos, tmpQexternal, tmpScl)
+      hasExternalRot = true
+    }
 
     if (m.global_quats_xyzw) {
       // World-space retargeting with per-bone rest-direction alignment.
-      // Q_target_world = Q_kimodo_world · R_align[j]
+      // Q_target_world = (externalRef.world) · Q_kimodo_world · R_align[j]
       // For pairs with a `blendWith` rule, slerp the world toward the
       // partner's world by `factor` (used to make rigid collar meshes follow
       // some of the arm's motion, approximating the skinned shoulder cap).
@@ -324,10 +370,12 @@ export class Animator {
         const q = m.global_quats_xyzw[f][kimodoIdx]
         tmpQk.set(q[0], q[1], q[2], q[3])
         tmpQworld.copy(tmpQk).multiply(alignQ)
+        if (hasExternalRot) tmpQworld.premultiply(tmpQexternal)
 
         if (blendWith) {
           const pq = m.global_quats_xyzw[f][blendWith.partner.kimodoIdx]
           tmpQpartner.set(pq[0], pq[1], pq[2], pq[3]).multiply(blendWith.partner.alignQ)
+          if (hasExternalRot) tmpQpartner.premultiply(tmpQexternal)
           tmpQworld.slerp(tmpQpartner, blendWith.factor)
         }
 
@@ -350,8 +398,11 @@ export class Animator {
 
     // Pelvis translation. kimodo's root_positions is in meters, world frame
     // with feet at Y=0. Scale to character size, lift by groundOffsetY (the
-    // amount we shifted the scene to anchor rest feet on Y=0).
-    if (this.pelvisBone && m.root_positions) {
+    // amount we shifted the scene to anchor rest feet on Y=0). Skipped
+    // when applyRootTranslation=false — Shelter agents have their world
+    // position driven by game state on the wrapper Group, so letting the
+    // motion's root translation through would double-translate them.
+    if (this.applyRootTranslation && this.pelvisBone && m.root_positions) {
       const [x, y, z] = m.root_positions[f]
       const s = this.scale
       // Note: pelvis local position controls the skeleton root within the

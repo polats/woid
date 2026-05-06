@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import config from '../config.js'
-import { useShelterStore } from '../hooks/useShelterStore.js'
+import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
 import { useShelterTick } from '../hooks/useShelterTick.js'
+import { WALK_DURATION_MIN, PACE_DURATION_MIN } from '../lib/shelterStore/index.js'
 import { createPanZoomControls } from '../lib/panZoomControls.js'
 import { buildDressing, ROOM_DEPTH } from '../lib/shelterDressing.js'
 import {
@@ -203,6 +204,10 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
   const cfg = config.agentSandbox || {}
   useShelterTick()
   const shelterSnapshot = useShelterStore()
+  // Direct store handle — captured by the render loop so it can read
+  // a fresh snapshot every frame for walk-tween interpolation, without
+  // re-subscribing through React's render cycle.
+  const shelterStore = useShelterStoreApi()
 
   useEffect(() => {
     const host = hostRef.current
@@ -520,6 +525,60 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
         }
       }
 
+      // Tick walkers + pacers — smooth per-frame lerp of
+      // wrapper.position for any agent currently moving. The store
+      // advances sim minutes at 4 Hz; we interpolate sub-second using
+      // the wall-clock delta since the last clock tick so the visible
+      // motion looks 60 fps even though the sim itself doesn't.
+      //
+      // Two cases share the same shape:
+      //   - state === 'walking' → walkFrom → walkTo over WALK_DURATION_MIN
+      //   - steady state w/ paceTo → paceFrom → paceTo over PACE_DURATION_MIN
+      const projector = projectorRef.current
+      if (projector) {
+        const snapshot = shelterStore.getSnapshot()
+        const fractionalSimMin = snapshot.simMinutes
+          + Math.max(0, (Date.now() - snapshot.lastTickWallClock) / 1000)
+        const live = liveAvatarsRef.current
+        for (const a of Object.values(snapshot.agents ?? {})) {
+          const handle = live.get(a.id)
+          if (!handle || handle.pending) continue
+
+          let from, to, started, duration
+          if (a.state === 'walking' && a.walkFrom && a.walkTo) {
+            from = a.walkFrom; to = a.walkTo
+            started = a.stateSince
+            duration = WALK_DURATION_MIN
+          } else if (a.paceFrom && a.paceTo && a.paceStartedAt != null) {
+            from = a.paceFrom; to = a.paceTo
+            started = a.paceStartedAt
+            duration = PACE_DURATION_MIN
+          } else {
+            continue
+          }
+
+          const start = projector.projectLocal(from.roomId, from.localU, from.localV)
+          const end = projector.projectLocal(to.roomId, to.localU, to.localV)
+          if (!start || !end) continue
+          const elapsed = fractionalSimMin - (started ?? fractionalSimMin)
+          const t = Math.max(0, Math.min(1, elapsed / duration))
+          const px = start.world.x + (end.world.x - start.world.x) * t
+          const py = start.world.y + (end.world.y - start.world.y) * t
+          const pz = start.world.z + (end.world.z - start.world.z) * t
+          handle.object3d.position.set(px, py, pz)
+          // Face direction-of-travel. Avatars' natural forward in
+          // wrapper-local space is +Z (glTF convention), so rotating
+          // by atan2(dx, dz) aligns +Z with the heading vector.
+          // When stationary (no lerp), we leave rotation alone so
+          // they keep facing wherever they last walked toward.
+          const dx = end.world.x - start.world.x
+          const dz = end.world.z - start.world.z
+          if (dx * dx + dz * dz > 1e-6) {
+            handle.object3d.rotation.y = Math.atan2(dx, dz)
+          }
+        }
+      }
+
       // Tick avatar animators (kimodo) before rendering.
       factory.tick()
 
@@ -585,13 +644,22 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       if (!projection) continue
       desired.add(a.id)
       const existing = live.get(a.id)
+      // Walking AND pacing agents are positioned per-frame by the
+      // walker/pacer tick (smooth lerp). Skip the discrete set here
+      // so the sync effect doesn't pop the avatar back to its stale
+      // anchor pos between resolver ticks.
+      const isWalking = a.state === 'walking' && a.walkFrom && a.walkTo
+      const isPacing = !!(a.paceFrom && a.paceTo && a.paceStartedAt != null)
+      const isLerping = isWalking || isPacing
       if (existing && !existing.pending) {
-        existing.object3d.position.set(
-          projection.world.x,
-          projection.world.y,
-          projection.world.z,
-        )
-        existing.object3d.visible = a.state !== 'walking'
+        if (!isLerping) {
+          existing.object3d.position.set(
+            projection.world.x,
+            projection.world.y,
+            projection.world.z,
+          )
+        }
+        existing.object3d.visible = true
         continue
       }
       if (existing?.pending) continue
@@ -600,12 +668,20 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       factory.spawn(lookupKey).then((handle) => {
         if (cancelled) { handle.dispose(); return }
         worldRoot.add(handle.object3d)
+        // For lerping agents (walking or pacing), place at the
+        // current source so they don't pop to the destination before
+        // the per-frame tick takes over.
+        const sourceFrom = isWalking ? a.walkFrom : isPacing ? a.paceFrom : null
+        const initial = sourceFrom
+          ? projector.projectLocal(sourceFrom.roomId, sourceFrom.localU, sourceFrom.localV)
+          : projection
+        const placeAt = initial ?? projection
         handle.object3d.position.set(
-          projection.world.x,
-          projection.world.y,
-          projection.world.z,
+          placeAt.world.x,
+          placeAt.world.y,
+          placeAt.world.z,
         )
-        handle.object3d.visible = a.state !== 'walking'
+        handle.object3d.visible = true
         live.set(a.id, handle)
       }).catch((err) => {
         live.delete(a.id)
