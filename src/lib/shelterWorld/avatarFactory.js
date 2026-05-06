@@ -202,6 +202,14 @@ export function createAvatarFactory({ registry } = {}) {
   }
 
   const spawn = async (npub) => {
+    // Wait for the registry's first poll so we don't race against the
+    // change events. Without this, on a fresh ShelterStage3D mount
+    // the spawn reads an empty registry and lands a fallback avatar
+    // *after* the change events have already fired — leaving the
+    // fallback stuck because no further events trigger a re-spawn.
+    if (registry?.ready) {
+      try { await registry.ready() } catch {}
+    }
     const entry = registry?.get(npub) ?? null
     let result = null
     if (entry?.kimodoUrl && entry?.mapping) {

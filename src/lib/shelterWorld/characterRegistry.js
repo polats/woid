@@ -94,6 +94,13 @@ export function createCharacterRegistry({ bridgeUrl } = {}) {
     }
   }
 
+  // Resolves on the first poll completion (success or failure).
+  // Consumers like avatarFactory await this before reading entries
+  // so they don't spawn from an empty registry on first mount and
+  // race against the change events that fire mid-spawn.
+  let readyResolve = null
+  const ready = new Promise((resolve) => { readyResolve = resolve })
+
   const tick = async () => {
     try {
       const [chars, kim] = await Promise.all([
@@ -105,6 +112,7 @@ export function createCharacterRegistry({ bridgeUrl } = {}) {
       if (cancelled) return
       merge(chars?.characters ?? null, kim?.characters ?? null)
     } finally {
+      if (readyResolve) { readyResolve(); readyResolve = null }
       if (!cancelled) timer = setTimeout(tick, POLL_MS)
     }
   }
@@ -114,6 +122,13 @@ export function createCharacterRegistry({ bridgeUrl } = {}) {
     /** Snapshot of every known pubkey → entry mapping. */
     snapshot: () => new Map(entries),
     get: (pubkey) => entries.get(pubkey) ?? null,
+    /**
+     * Resolves on the first completed poll (success or failure).
+     * Used by avatarFactory to defer spawning until the registry has
+     * had a chance to populate, avoiding fallback-tier spawns that
+     * race against the registry's change events.
+     */
+    ready: () => ready,
     subscribe(fn) {
       listeners.add(fn)
       return () => listeners.delete(fn)

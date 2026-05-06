@@ -374,14 +374,28 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
     const factory = createAvatarFactory({ registry })
     factoryRef.current = factory
     worldRootRef.current = worldRoot
-    // Registry change for a live npub → drop the cached avatar so the
-    // sync effect respawns it with the new model.
+    // Registry change for a known pubkey → drop the cached avatar
+    // so the sync effect respawns it with the new model.
+    //
+    // Match by handle.npub (set by avatarFactory.spawn to the lookup
+    // key, i.e. the pubkey for bridge characters), not by live's
+    // map key. live is keyed by agent.id, which can be a synthetic
+    // dummy id and won't match the registry's pubkey-keyed events
+    // — that mismatch is why fallback avatars stayed fallback after
+    // the first registry poll completed (most visible after
+    // navigating away from Shelter and back, where the factory
+    // spawns *before* the registry's first poll resolves).
     const unsubRegistry = registry.subscribe(({ pubkey }) => {
       const live = liveAvatarsRef.current
-      const handle = live.get(pubkey)
-      if (!handle) return
+      let foundId = null
+      for (const [id, handle] of live.entries()) {
+        if (handle?.pending) continue
+        if (handle?.npub === pubkey) { foundId = id; break }
+      }
+      if (!foundId) return
+      const handle = live.get(foundId)
       handle.dispose()
-      live.delete(pubkey)
+      live.delete(foundId)
       invalidationRef.current++
       setPresenceTick((n) => n + 1)
     })
