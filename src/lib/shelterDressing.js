@@ -21,7 +21,7 @@ const FRONT_Z = ROOM_DEPTH / 2 - 0.18
 function box(w, h, d, color, x, y, z = 0) {
   const m = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshLambertMaterial({ color }),
+    new THREE.MeshStandardMaterial({ color, metalness: 0, roughness: 0.85 }),
   )
   m.position.set(x, y, z)
   return m
@@ -60,28 +60,6 @@ function hallwayOpening(w, h, x, y, silhouette = false) {
   return g
 }
 
-// Character placeholder — anchored at (x, fy, z) so the feet sit on
-// the floor at the room-local origin. Children are positioned with y
-// relative to the Group (0 = feet). The Group is tagged with
-// `charSpec` so the stage can swap its primitive children for a
-// cloned avatar.glb once the model loads.
-function character(fy, x, z = 0, opts = {}) {
-  const g = new THREE.Group()
-  g.position.set(x, fy, z)
-  g.userData.charSpec = { opts }
-  const torsoColor = opts.torsoColor ?? 0x2c3a5a
-  const legColor = opts.legColor ?? 0x3a3a32
-  const headColor = opts.headColor ?? 0xd6b8a8
-  g.add(box(0.05, 0.2, 0.06, legColor, -0.04, 0.1, 0))
-  g.add(box(0.05, 0.2, 0.06, legColor, 0.04, 0.1, 0))
-  g.add(box(0.18, 0.2, 0.12, torsoColor, 0, 0.3, 0))
-  g.add(box(0.04, 0.18, 0.1, torsoColor, -0.11, 0.3, 0))
-  g.add(box(0.04, 0.18, 0.1, torsoColor, 0.11, 0.3, 0))
-  g.add(box(0.11, 0.12, 0.11, headColor, 0, 0.46, 0))
-  g.add(box(0.115, 0.04, 0.115, 0x1a1a20, 0, 0.535, 0))
-  return g
-}
-
 function buildSurface(w, h) {
   const g = new THREE.Group()
   const fy = floorY(h)
@@ -93,8 +71,6 @@ function buildSurface(w, h) {
   // Two doors — entrance left, maintenance right.
   g.add(box(0.22, 0.7, 0.06, 0x1a1f26, -w / 2 + 0.25, fy + 0.35, MIDBACK_Z))
   g.add(box(0.22, 0.7, 0.06, 0x1a1f26, w / 2 - 0.25, fy + 0.35, MIDBACK_Z))
-  // Lone figure standing on the surface near the entrance.
-  g.add(character(fy, -w / 2 + 0.8, 0.2))
   // Foreground railing along the front edge.
   const railH = 0.45
   g.add(box(w * 0.85, 0.04, 0.04, 0x6a7480, 0, fy + railH, FRONT_Z))
@@ -132,8 +108,6 @@ function buildLiving(w, h) {
       g.add(box(0.4, 0.18, 0.3, 0x4a3a1f, fx, fy + 0.11, 0.1))
     }
   }
-  // Resident standing in front of the locker, mid-room.
-  g.add(character(fy, -w / 2 + 0.95, 0.32, { torsoColor: 0x6a4a2a }))
   return g
 }
 
@@ -180,10 +154,6 @@ function buildOffice(w, h) {
         g.add(box(0.04, 0.22, 0.04, 0x1a2a1a, x + dx, fy + 0.11, dz))
       }
     }
-    // Worker standing at the chair, mid-room — every other station.
-    if (i % 2 === 0) {
-      g.add(character(fy, x, 0.34, { torsoColor: 0x2c3a5a }))
-    }
   }
   return g
 }
@@ -215,8 +185,6 @@ function buildBreakRoom(w, h) {
   g.add(box(0.22, 0.06, 0.22, 0x6a4022, 0.2, fy + 0.3, 0.05))
   g.add(box(0.04, 0.22, 0.04, 0x4a2812, 0.2, fy + 0.18, 0.05))
   g.add(box(0.12, 0.16, 0.12, 0xf5d8a8, 0.2, fy + 0.42, 0.05))
-  // Lone figure standing far left — mid plane, looking inward.
-  g.add(character(fy, -w / 2 + 0.7, 0.15, { torsoColor: 0x4a2222 }))
   return g
 }
 
@@ -240,8 +208,6 @@ function buildWellness(w, h) {
     g.add(box(0.55, 0.16, 0.35, 0xc9a8e0, x, fy + 0.1, 0.05))
   }
   g.add(box(0.18, 0.28, 0.18, 0x2a1f3a, w / 2 - 0.3, fy + 0.16, -0.18))
-  // Visitor on a cushion (standing nearby, mid plane).
-  g.add(character(fy, -w / 2 + 0.4, 0.25, { torsoColor: 0x6a4a8a }))
   // Foreground potted plant.
   g.add(box(0.22, 0.12, 0.22, 0x6b4a2a, w / 2 - 0.3, fy + 0.06, FRONT_Z - 0.05))
   g.add(box(0.16, 0.5, 0.16, 0x4a8a4a, w / 2 - 0.3, fy + 0.37, FRONT_Z - 0.05))

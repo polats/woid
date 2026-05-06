@@ -194,13 +194,14 @@ export default function App() {
         {route.view === 'journal' && config.features?.agentSandbox && <Journal />}
         {route.view === 'spells' && config.features?.agentSandbox && <SpellsSandbox />}
         {route.view === 'animations' && config.features?.agentSandbox && <AnimationsSandbox />}
-        {/* Game stays mounted across route changes so the Stage3D
-            WebGL context survives navigation. Mobile browsers cap
-            WebGL contexts (iOS Safari ~8) and even with perfect
-            disposal, rapid create/destroy crashes the page. Hide
-            via CSS instead of unmounting. */}
+        {/* Both Game and Shelter are conditionally mounted. Each has
+            its own WebGLRenderer; keeping them both mounted blew past
+            the browser's WebGL context cap and caused the visible
+            view to lose its context (white screen). Mounting only the
+            active view caps us at one context at a time. The trade-off
+            is paying scene.glb's load cost on each Sims re-entry. */}
         <div className="game-mount" hidden={route.view !== 'game'}>
-          <Game />
+          {route.view === 'game' && <Game />}
         </div>
         <div className="game-mount" hidden={route.view !== 'shelter'}>
           {route.view === 'shelter' && <Shelter />}

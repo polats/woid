@@ -10,7 +10,9 @@
       "gridY": 0,
       "gridW": 2,
       "gridH": 1,
-      "color": "#6b8aaa"
+      "color": "#6b8aaa",
+      "bridgeRoomId": "lobby",
+      "tileBounds": { "x": 0, "y": 13, "w": 12, "h": 2 }
     },
     {
       "id": "living-1",
@@ -20,7 +22,9 @@
       "gridY": -1,
       "gridW": 2,
       "gridH": 1,
-      "color": "#8a6f3a"
+      "color": "#8a6f3a",
+      "bridgeRoomId": "apt-1A",
+      "tileBounds": { "x": 0, "y": 3, "w": 4, "h": 4 }
     },
     {
       "id": "office-1",
@@ -30,7 +34,9 @@
       "gridY": -2,
       "gridW": 1,
       "gridH": 1,
-      "color": "#4a7a4a"
+      "color": "#4a7a4a",
+      "bridgeRoomId": "kitchen",
+      "tileBounds": { "x": 0, "y": 0, "w": 12, "h": 2 }
     },
     {
       "id": "break-room-1",
@@ -40,7 +46,9 @@
       "gridY": -2,
       "gridW": 1,
       "gridH": 1,
-      "color": "#aa5a5a"
+      "color": "#aa5a5a",
+      "bridgeRoomId": "apt-1B",
+      "tileBounds": { "x": 8, "y": 3, "w": 4, "h": 4 }
     },
     {
       "id": "wellness-1",
@@ -50,7 +58,9 @@
       "gridY": -3,
       "gridW": 2,
       "gridH": 1,
-      "color": "#6a4a8a"
+      "color": "#6a4a8a",
+      "bridgeRoomId": "apt-1C",
+      "tileBounds": { "x": 0, "y": 8, "w": 4, "h": 4 }
     }
   ]
 }

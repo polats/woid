@@ -1,11 +1,17 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
+import config from '../config.js'
+import { useShelterStore } from '../hooks/useShelterStore.js'
+import { useShelterTick } from '../hooks/useShelterTick.js'
 import { createPanZoomControls } from '../lib/panZoomControls.js'
 import { buildDressing, ROOM_DEPTH } from '../lib/shelterDressing.js'
-
-const CHARACTER_HEIGHT = 0.5  // world units — see shelterDressing.js
+import {
+  animationLibrary,
+  createCharacterRegistry,
+  createAvatarFactory,
+  createPresenceProjector,
+} from '../lib/shelterWorld/index.js'
 
 /**
  * Shelter diorama renderer.
@@ -71,7 +77,7 @@ function buildShell(w, h, color) {
   const floorT = 0.08
   const base = new THREE.Color(color || '#555555')
   const dark = base.clone().multiplyScalar(0.55)
-  const mat = (c) => new THREE.MeshLambertMaterial({ color: c })
+  const mat = (c) => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.85 })
 
   const add = (geom, material, x, y, z) => {
     const m = new THREE.Mesh(geom, material)
@@ -86,6 +92,39 @@ function buildShell(w, h, color) {
   return g
 }
 
+/**
+ * Add all decorative geometry inside a room — category dressing
+ * (bunks, desks, plants, etc.) and the visible pendant lamp
+ * fixture (cord + housing + bulb pad). The PointLight that
+ * illuminates the room stays outside this helper so the room is
+ * still lit when furniture is hidden.
+ */
+function addRoomFurniture(group, category, w, h, lampColor) {
+  group.add(buildDressing(category, w, h))
+
+  const housingY = h / 2 - 0.27
+  const fixtureZ = 0.12
+  const cord = new THREE.Mesh(
+    new THREE.BoxGeometry(0.02, 0.18, 0.02),
+    new THREE.MeshStandardMaterial({ color: 0x101418 }),
+  )
+  cord.position.set(0, h / 2 - 0.13, fixtureZ)
+  group.add(cord)
+  const housing = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2, 0.06, 0.2),
+    new THREE.MeshStandardMaterial({ color: 0x202830 }),
+  )
+  housing.position.set(0, housingY, fixtureZ)
+  group.add(housing)
+  const bulb = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.16, 0.16),
+    new THREE.MeshBasicMaterial({ color: lampColor }),
+  )
+  bulb.rotation.x = -Math.PI / 2
+  bulb.position.set(0, housingY - 0.031, fixtureZ)
+  group.add(bulb)
+}
+
 function buildRoom(room, cellW, cellH) {
   const group = new THREE.Group()
   group.name = `room:${room.id}`
@@ -98,36 +137,18 @@ function buildRoom(room, cellW, cellH) {
   group.userData.room = { id: room.id, name: room.name, w, h, cx, cy }
 
   group.add(buildShell(w, h, room.color))
-  group.add(buildDressing(room.category, w, h))
 
-  // Pendant light fixture — a real visible object the lamp glow
-  // emits from. Cord drops from ceiling, housing hangs at the front,
-  // bulb pad on the underside reads as the light source.
   const lampColor = LAMP_COLORS[room.category] ?? 0xffd9a8
-  const cordY = h / 2 - 0.13
+  // Furniture temporarily disabled so agents stand out clearly while
+  // we iterate on the behaviour layer. Re-enable to bring back bunks,
+  // desks, plants, and the visible pendant fixture.
+  // addRoomFurniture(group, room.category, w, h, lampColor)
+
+  // Room point light — kept outside addRoomFurniture so the room
+  // stays lit even when furniture is hidden.
   const housingY = h / 2 - 0.27
-  const fixtureZ = 0.12
-  const cord = new THREE.Mesh(
-    new THREE.BoxGeometry(0.02, 0.18, 0.02),
-    new THREE.MeshLambertMaterial({ color: 0x101418 }),
-  )
-  cord.position.set(0, cordY, fixtureZ)
-  group.add(cord)
-  const housing = new THREE.Mesh(
-    new THREE.BoxGeometry(0.2, 0.06, 0.2),
-    new THREE.MeshLambertMaterial({ color: 0x202830 }),
-  )
-  housing.position.set(0, housingY, fixtureZ)
-  group.add(housing)
-  const bulb = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.16, 0.16),
-    new THREE.MeshBasicMaterial({ color: lampColor }),
-  )
-  bulb.rotation.x = -Math.PI / 2
-  bulb.position.set(0, housingY - 0.031, fixtureZ)
-  group.add(bulb)
   const lamp = new THREE.PointLight(lampColor, 1.1, ROOM_DEPTH * 1.3, 1.6)
-  lamp.position.set(0, housingY - 0.05, fixtureZ)
+  lamp.position.set(0, housingY - 0.05, 0.12)
   group.add(lamp)
 
   const label = makeLabelSprite(room.name)
@@ -164,12 +185,33 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
   const onFocusChangeRef = useRef(onFocusChange)
   useEffect(() => { onFocusChangeRef.current = onFocusChange }, [onFocusChange])
 
+  // Engine handles to live longer than the main effect's closure so a
+  // sibling presence-sync effect can spawn / despawn / reposition
+  // avatars without re-running scene setup.
+  const factoryRef = useRef(null)
+  const projectorRef = useRef(null)
+  const worldRootRef = useRef(null)
+  const liveAvatarsRef = useRef(new Map())  // npub → spawn handle
+  // Bumped when the registry signals a model change for a visible
+  // npub — forces the sync effect to re-run and respawn that agent.
+  const invalidationRef = useRef(0)
+  const [presenceTick, setPresenceTick] = useState(0)
+
+  // Local-first state — ShelterStore in localStorage drives the
+  // agent set. The colyseus sandbox is no longer the source of truth
+  // for Shelter; Sims still uses it. See shelter-agents.md.
+  const cfg = config.agentSandbox || {}
+  useShelterTick()
+  const shelterSnapshot = useShelterStore()
+
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
 
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    renderer.toneMapping = THREE.ACESFilmicToneMapping
+    renderer.toneMappingExposure = 1.0
     renderer.outputColorSpace = THREE.SRGBColorSpace
     host.appendChild(renderer.domElement)
     renderer.domElement.style.display = 'block'
@@ -178,14 +220,14 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
     renderer.domElement.style.touchAction = 'none'
 
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x14171b)
+    scene.background = new THREE.Color(0x202327)
 
-    // Dim ambient — per-room point lights do the heavy lifting.
-    const hemi = new THREE.HemisphereLight(0xb8c8d8, 0x2a2530, 0.25)
-    scene.add(hemi)
-    const dir = new THREE.DirectionalLight(0xffffff, 0.35)
-    dir.position.set(1.5, 2.0, 1.2)
-    scene.add(dir)
+    // PBR environment lighting — same setup as the Sims stage.
+    // The PMREM-baked RoomEnvironment carries the diffuse + specular
+    // ambient; per-room point lights still add warm interior glow.
+    const pmrem = new THREE.PMREMGenerator(renderer)
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+    scene.environmentIntensity = 0.6
 
     const worldRoot = new THREE.Group()
     worldRoot.name = 'shelter:world'
@@ -321,57 +363,28 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
     const roomGroups = []  // for raycasting on tap
     let cancelled = false
 
-    // ── Avatar template + character swap ───────────────────────────
-    // Load avatar.glb once. When ready (and after rooms exist), walk
-    // the world and replace each character placeholder's primitive
-    // children with a cloned scaled avatar. Idempotent via
-    // userData.charSpawned so the layout-load and avatar-load can
-    // resolve in either order.
-    let avatarTemplate = null
-    let avatarScale = 1
-    let avatarFeetY = 0
-    const swapCharacters = () => {
-      if (!avatarTemplate) return
-      worldRoot.traverse((obj) => {
-        if (!obj.userData?.charSpec || obj.userData.charSpawned) return
-        // Drop the placeholder primitives.
-        for (let i = obj.children.length - 1; i >= 0; i--) {
-          const c = obj.children[i]
-          obj.remove(c)
-          c.traverse?.((n) => {
-            if (n.geometry) n.geometry.dispose()
-            if (n.material) {
-              const mats = Array.isArray(n.material) ? n.material : [n.material]
-              for (const m of mats) m.dispose()
-            }
-          })
-        }
-        const clone = avatarTemplate.clone(true)
-        clone.scale.setScalar(avatarScale)
-        clone.position.y = -avatarFeetY * avatarScale
-        clone.rotation.y = Math.PI
-        obj.add(clone)
-        obj.userData.charSpawned = true
-      })
-    }
-    const draco = new DRACOLoader()
-    draco.setDecoderPath('https://unpkg.com/three@0.184.0/examples/jsm/libs/draco/gltf/')
-    const loader = new GLTFLoader().setDRACOLoader(draco)
-    loader.load(
-      '/avatar.glb',
-      (gltf) => {
-        if (cancelled) return
-        const root = gltf.scene
-        const bbox = new THREE.Box3().setFromObject(root)
-        const size = bbox.getSize(new THREE.Vector3())
-        avatarScale = size.y > 0 ? CHARACTER_HEIGHT / size.y : 1
-        avatarFeetY = bbox.min.y
-        avatarTemplate = root
-        swapCharacters()
-      },
-      undefined,
-      (err) => console.warn('[shelter] avatar.glb load failed', err?.message || err),
-    )
+    // ── Engine wiring (shelterWorld) ────────────────────────────────
+    // characterRegistry polls the bridge + kimodo every 5s.
+    // avatarFactory consumes it to spawn 3D avatars on demand.
+    // presenceProjector lands once the layout JSON resolves.
+    // Bootstrap the standard idle clip into animationLibrary so the
+    // first kimodo spawn doesn't pay the fetch latency.
+    animationLibrary.bootstrap()
+    const registry = createCharacterRegistry({ bridgeUrl: cfg.bridgeUrl })
+    const factory = createAvatarFactory({ registry })
+    factoryRef.current = factory
+    worldRootRef.current = worldRoot
+    // Registry change for a live npub → drop the cached avatar so the
+    // sync effect respawns it with the new model.
+    const unsubRegistry = registry.subscribe(({ pubkey }) => {
+      const live = liveAvatarsRef.current
+      const handle = live.get(pubkey)
+      if (!handle) return
+      handle.dispose()
+      live.delete(pubkey)
+      invalidationRef.current++
+      setPresenceTick((n) => n + 1)
+    })
 
     fetch('/shelter-layout.json')
       .then((r) => r.json())
@@ -398,7 +411,10 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
         controls.setBounds(homeBounds)
         layoutBounds = b
         refit(true)
-        swapCharacters()
+        projectorRef.current = createPresenceProjector({ layout })
+        // Trigger the presence-sync effect once the projector exists
+        // so any agents already in the room state get spawned.
+        setPresenceTick((n) => n + 1)
       })
       .catch((e) => console.warn('[shelter] layout fetch failed', e))
 
@@ -490,6 +506,9 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
         }
       }
 
+      // Tick avatar animators (kimodo) before rendering.
+      factory.tick()
+
       // Tilt-on-zoom — flatten the world toward TILT_MIN as zoom rises.
       // Map zoom 1.0 → TILT_MAX, zoom 3.0+ → TILT_MIN. Debug offsets
       // from Ctrl+drag stack on top so the live tilt isn't lost.
@@ -509,14 +528,83 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       controls.dispose()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('click', onClick)
+      try { unsubRegistry() } catch {}
+      try { registry.dispose() } catch {}
+      try { factory.dispose() } catch {}
+      factoryRef.current = null
+      projectorRef.current = null
+      worldRootRef.current = null
+      liveAvatarsRef.current.clear()
       for (const d of disposers) d()
-      try { draco.dispose() } catch {}
+      try { pmrem.dispose() } catch {}
+      try { scene.environment?.dispose() } catch {}
       renderer.dispose()
       if (renderer.domElement.parentNode === host) {
         host.removeChild(renderer.domElement)
       }
     }
   }, [])
+
+  // ── Store sync ────────────────────────────────────────────────────
+  // Spawn / despawn / reposition avatars to match the local
+  // ShelterStore. Each agent in the store has a `pos` produced by
+  // the schedule resolver; we project it into world coords and place
+  // the avatar there. Walking agents are hidden — Phase 4+ will
+  // animate them through corridors.
+  //
+  // Avatar spawn keys on `agent.id`. If the agent has a bridge
+  // pubkey it's used to look up the model; otherwise the factory
+  // falls through to /avatar.glb.
+  useEffect(() => {
+    const factory = factoryRef.current
+    const projector = projectorRef.current
+    const worldRoot = worldRootRef.current
+    if (!factory || !projector || !worldRoot) return
+    let cancelled = false
+    const live = liveAvatarsRef.current
+    const agents = Object.values(shelterSnapshot?.agents ?? {})
+    const desired = new Set()
+
+    for (const a of agents) {
+      if (!a.id || !a.pos) continue
+      const projection = projector.projectLocal(a.pos.roomId, a.pos.localU, a.pos.localV)
+      if (!projection) continue
+      desired.add(a.id)
+      const existing = live.get(a.id)
+      if (existing && !existing.pending) {
+        existing.object3d.position.set(
+          projection.world.x,
+          projection.world.y,
+          projection.world.z,
+        )
+        existing.object3d.visible = a.state !== 'walking'
+        continue
+      }
+      if (existing?.pending) continue
+      live.set(a.id, { pending: true })
+      const lookupKey = a.pubkey ?? a.id
+      factory.spawn(lookupKey).then((handle) => {
+        if (cancelled) { handle.dispose(); return }
+        worldRoot.add(handle.object3d)
+        handle.object3d.position.set(
+          projection.world.x,
+          projection.world.y,
+          projection.world.z,
+        )
+        handle.object3d.visible = a.state !== 'walking'
+        live.set(a.id, handle)
+      }).catch((err) => {
+        live.delete(a.id)
+        console.warn('[shelter] avatar spawn failed for', a.id, err?.message || err)
+      })
+    }
+    for (const [id, handle] of [...live.entries()]) {
+      if (desired.has(id)) continue
+      if (handle.dispose) handle.dispose()
+      live.delete(id)
+    }
+    return () => { cancelled = true }
+  }, [shelterSnapshot, presenceTick])
 
   return <div ref={hostRef} className="shelter-stage3d" />
 }

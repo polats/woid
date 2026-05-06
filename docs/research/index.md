@@ -20,6 +20,7 @@ The proven, non-LLM design patterns for autonomous NPCs.
 - [Mood systems — event-driven affect across shipped games](#/docs/mood-systems)
 - [Barotrauma — three-clock scenario architecture](#/docs/barotrauma)
 - [Fallout Shelter-likes & the Severance pitch — 2024–2026 genre survey](#/docs/fallout-shelter-likes)
+- [Agent behaviour — Fallout Shelter & Elder Scrolls Castles](#/docs/agent-behavior-fs-castles)
 
 ## Persistent multi-user worlds
 
