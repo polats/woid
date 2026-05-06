@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import * as tposeStore from './lib/tposeStore.js'
 import * as modelStore from './lib/modelStore.js'
+import * as rigStore from './lib/rigStore.js'
 import GlbViewer from './GlbViewer.jsx'
 import Lightbox from './components/Lightbox.jsx'
 
@@ -8,13 +9,14 @@ import Lightbox from './components/Lightbox.jsx'
  * Assets tab — derivative imagery and rigs for a character.
  *
  * Pipeline:
- *   01 T-pose      (FLUX.1-Kontext) ─ avatar → t-pose reference
- *   02 3D Model    (TRELLIS)        ─ t-pose → GLB, viewable in-browser
- *   03 Animations  (placeholder)    ─ to come (Kimodo-Motion)
+ *   01 T-pose       (FLUX.1-Kontext)        avatar → t-pose reference
+ *   02 3D Model     (TRELLIS / Hunyuan3D-2) t-pose → GLB
+ *   03 Rig          (UniRig + kimodo-tools) GLB → rigged + palms-down + imported,
+ *                                            preview animates with kimodo idle
  *
  * Each stage's job runs in a module-scoped store (lib/tposeStore,
- * lib/modelStore) so an in-flight generation survives drawer-tab
- * switches and remounts.
+ * lib/modelStore, lib/rigStore) so an in-flight generation survives
+ * drawer-tab switches and remounts.
  */
 export default function AgentAssets({ bridgeUrl, character }) {
   const pubkey = character?.pubkey
@@ -25,7 +27,7 @@ export default function AgentAssets({ bridgeUrl, character }) {
     <div className="agent-assets">
       <TposeSection bridgeUrl={bridgeUrl} character={character} onView={setLightbox} />
       <ModelSection bridgeUrl={bridgeUrl} pubkey={pubkey} onView={setLightbox} />
-      <AnimationsPlaceholder />
+      <RigSection bridgeUrl={bridgeUrl} pubkey={pubkey} />
       <Lightbox
         src={lightbox?.src}
         alt={lightbox?.alt}
@@ -261,32 +263,175 @@ function ModelSection({ bridgeUrl, pubkey, onView }) {
   )
 }
 
-/* ── Section 03: Animations placeholder ───────────────────────── */
+/* ── Section 03: Rig (UniRig + kimodo finalise) ───────────────── */
 
-function AnimationsPlaceholder() {
+function RigSection({ bridgeUrl, pubkey }) {
+  const state = useStoreState(rigStore, pubkey)
+  const initialUrl = pubkey ? `${bridgeUrl}/characters/${pubkey}/rig?t=0` : null
+
+  const [rigUrl, setRigUrl] = useState(initialUrl)
+  const [hasRig, setHasRig] = useState(false)
+  const [hasModel, setHasModel] = useState(false)
+  const [now, setNow] = useState(Date.now())
+
+  // Pre-flight HEAD probes — does the model exist? does a previous
+  // rig already? Mirrors ModelSection's pattern so the GLB viewer
+  // doesn't fire a 404 on first mount.
+  useEffect(() => {
+    if (!pubkey || !bridgeUrl) return
+    let cancelled = false
+    fetch(`${bridgeUrl}/characters/${pubkey}/model`, { method: 'HEAD' })
+      .then((r) => { if (!cancelled) setHasModel(r.ok) })
+      .catch(() => { if (!cancelled) setHasModel(false) })
+    fetch(`${bridgeUrl}/characters/${pubkey}/rig`, { method: 'HEAD' })
+      .then((r) => { if (!cancelled) setHasRig(r.ok) })
+      .catch(() => { if (!cancelled) setHasRig(false) })
+    return () => { cancelled = true }
+  }, [bridgeUrl, pubkey])
+
+  useEffect(() => {
+    if (!state.loading) return
+    const id = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(id)
+  }, [state.loading])
+
+  useEffect(() => {
+    if (state.resultUrl) {
+      setRigUrl(state.resultUrl)
+      setHasRig(true)
+    }
+  }, [state.resultUrl])
+
+  // Reflect upstream model regen — if the model store finishes,
+  // unlock our buttons so the user can rig the freshly-generated
+  // mesh without a refresh.
+  const modelState = useStoreState(modelStore, pubkey)
+  useEffect(() => {
+    if (modelState.resultUrl) setHasModel(true)
+  }, [modelState.resultUrl])
+
+  const elapsedMs = computeElapsed(state, now)
+  const elapsedLabel = formatElapsed(elapsedMs)
+  const stageLabel = renderStageLabel(state, elapsedLabel)
+  const progressPct = computeProgress(state, elapsedMs)
+  const ready = hasRig && !!rigUrl
+
+  // The bridge's force-gate refuses cross-backend re-imports unless
+  // body.force === true. Detect the gate-message in state.error so
+  // we can surface a one-click override button.
+  const needsForce = !!(state.error && /\{force:true\}/i.test(state.error))
+
+  const startRig = (backend, opts = {}) => rigStore.start({
+    pubkey, bridgeUrl,
+    body: { backend, ...(opts.force ? { force: true } : {}) },
+    meta: { backend, force: !!opts.force },
+  })
+
+  const kimodoCharId = state.result?.kimodoCharId
+  const importedAt = state.result?.importedAt
+
   return (
-    <section className="agent-assets-section is-locked">
-      <SectionHead step="03" title="Animations" status="is-soon" statusLabel="soon" />
+    <section className={`agent-assets-section${hasModel ? '' : ' is-locked'}`}>
+      <SectionHead
+        step="03"
+        title="Rig + Kimodo"
+        status={state.loading ? 'is-loading' : ready ? 'is-ready' : 'is-empty'}
+        statusLabel={state.loading ? 'working' : ready ? 'ready' : 'idle'}
+      />
       <p className="agent-assets-desc">
-        Rigged motion clips (idle, walk, wave, dance) generated from text via Kimodo-Motion,
-        retargeted onto the GLB rig.
+        Auto-rig via <strong>UniRig</strong>, palms-down bake in Blender, then import
+        into the kimodo character registry so animations can retarget onto this rig.
       </p>
+
       <div className="agent-assets-pipeline">
-        <Tile label="model" caption="source" muted>
-          <Empty>awaiting model</Empty>
+        <Tile label="3d model" caption="source" muted={!hasModel}>
+          {hasModel ? (
+            <GlbViewer src={`${bridgeUrl}/characters/${pubkey}/model?t=0`} />
+          ) : (
+            <Empty>awaiting model</Empty>
+          )}
         </Tile>
-        <Arrow muted />
-        <Tile label="animated" caption="result" muted>
-          <div className="agent-assets-soon">
-            <PlayIcon />
-            <span>coming soon</span>
-          </div>
+        <Arrow muted={!hasModel} />
+        <Tile label="rigged" caption="result" muted={!ready && !state.loading} frameTall>
+          {state.loading && state.stage !== 'done' ? (
+            <Progress pct={progressPct} label={stageLabel} />
+          ) : ready ? (
+            <GlbViewer
+              src={rigUrl}
+              kimodoMappingUrl={`${bridgeUrl}/characters/${pubkey}/rig-mapping`}
+            />
+          ) : (
+            <Empty>none yet</Empty>
+          )}
         </Tile>
       </div>
+
+      {/* Kimodo registry status — surfaces the imported char id once
+          the chain has run. Phase 6 will hydrate this on mount from
+          the bridge's character manifest so it survives reloads. */}
+      {kimodoCharId && (
+        <p className="agent-assets-hint">
+          imported as <code>{kimodoCharId}</code>
+          {importedAt ? ` · ${formatRelative(importedAt)}` : ''}
+        </p>
+      )}
+
       <div className="agent-assets-actions">
-        <button type="button" disabled className="agent-assets-btn">Animate</button>
-        <span className="agent-assets-hint">not yet implemented</span>
+        {state.loading ? (
+          <>
+            <button
+              type="button"
+              onClick={() => rigStore.cancel(pubkey)}
+              className="agent-assets-btn"
+            >
+              Cancel
+            </button>
+            <span className="agent-assets-hint">
+              {state.meta?.backend
+                ? `${state.meta.backend} in progress · ${stageLabel}`
+                : stageLabel}
+            </span>
+          </>
+        ) : needsForce ? (
+          <>
+            <button
+              type="button"
+              onClick={() => startRig(state.meta?.backend ?? 'trellis', { force: true })}
+              className="agent-assets-btn primary"
+              title="Overwrite the existing kimodo registry record"
+            >
+              Force overwrite
+            </button>
+            <span className="agent-assets-hint">
+              cross-backend regen — confirm to overwrite the kimodo record
+            </span>
+          </>
+        ) : (
+          <>
+            {/* Single button — UniRig auto-rigs whatever GLB it's
+                handed regardless of which mesh backend produced it.
+                The backend tag only flows into the kimodo char id
+                (`unirig_<pub12>_<backend>`); inherit it from whatever
+                started the most recent model run, falling back to
+                trellis. The force-gate covers cross-backend regen. */}
+            <button
+              type="button"
+              onClick={() => startRig(modelState.meta?.backend ?? 'trellis')}
+              disabled={!hasModel}
+              className="agent-assets-btn primary"
+              title="UniRig + palms-down + kimodo import (~50s warm)"
+            >
+              {ready ? 'Regenerate rig' : 'Generate rig'}
+            </button>
+            {!hasModel && (
+              <span className="agent-assets-hint">generate a 3D model first</span>
+            )}
+          </>
+        )}
       </div>
+      {state.error && !needsForce && (
+        <p className="agent-profile-error">{state.error}</p>
+      )}
     </section>
   )
 }
@@ -337,14 +482,6 @@ function Arrow({ muted }) {
   )
 }
 
-function PlayIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M10 8.5l6 3.5-6 3.5z" fill="currentColor" />
-    </svg>
-  )
-}
 
 function Progress({ pct, label }) {
   return (
@@ -395,6 +532,19 @@ function formatElapsed(ms) {
   const s = Math.floor(ms / 1000)
   if (s < 60) return `${s}s`
   return `${Math.floor(s / 60)}m ${s % 60}s`
+}
+
+// "5s ago" / "12m ago" / "2h ago" / "3d ago" — used by the rig
+// section's kimodo-imported badge. Coarse buckets are fine; this is
+// surfaced under the rigged tile, not in a feed.
+function formatRelative(ms) {
+  if (!ms) return ''
+  const dt = Math.max(0, Date.now() - ms)
+  const s = Math.floor(dt / 1000)
+  if (s < 60) return `${s}s ago`
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
 }
 
 function renderStageLabel(state, elapsed) {

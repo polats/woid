@@ -4316,19 +4316,41 @@ app.get("/characters/:pubkey/model", async (req, res) => {
 });
 
 // UniRig output (Phase 2) — saved by /generate-rig/stream after the
-// `rigging` stage. Phase 3 will produce `rig_palmsdown.glb` (final
-// output served via /rig?variant=palms or a dedicated route).
+// `rigging` stage. Defaults to the palms-down baked variant once
+// kimodo-tools has finalised it (Phase 3); falls back to the raw
+// UniRig rig.glb between stages. Pass ?variant=raw to force the
+// pre-bake mesh.
 app.get("/characters/:pubkey/rig", async (req, res) => {
   const pubkey = req.params.pubkey;
   const dir = getCharDir(pubkey);
-  const path = join(dir, "rig.glb");
+  const variant = String(req.query.variant || "").toLowerCase();
+  const palms = join(dir, "rig_palmsdown.glb");
+  const raw = join(dir, "rig.glb");
+  const preferPalms = variant !== "raw";
+  const path = preferPalms && existsSync(palms) ? palms
+             : existsSync(raw) ? raw
+             : null;
+  if (!path) return res.status(404).json({ error: "no rig" });
+  res.setHeader("Content-Type", "model/gltf-binary");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  return createReadStream(path).pipe(res);
+});
+
+// Bone mapping derived by kimodo-tools' unirig_mapping.py — the same
+// table embedded in the kimodo registry record. Returned as JSON so
+// a GlbViewer can attach a KimodoAnimator to the rigged skinned mesh.
+app.get("/characters/:pubkey/rig-mapping", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const dir = getCharDir(pubkey);
+  const path = join(dir, "rig_mapping.json");
   if (existsSync(path)) {
-    res.setHeader("Content-Type", "model/gltf-binary");
+    res.setHeader("Content-Type", "application/json");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Access-Control-Allow-Origin", "*");
     return createReadStream(path).pipe(res);
   }
-  res.status(404).json({ error: "no rig" });
+  res.status(404).json({ error: "no rig mapping" });
 });
 
 // Post-image serving (#355). Filename pattern: <shortId>.<ext>.

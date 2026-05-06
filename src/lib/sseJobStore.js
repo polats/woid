@@ -122,6 +122,10 @@ export function createSseJobStore({ pathFor, resultUrlField }) {
               stage: 'done',
               stageMessage: 'done',
               resultUrl: parsed[resultUrlField],
+              // Stash the full done payload too — endpoints that
+              // return more than just a URL (rig generates kimodoCharId,
+              // label, mapping, importedAt) can read state.result.
+              result: parsed,
             })
           } else if (eventType === 'error') {
             throw new Error(parsed.error || 'stream error')
