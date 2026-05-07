@@ -26,10 +26,15 @@ import { resolveSchedule } from './schedules.js'
 
 export const WALK_DURATION_MIN = 5    // sim minutes — feels like 5 real seconds
 // Pacing — intra-room idle wandering. Agents in a steady state
-// (rest/work/social) pick a new waypoint every PACE_DURATION_MIN
-// sim minutes and the renderer lerps between them. Continuous loop;
-// a future phase can add per-action stationary periods.
+// (rest/work/social) alternate between a `moving` phase (PACE_DURATION_MIN
+// sim minutes lerping to a fresh in-room waypoint) and a `resting` phase
+// (random duration in [PACE_REST_MIN_MIN, PACE_REST_MAX_MIN], holding the
+// last waypoint and playing 'idle' or 'wave'). Phase + role are
+// deterministic per (agentId, restCycle) so the resolver is reproducible.
 export const PACE_DURATION_MIN = 3
+export const PACE_REST_MIN_MIN = 1
+export const PACE_REST_MAX_MIN = 4
+const PACE_REST_ROLES = ['idle', 'wave']
 
 // Stable hash for deterministic positioning. Same agent + same
 // action always lands at the same spot. Avalanche finalizer (Murmur3
@@ -62,13 +67,27 @@ function deterministicPos(agentId, action, roomId) {
 
 // Per-cycle pacing waypoint. Same agent + room + cycle index always
 // picks the same spot, so the resolver is reproducible across ticks
-// during the cycle. The cycle index advances every PACE_DURATION_MIN,
+// during the cycle. The cycle index advances every move/rest pair,
 // producing a fresh-looking sequence of in-room waypoints.
 function pacePos(agentId, roomId, cycle) {
   const h = hashCode(`${agentId}:${roomId}:pace:${cycle}`)
   const localU = 0.2 + ((h & 0xffff) / 0xffff) * 0.6
   const localV = 0.2 + (((h >>> 16) & 0xffff) / 0xffff) * 0.6
   return { roomId, localU, localV }
+}
+
+// Random rest duration + role per cycle, deterministic by (agent, cycle).
+// Hashing on cycle (a sim-minute floor) means the same agent at the same
+// cycle picks the same role / duration on every recompute — important
+// because the resolver runs each tick and we don't want to re-roll mid-rest.
+function pickRestRole(agentId, cycle) {
+  const h = hashCode(`${agentId}:rest:role:${cycle}`)
+  return PACE_REST_ROLES[h & (PACE_REST_ROLES.length - 1)] ?? 'idle'
+}
+function pickRestDuration(agentId, cycle) {
+  const h = hashCode(`${agentId}:rest:dur:${cycle}`)
+  const norm = (h & 0xffff) / 0xffff
+  return PACE_REST_MIN_MIN + norm * (PACE_REST_MAX_MIN - PACE_REST_MIN_MIN)
 }
 
 const STEADY_STATES = new Set(['rest', 'work', 'social'])
@@ -108,6 +127,14 @@ export function resolveAgentState(agent, simMinutes) {
       // logic stops trying to interpolate.
       walkFrom: null,
       walkTo: null,
+      // Fresh steady state — clear any stale pacing fields so the
+      // pacing loop kicks off cleanly from the destination.
+      paceFrom: null,
+      paceTo: null,
+      paceStartedAt: null,
+      paceMode: null,
+      paceRestUntil: null,
+      paceRestRole: null,
     }
   }
 
@@ -138,32 +165,78 @@ export function resolveAgentState(agent, simMinutes) {
       paceFrom: null,
       paceTo: null,
       paceStartedAt: null,
+      paceMode: null,
+      paceRestUntil: null,
+      paceRestRole: null,
     }
   }
 
   // ── Intra-room pacing ──────────────────────────────────────────
-  // Agent is in the right room and the right state. Pick a fresh
-  // in-room waypoint every PACE_DURATION_MIN sim minutes; the
-  // renderer lerps wrapper.position between paceFrom and paceTo
-  // for smooth wandering. Cycle index drives the waypoint hash so
-  // each leg picks a different spot without explicit state.
+  // Two-phase loop:
+  //   moving   → lerp paceFrom → paceTo over PACE_DURATION_MIN min,
+  //              role 'walk'.
+  //   resting  → hold at the just-reached waypoint for a random
+  //              duration in [PACE_REST_MIN_MIN, PACE_REST_MAX_MIN],
+  //              role 'idle' or 'wave' (deterministic per cycle).
+  //
+  // Cycle index = floor(simMinutes); guaranteed monotonic so each
+  // moving→resting transition gets a fresh waypoint, role, and
+  // duration without us having to track an explicit counter.
   if (STEADY_STATES.has(agent.state) && inRoom) {
-    const paceElapsed = agent.paceStartedAt != null
-      ? simMinutes - agent.paceStartedAt
-      : Infinity
-    if (paceElapsed >= PACE_DURATION_MIN) {
-      const cycle = Math.floor(simMinutes / PACE_DURATION_MIN)
-      const next = pacePos(agent.id, inRoom, cycle)
-      // First pace cycle since entering the room — start from the
-      // anchor pos (deterministic-by-action). Subsequent cycles
-      // start from wherever the last leg ended.
-      const from = agent.paceTo ?? agent.pos
-        ?? deterministicPos(agent.id, agent.state, inRoom)
-      return {
-        paceFrom: from,
-        paceTo: next,
-        paceStartedAt: simMinutes,
+    if (agent.paceMode === 'moving') {
+      // Currently walking toward a waypoint. When the move window
+      // elapses, settle at paceTo and start a rest period.
+      const paceElapsed = agent.paceStartedAt != null
+        ? simMinutes - agent.paceStartedAt
+        : Infinity
+      if (paceElapsed >= PACE_DURATION_MIN) {
+        const cycle = Math.floor(simMinutes)
+        return {
+          pos: agent.paceTo ?? agent.pos
+            ?? deterministicPos(agent.id, agent.state, inRoom),
+          paceFrom: null,
+          paceTo: null,
+          paceStartedAt: null,
+          paceMode: 'resting',
+          paceRestUntil: simMinutes + pickRestDuration(agent.id, cycle),
+          paceRestRole: pickRestRole(agent.id, cycle),
+        }
       }
+      return null
+    }
+
+    if (agent.paceMode === 'resting') {
+      // Stationary; once the rest period ends, pick a fresh waypoint
+      // and start the next move.
+      if (simMinutes >= (agent.paceRestUntil ?? simMinutes)) {
+        const cycle = Math.floor(simMinutes)
+        const next = pacePos(agent.id, inRoom, cycle)
+        const from = agent.pos
+          ?? deterministicPos(agent.id, agent.state, inRoom)
+        return {
+          paceFrom: from,
+          paceTo: next,
+          paceStartedAt: simMinutes,
+          paceMode: 'moving',
+          paceRestUntil: null,
+          paceRestRole: null,
+        }
+      }
+      return null
+    }
+
+    // First entry to a steady state — kick off the loop with a move.
+    const cycle = Math.floor(simMinutes)
+    const next = pacePos(agent.id, inRoom, cycle)
+    const from = agent.pos
+      ?? deterministicPos(agent.id, agent.state, inRoom)
+    return {
+      paceFrom: from,
+      paceTo: next,
+      paceStartedAt: simMinutes,
+      paceMode: 'moving',
+      paceRestUntil: null,
+      paceRestRole: null,
     }
   }
 

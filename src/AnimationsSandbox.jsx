@@ -336,11 +336,22 @@ export default function AnimationsSandbox() {
                         <span>movement direction</span>
                       </label>
                       {useDirection && (
-                        <DirectionDial
-                          angle={directionAngle}
-                          onChange={setDirectionAngle}
-                          disabled={creating}
-                        />
+                        <div className="seam-picker-direction-dial">
+                          <DirectionDial
+                            angle={directionAngle}
+                            onChange={setDirectionAngle}
+                            disabled={creating}
+                          />
+                          <button
+                            type="button"
+                            className="seam-picker-direction-reset"
+                            onClick={() => setDirectionAngle(0)}
+                            disabled={creating || directionAngle === 0}
+                            title="Reset to forward"
+                          >
+                            reset to forward
+                          </button>
+                        </div>
                       )}
                     </div>
                   )}
@@ -489,8 +500,10 @@ export default function AnimationsSandbox() {
   )
 }
 
-// Compass-style picker. Top of the circle = forward (+Z), right = +X.
-// `angle` is in radians, 0 = forward, increasing clockwise top-down.
+// Compass-style picker. Bottom of the circle = forward (+Z, the avatar's
+// natural forward), right = +X (the avatar's right). `angle` is in radians:
+// 0 = forward, π/2 = right, π = back, -π/2 = left. The data sent to the API
+// is unchanged — `[sin(angle), cos(angle)]` already maps these correctly.
 // Click or drag inside the circle to set the direction; the handle
 // projects to the rim regardless of click radius so distance stays
 // implicit (controlled server-side by a duration heuristic).
@@ -498,17 +511,19 @@ function DirectionDial({ angle, onChange, disabled, size = 96 }) {
   const cx = size / 2
   const cy = size / 2
   const r = size / 2 - 8
-  // Convert angle → handle position. y axis in SVG points down, but we
-  // want angle 0 to render at the top, so y = cy - cos(angle) * r.
+  // Place angle 0 at the bottom of the dial (SVG y is down). Right (+π/2)
+  // stays at right because sin > 0 there; back (π) goes to the top; left
+  // (-π/2) at left.
   const hx = cx + Math.sin(angle) * r
-  const hy = cy - Math.cos(angle) * r
+  const hy = cy + Math.cos(angle) * r
   const setFromPointer = (clientX, clientY, target) => {
     if (disabled) return
     const rect = target.getBoundingClientRect()
     const dx = clientX - rect.left - cx
     const dy = clientY - rect.top - cy
     if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return
-    onChange(Math.atan2(dx, -dy))
+    // Inverse of the placement above: dy positive (below center) → angle 0.
+    onChange(Math.atan2(dx, dy))
   }
   return (
     <svg
@@ -530,12 +545,12 @@ function DirectionDial({ angle, onChange, disabled, size = 96 }) {
       {[0, 1, 2, 3].map((q) => {
         const a = q * Math.PI / 2
         const x1 = cx + Math.sin(a) * (r - 4)
-        const y1 = cy - Math.cos(a) * (r - 4)
+        const y1 = cy + Math.cos(a) * (r - 4)
         const x2 = cx + Math.sin(a) * r
-        const y2 = cy - Math.cos(a) * r
+        const y2 = cy + Math.cos(a) * r
         return <line key={q} x1={x1} y1={y1} x2={x2} y2={y2} className="seam-dial-tick" />
       })}
-      <text x={cx} y={9} className="seam-dial-label">F</text>
+      <text x={cx} y={size - 3} className="seam-dial-label">F</text>
       <line x1={cx} y1={cy} x2={hx} y2={hy} className="seam-dial-pointer" />
       <circle cx={hx} cy={hy} r={5} className="seam-dial-handle" />
       <circle cx={cx} cy={cy} r={2} className="seam-dial-center" />

@@ -17,7 +17,7 @@
  * starting state before any user assignment.
  */
 
-export const BUILTIN_TAGS = ['idle', 'walk', 'cast']
+export const BUILTIN_TAGS = ['idle', 'walk', 'cast', 'wave']
 export const BUILTIN_DEFAULTS = {
   idle: '342711ffd11f',
   cast: '4290481a993e',

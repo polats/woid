@@ -141,6 +141,15 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
       paceFrom: partial.paceFrom ?? null,
       paceTo: partial.paceTo ?? null,
       paceStartedAt: partial.paceStartedAt ?? null,
+      // Pacing alternates between two phases: 'moving' (lerping
+      // toward paceTo) and 'resting' (stationary, playing
+      // paceRestRole — 'idle' or 'wave' — for paceRestUntil sim
+      // minutes). When `paceMode === 'moving'`, paceFrom/To/StartedAt
+      // are populated; when 'resting', they're cleared and
+      // paceRestUntil + paceRestRole drive behavior.
+      paceMode: partial.paceMode ?? null,
+      paceRestUntil: partial.paceRestUntil ?? null,
+      paceRestRole: partial.paceRestRole ?? null,
       relations: partial.relations ?? { parents: [], children: [] },
       createdAt: snapshot.simMinutes,
     }
