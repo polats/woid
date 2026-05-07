@@ -188,3 +188,42 @@ export async function headNpcAsset(npub, filename) {
     throw err;
   }
 }
+
+/**
+ * Kimodo motion-JSON shipping. Mirrors the NPC asset pattern — local
+ * dev pushes content-addressed motion JSONs (~400 KB each) up; prod
+ * frontends GET them through the bridge's `/v1/animations/:id` route.
+ *
+ * Keyspace: `animations/<id>.json`. The id is the kimodo motion id
+ * (12-hex-char, content-addressed by the model's output) so PUTs are
+ * idempotent and a re-publish is a no-op.
+ */
+export function animationKey(id) {
+  return `animations/${id}.json`;
+}
+
+export async function putAnimation(id, buffer) {
+  if (!client) throw new Error("S3 not configured");
+  await client.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: animationKey(id),
+    Body: buffer,
+    ContentType: "application/json",
+    CacheControl: "public, max-age=31536000, immutable",
+  }));
+  return animationKey(id);
+}
+
+export async function getAnimationStream(id) {
+  if (!client) throw new Error("S3 not configured");
+  try {
+    const out = await client.send(new GetObjectCommand({
+      Bucket: bucket,
+      Key: animationKey(id),
+    }));
+    return { body: out.Body, contentType: out.ContentType, contentLength: out.ContentLength };
+  } catch (err) {
+    if (err.$metadata?.httpStatusCode === 404 || err.name === "NoSuchKey") return null;
+    throw err;
+  }
+}

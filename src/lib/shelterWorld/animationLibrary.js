@@ -82,41 +82,54 @@ export function normalizeTag(input) {
   return isValidTag(slug) ? slug : null
 }
 
-// Motion JSON resolution: try the bundled-static path first
-// (`/animations/<id>.json` — works on prod where there's no kimodo
-// proxy), then fall back to `/api/kimodo/animations/<id>` (the Vite
-// dev middleware route). The static bundle ships with the built-in
-// defaults; user-generated motions still flow through /api/kimodo
-// in dev. On prod, missing motions resolve to null and the avatar
-// factory's fallback path takes over.
+// Motion JSON resolution — three-tier fallback so the same code
+// path works in dev and prod:
+//
+//   1. `/animations/<id>.json`         — static bundle (built-in
+//      defaults shipped with the frontend; CDN-cached on Vercel).
+//   2. `${bridgeUrl}/v1/animations/:id` — bridge-proxied S3 (user-
+//      published motions; populated by scripts/publish-animation.js).
+//   3. `/api/kimodo/animations/<id>`   — Vite dev middleware (only
+//      reachable in local dev where kimodo runs on the same machine).
+//
+// Each tier validates that the response is a kimodo-shaped motion
+// (parsable JSON with a bone_names array) so a Vercel SPA fallback
+// never gets cached as motion data.
+import config from '../../config.js'
+
+const _bridgeUrl = config.agentSandbox?.bridgeUrl || null
+
+async function tryFetchMotion(url) {
+  try {
+    const r = await fetch(url)
+    if (!r.ok) return null
+    const ct = r.headers.get('content-type') || ''
+    if (!ct.includes('application/json')) return null
+    const m = await r.json()
+    if (m && typeof m === 'object' && Array.isArray(m.bone_names)) return m
+    return null
+  } catch {
+    return null
+  }
+}
+
 async function fetchMotion(id) {
   if (!id) return null
   if (cache.has(id)) return cache.get(id)
   const existing = inflight.get(id)
   if (existing) return existing
   const p = (async () => {
-    try {
-      const fromStatic = await fetch(`/animations/${id}.json`)
-      if (fromStatic.ok) {
-        const ct = fromStatic.headers.get('content-type') || ''
-        if (ct.includes('application/json')) {
-          const m = await fromStatic.json()
-          if (m && typeof m === 'object' && Array.isArray(m.bone_names)) {
-            cache.set(id, m)
-            return m
-          }
-        }
+    const sources = [`/animations/${id}.json`]
+    if (_bridgeUrl) sources.push(`${_bridgeUrl}/v1/animations/${id}`)
+    sources.push(`/api/kimodo/animations/${id}`)
+    for (const url of sources) {
+      const m = await tryFetchMotion(url)
+      if (m) {
+        cache.set(id, m)
+        return m
       }
-    } catch { /* fall through to /api/kimodo */ }
-    try {
-      const r = await fetch(`/api/kimodo/animations/${id}`)
-      if (!r.ok) return null
-      const m = await r.json()
-      if (m) cache.set(id, m)
-      return m
-    } catch {
-      return null
     }
+    return null
   })().finally(() => { inflight.delete(id) })
   inflight.set(id, p)
   return p

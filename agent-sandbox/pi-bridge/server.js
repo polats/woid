@@ -4632,6 +4632,32 @@ app.get("/characters/:pubkey/rig-mapping", async (req, res) => {
   res.status(404).json({ error: "no rig mapping" });
 });
 
+// Kimodo motion-JSON serving — proxy from S3 so the prod frontend
+// can resolve user-published motion ids without reaching the kimodo
+// motion API directly (it's GPU-bound and runs on dev machines, not
+// on Railway). Built-ins still ship as static `/animations/<id>.json`
+// in the frontend's public/ directory; this route is the
+// user-published fallback for everything else. Idempotent immutable
+// cache headers — kimodo motion ids are content-addressed.
+app.get("/v1/animations/:id", async (req, res) => {
+  const id = req.params.id;
+  if (!/^[a-f0-9]{8,32}$/i.test(id)) {
+    return res.status(400).json({ error: "bad animation id" });
+  }
+  if (!s3.s3Configured) return res.status(503).json({ error: "S3 not configured" });
+  try {
+    const out = await s3.getAnimationStream(id);
+    if (!out) return res.status(404).json({ error: "not found" });
+    res.setHeader("Content-Type", out.contentType || "application/json");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    out.body.pipe(res);
+  } catch (err) {
+    console.error(`[v1/animations] ${id}:`, err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Post-image serving (#355). Filename pattern: <shortId>.<ext>.
 // Prefers S3 when configured; falls back to disk under the character
 // dir for local dev. Immutable URLs — no cache-buster needed.
