@@ -1,22 +1,72 @@
-// Thin client over the kimodo proxy. Animations live on the kimodo server;
-// woid is just a viewer + generator. SSE-streamed generate so the UI can
-// show progress while the model runs.
+// Thin client over the kimodo proxy. Animations live on the kimodo server
+// in dev; on prod the same shape comes from the bridge's S3-backed
+// `/v1/animations*` endpoints. The fetch helpers fall through:
+//
+//   listAnimations:  /api/kimodo/animations  →  ${bridge}/v1/animations
+//   fetchAnimation:  /animations/<id>.json   →  ${bridge}/v1/animations/<id>
+//                    →  /api/kimodo/animations/<id>
+//
+// Each tier validates response shape so a Vercel SPA fallback (which
+// returns 200 + HTML for any path) doesn't poison callers.
+
+import config from '../config.js'
+
+const cfg = config.agentSandbox || {}
+
+function isMotionRecord(m) {
+  return m && typeof m === 'object' && Array.isArray(m.bone_names)
+}
+
+async function tryJsonFetch(url) {
+  try {
+    const r = await fetch(url)
+    if (!r.ok) return null
+    const ct = r.headers.get('content-type') || ''
+    if (!ct.includes('application/json')) return null
+    return await r.json()
+  } catch { return null }
+}
 
 export async function listAnimations() {
-  const r = await fetch('/api/kimodo/animations')
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  const data = await r.json()
-  // kimodo returns either {animations: [...]} or a bare array depending on
-  // version — accept both shapes.
-  if (Array.isArray(data)) return data
-  if (Array.isArray(data?.animations)) return data.animations
+  // Dev path — full local-kimodo list with prompts + metadata.
+  const local = await tryJsonFetch('/api/kimodo/animations')
+  if (local) {
+    if (Array.isArray(local)) return local
+    if (Array.isArray(local.animations)) return local.animations
+  }
+  // Prod path — bridge returns the published-set as
+  // `{ animations: [{ id, sizeKb, publishedAt }] }`. Wrap each into a
+  // minimal motion-card-shaped record so the existing grid renders.
+  if (cfg.bridgeUrl) {
+    const remote = await tryJsonFetch(`${cfg.bridgeUrl}/v1/animations`)
+    if (remote && Array.isArray(remote.animations)) {
+      return remote.animations.map((a) => ({
+        id: a.id,
+        prompt: '(published motion)',
+        seconds: null,
+        fps: null,
+        sizeKb: a.sizeKb,
+        publishedAt: a.publishedAt,
+      }))
+    }
+  }
   return []
 }
 
 export async function fetchAnimation(id) {
-  const r = await fetch(`/api/kimodo/animations/${encodeURIComponent(id)}`)
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  return r.json()
+  const enc = encodeURIComponent(id)
+  // 1. Static bundle (built-in defaults shipped with the frontend).
+  const fromStatic = await tryJsonFetch(`/animations/${enc}.json`)
+  if (isMotionRecord(fromStatic)) return fromStatic
+  // 2. Bridge-proxied S3 (user-published motions).
+  if (cfg.bridgeUrl) {
+    const fromBridge = await tryJsonFetch(`${cfg.bridgeUrl}/v1/animations/${enc}`)
+    if (isMotionRecord(fromBridge)) return fromBridge
+  }
+  // 3. Vite dev middleware (only reachable in local dev).
+  const fromKimodo = await tryJsonFetch(`/api/kimodo/animations/${enc}`)
+  if (isMotionRecord(fromKimodo)) return fromKimodo
+  throw new Error(`no motion found for ${id} (not published?)`)
 }
 
 export async function deleteAnimation(id) {

@@ -7203,6 +7203,37 @@ body {
   border: 1px solid var(--ink);
   color: var(--ink-3);
 }
+.anim-tag-card-pill.is-published {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.anim-tag-card-pill.is-warning {
+  background: var(--transmit);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.anim-tag-card.needs-publish {
+  border-color: var(--transmit);
+}
+.anim-tag-card-publish {
+  margin: 0 6px 6px;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1.5px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  cursor: pointer;
+}
+.anim-tag-card-publish:hover:not(:disabled) {
+  background: var(--transmit);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.anim-tag-card-publish:disabled { opacity: 0.5; cursor: default; }
 .anim-tag-card-x {
   background: var(--card);
   color: var(--ink);

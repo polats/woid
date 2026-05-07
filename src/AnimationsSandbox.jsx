@@ -446,14 +446,28 @@ export default function AnimationsSandbox() {
             const item = animId ? items.find((a) => (a.id ?? a.name) === animId) : null
             const isBuiltin = animationLibrary.BUILTIN_TAGS.includes(tag)
             const isDefault = !entry.explicit && !!animId
+            const isPublished = !!animId && publishedSet.has(animId)
+            const needsPublish = !!animId && !isPublished
             return (
               <div
                 key={tag}
-                className={`anim-tag-card${animId ? ' is-assigned' : ''}${animId && animId === selectedId ? ' is-selected' : ''}`}
+                className={`anim-tag-card${animId ? ' is-assigned' : ''}${animId && animId === selectedId ? ' is-selected' : ''}${needsPublish ? ' needs-publish' : ''}`}
               >
                 <div className="anim-tag-card-head">
                   <strong>{tag}</strong>
                   {isBuiltin && <span className="anim-tag-card-pill">built-in</span>}
+                  {animId && isPublished && (
+                    <span
+                      className="anim-tag-card-pill is-published"
+                      title="Motion is published to prod"
+                    >published</span>
+                  )}
+                  {animId && needsPublish && (
+                    <span
+                      className="anim-tag-card-pill is-warning"
+                      title="Tagged but not published — prod will fall back to idle"
+                    >⚠ unpublished</span>
+                  )}
                   {!isBuiltin && (
                     <button
                       type="button"
@@ -479,6 +493,17 @@ export default function AnimationsSandbox() {
                   <div className="anim-tag-card-body anim-tag-card-empty">
                     unassigned
                   </div>
+                )}
+                {needsPublish && cfg.bridgeUrl && (
+                  <button
+                    type="button"
+                    className="anim-tag-card-publish"
+                    onClick={() => onPublish(animId)}
+                    disabled={publishingId === animId}
+                    title="Upload this motion to prod so prod players can resolve this tag"
+                  >
+                    {publishingId === animId ? 'Publishing…' : 'Publish'}
+                  </button>
                 )}
               </div>
             )
