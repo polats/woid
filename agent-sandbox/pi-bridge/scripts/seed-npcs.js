@@ -122,9 +122,19 @@ export async function seedNpcs({ charactersDir, publishProfile = null }) {
       // No "seeded" classification — this is a partial sync.
     } else {
       // Fresh seed (or RESEED_NPCS=1): copy manifest + sk and write
-      // the .pi/identity helper file.
+      // the .pi/identity helper file. Rewrite avatarUrl using the
+      // CURRENT PUBLIC_BRIDGE_URL so a manifest exported from a
+      // local-network bridge doesn't leave a LAN IP baked in on
+      // prod. If the seed manifest has no avatarUrl at all, we
+      // synthesise one — the bridge serves /characters/:pubkey/avatar
+      // from disk regardless, but frontends read the field to render.
       mkdirSync(join(targetDir, ".pi"), { recursive: true });
-      writeFileSync(join(targetDir, "agent.json"), readFileSync(manifestSeed));
+      const rawManifest = JSON.parse(readFileSync(manifestSeed, "utf-8"));
+      const publicUrl = process.env.PUBLIC_BRIDGE_URL;
+      if (publicUrl) {
+        rawManifest.avatarUrl = `${publicUrl}/characters/${pubkey}/avatar?t=${Date.now()}`;
+      }
+      writeFileSync(join(targetDir, "agent.json"), JSON.stringify(rawManifest, null, 2));
       writeFileSync(join(targetDir, "sk.hex"), readFileSync(skSeed), { mode: 0o600 });
       writeFileSync(join(targetDir, ".pi", "identity"), pubkey);
       if (alreadyExists) reseeded.push(npub);

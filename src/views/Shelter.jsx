@@ -35,7 +35,11 @@ export default function Shelter() {
                   {focused?.name ?? ''}
                 </div>
                 <ShelterCharacterCard agent={focusedAgent} />
-                {import.meta.env.DEV && <ShelterDebug />}
+                {/* Dev panel — hidden behind a backtick toggle (or the
+                    floating "DEV" button) so it stays out of the way for
+                    casual viewers but is reachable on prod for adding
+                    NPCs / inspecting state. */}
+                <ShelterDebug />
               </div>
             </div>
             <div className="game-tab-pane" hidden={tab !== 'agents'}>

@@ -61,6 +61,5 @@
   "updatedAt": 1778188608558,
   "about": "The... receptionist? He woke you up and is now guiding you through the machinations of The Company.",
   "profileSource": "ai",
-  "profileModel": "meta/llama-3.1-8b-instruct",
-  "avatarUrl": "http://10.0.0.36:13457/characters/7a887ac2f1dc8d8d81e1d19ae0372d616f0eed5ba76afc57b4aa1135af6eb2df/avatar?t=1778188608558"
+  "profileModel": "meta/llama-3.1-8b-instruct"
 }

@@ -119,10 +119,15 @@ async function main() {
   console.log(`\n📦 Publishing NPC: ${manifest.name} (${npub.slice(0, 16)}...)`);
   console.log(`   role=${manifest.npc_role}  room=${manifest.npc_default_pos.roomId}`);
 
-  // 1. Copy manifest + sk to seed-npcs/<npub>/
+  // 1. Copy manifest + sk to seed-npcs/<npub>/. Strip avatarUrl —
+  // it's specific to the bridge it was generated on (e.g. local LAN
+  // IP) and seed-npcs.js rewrites it on seed using the current
+  // PUBLIC_BRIDGE_URL.
   const seedTarget = join(SEED_DIR, npub);
   mkdirSync(seedTarget, { recursive: true });
-  writeFileSync(join(seedTarget, "agent.json"), readFileSync(join(CHARACTERS_DIR, npub, "agent.json")));
+  const cleanManifest = { ...manifest };
+  delete cleanManifest.avatarUrl;
+  writeFileSync(join(seedTarget, "agent.json"), JSON.stringify(cleanManifest, null, 2));
   writeFileSync(join(seedTarget, "sk.hex"), readFileSync(skPath), { mode: 0o600 });
   console.log(`✓ wrote seed-npcs/${npub.slice(0, 24)}.../{agent.json,sk.hex}`);
 
