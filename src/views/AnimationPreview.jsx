@@ -8,7 +8,16 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { Animator } from '../lib/kimodo/animator.js'
 import { MALE_STYLIZED } from '../lib/kimodo/rigs.js'
 
-export default function AnimationPreview({ motion }) {
+// `frame` is optional. When undefined the clip plays in a loop. When set to a
+// number, the animator is paused at exactly that frame — used by the seam
+// picker so the user can visually pick a loop-seam pose.
+//
+// `anchorInPlace` toggles whether the motion's per-frame pelvis translation
+// is applied. Defaults to false (matches Shelter, where the wrapper Group
+// owns world position) so the figure stays centered regardless of the clip.
+// Set true to play the authored translation through (preview a translating
+// dance / wave / cast clip in world space).
+export default function AnimationPreview({ motion, frame, anchorInPlace = true }) {
   const mountRef = useRef(null)
   const [error, setError] = useState(null)
   const [loaded, setLoaded] = useState(false)
@@ -131,11 +140,35 @@ export default function AnimationPreview({ motion }) {
     }
   }, [])
 
-  // When the motion changes, push it into the existing animator.
+  // When the motion changes (or the anchor toggle flips), push it into the
+  // existing animator. Re-calling setMotion is cheap and necessary to re-bind
+  // the applyRootTranslation flag without tearing down the scene.
   useEffect(() => {
     if (!loaded || !motion || !animatorRef.current) return
-    animatorRef.current.setMotion(motion, { loop: true })
-  }, [loaded, motion])
+    animatorRef.current.setMotion(motion, {
+      loop: true,
+      applyRootTranslation: !anchorInPlace,
+    })
+  }, [loaded, motion, anchorInPlace])
+
+  // Scrub / play toggle. When `frame` is a number, jump the animator to that
+  // frame and freeze. When undefined, resume looped playback. The animator
+  // keeps the current pose between frames since the rAF tick still renders
+  // the scene; only its update() short-circuits on `playing=false`.
+  useEffect(() => {
+    if (!loaded || !motion || !animatorRef.current) return
+    const a = animatorRef.current
+    if (typeof frame === 'number') {
+      a.elapsed = frame / motion.fps
+      a.frame = -1
+      a.playing = true   // allow this single update() to apply
+      a.update()
+      a.playing = false
+    } else {
+      a.playing = true
+      a.lastTime = performance.now() / 1000
+    }
+  }, [loaded, motion, frame])
 
   return (
     <div className="anim-preview-bleed" ref={mountRef}>

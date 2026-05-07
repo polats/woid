@@ -140,7 +140,7 @@ export function createAvatarFactory({ registry } = {}) {
         groundOffsetY: 0,
         alignMode: 'rest',
       })
-      const idle = await animationLibrary.get(animationLibrary.STANDARD_IDS.idle)
+      const idle = await animationLibrary.getRole('idle')
       // In-place idle. Shelter's wrapper Group owns world position
       // (game state tweens it during walks). Letting kimodo's
       // root_positions translate the pelvis here would double-move

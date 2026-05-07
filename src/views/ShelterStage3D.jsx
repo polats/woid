@@ -375,6 +375,15 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
     // Bootstrap the standard idle clip into animationLibrary so the
     // first kimodo spawn doesn't pay the fetch latency.
     animationLibrary.bootstrap()
+    // When the user reassigns a role in the Animations tab, invalidate
+    // every live avatar's currentRole so the next sync tick swaps in the
+    // newly-assigned clip (or the idle fallback). Without this, agents
+    // already in their target role keep playing the previous animation.
+    const unsubRoles = animationLibrary.subscribe(() => {
+      for (const handle of liveAvatarsRef.current.values()) {
+        if (handle && !handle.pending) handle.currentRole = null
+      }
+    })
     const registry = createCharacterRegistry({ bridgeUrl: cfg.bridgeUrl })
     const factory = createAvatarFactory({ registry })
     factoryRef.current = factory
@@ -602,6 +611,7 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('click', onClick)
       try { unsubRegistry() } catch {}
+      try { unsubRoles() } catch {}
       try { registry.dispose() } catch {}
       try { factory.dispose() } catch {}
       factoryRef.current = null
@@ -660,6 +670,32 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
           )
         }
         existing.object3d.visible = true
+        // Per-state motion swap. Walking AND pacing agents get the
+        // user-assigned 'walk' clip (or fall back to idle when none
+        // is assigned — animationLibrary.getRole resolves the
+        // fallback). Idle / event / asleep agents get the assigned
+        // idle. Each handle remembers its current role so we don't
+        // churn setMotion() every frame.
+        if (existing.animator) {
+          const wantedRole = isLerping ? 'walk' : 'idle'
+          if (existing.currentRole !== wantedRole) {
+            const wantedId = animationLibrary.getRoleId(wantedRole)
+            const motion = animationLibrary.peek(wantedId)
+            if (motion) {
+              existing.animator.setMotion(motion, { loop: true, applyRootTranslation: false })
+              existing.currentRole = wantedRole
+            } else {
+              // Not in cache yet — fetch and apply once it resolves. Mark the
+              // role optimistically so we don't spam fetches each frame.
+              existing.currentRole = wantedRole
+              animationLibrary.getRole(wantedRole).then((m) => {
+                if (m && existing.animator && existing.currentRole === wantedRole) {
+                  existing.animator.setMotion(m, { loop: true, applyRootTranslation: false })
+                }
+              })
+            }
+          }
+        }
         continue
       }
       if (existing?.pending) continue
