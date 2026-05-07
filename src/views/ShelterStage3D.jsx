@@ -314,11 +314,11 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     // their normal by a shader-uniform thickness so we can pulse it
     // per-frame. Original materials are never touched; outline meshes
     // set castShadow=false so shadows stay clean.
-    const HIGHLIGHT_BASE = new THREE.Color(0xffe600)  // bright saturated yellow
-    const HIGHLIGHT_PEAK = new THREE.Color(0xfffaa0)  // hot near-white peak
+    const HIGHLIGHT_BASE = new THREE.Color(0xe61a3a)  // saturated crimson — pops against paper/wood backgrounds
+    const HIGHLIGHT_PEAK = new THREE.Color(0xff7080)  // lighter pink-red peak
     const OUTLINE_THICKNESS_MIN = 0.022
     const OUTLINE_THICKNESS_MAX = 0.034
-    const PULSE_PERIOD_SEC = 1.1
+    const PULSE_PERIOD_SEC = 2.2
     // Reused per-frame to avoid GC churn while the focus stays on.
     const _faceCamMat = new THREE.Matrix4()
     const _faceCamVec = new THREE.Vector3()
