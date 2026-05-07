@@ -4,21 +4,15 @@ import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js
 import { formatSimTime, simDay, tickAgents } from '../lib/shelterStore/index.js'
 
 /**
- * Floating dev menu for the Shelter view. Two unified rosters
- * (local dummies + bridge characters), each row a single toggle —
- * pressing `+` adds the agent, pressing `×` removes them. Active
- * agents float to the top of each section so toggling feels stable.
+ * Floating dev menu for the Shelter view. Two unified rosters —
+ * NPCs (kind:'npc' bridge chars; content) and Players (kind:'player'
+ * bridge chars; recruitable employees) — each row a single toggle.
+ * Press `+` to add the agent, `×` to remove. Active rows float to
+ * the top of each section so toggling feels stable.
  *
  * Avatars: bridge characters show their `/characters/:pubkey/avatar`
- * thumbnail; dummies show a deterministic letter chip.
+ * thumbnail; if missing, a deterministic letter chip stands in.
  */
-
-const DUMMY_ROSTER = [
-  { id: 'dummy-alice',    name: 'Alice',  traits: { focus: 0.7, social: 0.3 } },
-  { id: 'dummy-bob',      name: 'Bob',    traits: { focus: 0.4, social: 0.8 } },
-  { id: 'dummy-carla',    name: 'Carla',  traits: { focus: 0.6, social: 0.6 } },
-  { id: 'dummy-dmitri',   name: 'Dmitri', traits: { focus: 0.8, social: 0.2 } },
-]
 
 function hashCode(s) {
   let h = 0
@@ -77,7 +71,8 @@ export default function ShelterDebug() {
   const [open, setOpen] = useState(false)
   const snapshot = useShelterStore()
   const store = useShelterStoreApi()
-  const [bridgeChars, setBridgeChars] = useState([])
+  const [npcChars, setNpcChars] = useState([])
+  const [playerChars, setPlayerChars] = useState([])
   const [bridgeStatus, setBridgeStatus] = useState('idle')
   const cfg = config.agentSandbox || {}
 
@@ -101,11 +96,14 @@ export default function ShelterDebug() {
     if (!open || !cfg.bridgeUrl) return
     let cancelled = false
     setBridgeStatus('loading')
-    fetch(`${cfg.bridgeUrl}/characters`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
+    Promise.all([
+      fetch(`${cfg.bridgeUrl}/characters?kind=npc`).then((r) => (r.ok ? r.json() : null)),
+      fetch(`${cfg.bridgeUrl}/characters?kind=player`).then((r) => (r.ok ? r.json() : null)),
+    ])
+      .then(([npcData, playerData]) => {
         if (cancelled) return
-        setBridgeChars(data?.characters ?? [])
+        setNpcChars(npcData?.characters ?? [])
+        setPlayerChars(playerData?.characters ?? [])
         setBridgeStatus('ok')
       })
       .catch(() => { if (!cancelled) setBridgeStatus('error') })
@@ -114,20 +112,27 @@ export default function ShelterDebug() {
 
   // Build unified roster items so each list row can render with the
   // same component regardless of source.
-  const dummyItems = useMemo(() => DUMMY_ROSTER.map((d) => ({
-    kind: 'dummy',
-    id: d.id,
-    name: d.name,
-    avatarUrl: null,
-    pubkey: null,
+  const npcItems = useMemo(() => npcChars.map((c) => ({
+    kind: 'npc',
+    id: `npc-${c.pubkey.slice(0, 12)}`,
+    name: c.name ?? c.pubkey.slice(0, 8),
+    role: c.npc_role ?? null,
+    avatarUrl: cfg.bridgeUrl ? `${cfg.bridgeUrl}/characters/${c.pubkey}/avatar` : null,
+    pubkey: c.pubkey,
     addPayload: {
-      id: d.id, name: d.name, traits: d.traits,
-      scheduleId: 'worker', llmEnabled: false,
+      id: `npc-${c.pubkey.slice(0, 12)}`,
+      name: c.name ?? 'Unnamed',
+      kind: 'npc',
+      pubkey: c.pubkey,
+      pos: c.npc_default_pos ?? null,
+      // npc_role is bridge metadata; we mirror it onto the agent for
+      // future role-based lookup without round-tripping the bridge.
+      role: c.npc_role ?? null,
     },
-  })), [])
+  })), [npcChars, cfg.bridgeUrl])
 
-  const bridgeItems = useMemo(() => bridgeChars.map((c) => ({
-    kind: 'bridge',
+  const playerItems = useMemo(() => playerChars.map((c) => ({
+    kind: 'player',
     id: `bridge-${c.pubkey.slice(0, 12)}`,
     name: c.name ?? c.pubkey.slice(0, 8),
     avatarUrl: cfg.bridgeUrl ? `${cfg.bridgeUrl}/characters/${c.pubkey}/avatar` : null,
@@ -139,7 +144,7 @@ export default function ShelterDebug() {
       scheduleId: 'worker',
       llmEnabled: false,
     },
-  })), [bridgeChars, cfg.bridgeUrl])
+  })), [playerChars, cfg.bridgeUrl])
 
   const agentsById = snapshot?.agents ?? {}
   const agentsByPubkey = useMemo(() => {
@@ -164,8 +169,8 @@ export default function ShelterDebug() {
     const inactive = items.filter((it) => !resolveAgent(it))
     return [...active, ...inactive]
   }
-  const sortedDummies = useMemo(() => sortRoster(dummyItems), [dummyItems, agentsById])
-  const sortedBridge = useMemo(() => sortRoster(bridgeItems), [bridgeItems, agentsById])
+  const sortedNpcs = useMemo(() => sortRoster(npcItems), [npcItems, agentsById])
+  const sortedPlayers = useMemo(() => sortRoster(playerItems), [playerItems, agentsById])
 
   const add = (item) => {
     store.addAgent(item.addPayload)
@@ -202,9 +207,19 @@ export default function ShelterDebug() {
             {activeCount} agent{activeCount === 1 ? '' : 's'}
           </div>
 
-          <h4>Local roster</h4>
+          <h4>
+            NPCs
+            <span className="shelter-debug-hint">
+              {bridgeStatus === 'loading' && '…'}
+              {bridgeStatus === 'error' && '(unreachable)'}
+              {bridgeStatus === 'ok' && `(${npcChars.length})`}
+            </span>
+          </h4>
+          {bridgeStatus === 'ok' && npcChars.length === 0 && (
+            <p className="shelter-debug-empty">No NPCs yet — create one in the NPCs view.</p>
+          )}
           <ul className="shelter-debug-roster">
-            {sortedDummies.map((item) => (
+            {sortedNpcs.map((item) => (
               <RosterRow
                 key={item.id}
                 item={item}
@@ -216,18 +231,18 @@ export default function ShelterDebug() {
           </ul>
 
           <h4>
-            Bridge characters
+            Players
             <span className="shelter-debug-hint">
               {bridgeStatus === 'loading' && '…'}
               {bridgeStatus === 'error' && '(unreachable)'}
-              {bridgeStatus === 'ok' && `(${bridgeChars.length})`}
+              {bridgeStatus === 'ok' && `(${playerChars.length})`}
             </span>
           </h4>
-          {bridgeStatus === 'ok' && bridgeChars.length === 0 && (
-            <p className="shelter-debug-empty">No characters in the bridge.</p>
+          {bridgeStatus === 'ok' && playerChars.length === 0 && (
+            <p className="shelter-debug-empty">No player characters in the bridge.</p>
           )}
           <ul className="shelter-debug-roster">
-            {sortedBridge.map((item) => (
+            {sortedPlayers.map((item) => (
               <RosterRow
                 key={item.id}
                 item={item}

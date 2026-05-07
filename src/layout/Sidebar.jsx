@@ -65,6 +65,15 @@ export default function Sidebar({
             </li>
             <li>
               <a
+                href="#/npcs"
+                className={linkClass(route.view === 'npcs')}
+                title="NPC management"
+              >
+                NPCs
+              </a>
+            </li>
+            <li>
+              <a
                 href="#/journal"
                 className={linkClass(route.view === 'journal')}
               >

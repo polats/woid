@@ -18,6 +18,7 @@ import Game from './views/Game.jsx'
 import Shelter from './views/Shelter.jsx'
 import SpellsSandbox from './SpellsSandbox.jsx'
 import AnimationsSandbox from './AnimationsSandbox.jsx'
+import NPCs from './views/NPCs.jsx'
 
 // Top-level docs (Docs section).
 const modules = import.meta.glob('../docs/*.md', { query: '?raw', import: 'default', eager: true })
@@ -57,6 +58,7 @@ function parseHash() {
   if (h === 'shelter') return { view: 'shelter' }
   if (h === 'spells') return { view: 'spells' }
   if (h === 'animations') return { view: 'animations' }
+  if (h === 'npcs') return { view: 'npcs' }
   if (h === 'testing') return { view: 'testing' }
   if (h.startsWith('testing/')) return { view: 'testing', sessionName: decodeURIComponent(h.slice(8)) }
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
@@ -194,6 +196,7 @@ export default function App() {
         {route.view === 'journal' && config.features?.agentSandbox && <Journal />}
         {route.view === 'spells' && config.features?.agentSandbox && <SpellsSandbox />}
         {route.view === 'animations' && config.features?.agentSandbox && <AnimationsSandbox />}
+        {route.view === 'npcs' && config.features?.agentSandbox && <NPCs />}
         {/* Both Game and Shelter are conditionally mounted. Each has
             its own WebGLRenderer; keeping them both mounted blew past
             the browser's WebGL context cap and caused the visible

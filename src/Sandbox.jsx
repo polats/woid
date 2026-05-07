@@ -65,7 +65,7 @@ export default function Sandbox() {
     if (!cfg.bridgeUrl) return
     try {
       const [chars, objs, rms] = await Promise.all([
-        fetch(`${cfg.bridgeUrl}/characters`).then((r) => r.json()),
+        fetch(`${cfg.bridgeUrl}/characters?kind=player`).then((r) => r.json()),
         fetch(`${cfg.bridgeUrl}/objects`).then((r) => r.ok ? r.json() : { objects: [] }),
         fetch(`${cfg.bridgeUrl}/rooms`).then((r) => r.ok ? r.json() : { rooms: [] }),
       ])

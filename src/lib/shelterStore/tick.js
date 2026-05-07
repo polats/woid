@@ -13,6 +13,10 @@ import { resolveAgentState } from './resolver.js'
 export function tickAgents(store) {
   const snapshot = store.getSnapshot()
   for (const agent of Object.values(snapshot.agents)) {
+    // NPCs (e.g. the Receptionist Edi Schmid) are content, not
+    // simulated — they have a fixed pos, no schedule, and the
+    // resolver should never try to walk them anywhere.
+    if (agent.kind === 'npc') continue
     const patch = resolveAgentState(agent, snapshot.simMinutes)
     if (patch) store.updateAgent(agent.id, patch)
   }

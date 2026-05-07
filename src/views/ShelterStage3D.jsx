@@ -181,10 +181,12 @@ function computeBounds(rooms, cellW, cellH) {
 
 const easeInOutCubic = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 
-export default function ShelterStage3D({ onFocusChange = null } = {}) {
+export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChange = null } = {}) {
   const hostRef = useRef(null)
   const onFocusChangeRef = useRef(onFocusChange)
   useEffect(() => { onFocusChangeRef.current = onFocusChange }, [onFocusChange])
+  const onAgentFocusChangeRef = useRef(onAgentFocusChange)
+  useEffect(() => { onAgentFocusChangeRef.current = onAgentFocusChange }, [onAgentFocusChange])
 
   // Engine handles to live longer than the main effect's closure so a
   // sibling presence-sync effect can spawn / despawn / reposition
@@ -412,6 +414,7 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
         if (prevHandle) prevHandle.currentRole = null
       }
       focusedAgentIdRef.current = null
+      onAgentFocusChangeRef.current?.(null)
       if (!focusedRoomId || !homeFrame) return
       const fx = camera.position.x
       const fy = camera.position.y
@@ -542,11 +545,24 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       }
       focusedAgentIdRef.current = agentId
       focusedAgentRestoreRef.current = applyOutline(handle.object3d)
+      // Notify the parent so it can render the character card. Look up
+      // profile fields (name, avatarUrl) from the character registry,
+      // falling back to the agent's stored name and the bridge fallback
+      // URL when the registry hasn't populated this entry yet.
+      const agentRecord = shelterStore.getSnapshot().agents?.[agentId]
+      const reg = agentRecord?.pubkey ? registry.get(agentRecord.pubkey) : null
+      onAgentFocusChangeRef.current?.({
+        id: agentId,
+        pubkey: agentRecord?.pubkey ?? null,
+        name: reg?.name ?? agentRecord?.name ?? null,
+        avatarUrl: reg?.avatarUrl ?? null,
+      })
       // Force-play 'wave' immediately so the selection has visible
-      // feedback before the next per-snapshot role swap. The role-swap
-      // path in the sync effect re-checks focused state and keeps
-      // 'wave' assigned while focus persists.
-      if (handle.animator) {
+      // feedback before the next per-snapshot role swap. Only kimodo-
+      // tier avatars expose setMotion; static / fallback animators
+      // (e.g. NPCs without a kimodo rig like Edi) get no role swap —
+      // they hold whatever default motion the fallback path assigned.
+      if (typeof handle.animator?.setMotion === 'function') {
         const waveId = animationLibrary.getRoleId('wave')
         const cached = animationLibrary.peek(waveId)
         if (cached) {
@@ -555,7 +571,8 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
         } else {
           handle.currentRole = 'wave' // optimistic
           animationLibrary.getRole('wave').then((m) => {
-            if (m && handle.animator && focusedAgentIdRef.current === agentId) {
+            if (m && typeof handle.animator?.setMotion === 'function'
+                && focusedAgentIdRef.current === agentId) {
               handle.animator.setMotion(m, { loop: true, applyRootTranslation: false })
             }
           })
@@ -976,7 +993,14 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
               : isResting
                 ? (a.paceRestRole ?? 'idle')
                 : 'idle'
-          if (existing.currentRole !== wantedRole) {
+          // Only the kimodo-rigged avatar tier exposes setMotion — the
+          // static + fallback tiers use a THREE.AnimationMixer-shaped
+          // animator that has no role concept. Skip role-swap for
+          // those (e.g. Edi, currently rendered via the fallback
+          // avatar.glb until she gets a kimodo rig).
+          const canSwapRole =
+            typeof existing.animator?.setMotion === 'function'
+          if (canSwapRole && existing.currentRole !== wantedRole) {
             const wantedId = animationLibrary.getRoleId(wantedRole)
             const motion = animationLibrary.peek(wantedId)
             if (motion) {
@@ -987,7 +1011,8 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
               // role optimistically so we don't spam fetches each frame.
               existing.currentRole = wantedRole
               animationLibrary.getRole(wantedRole).then((m) => {
-                if (m && existing.animator && existing.currentRole === wantedRole) {
+                if (m && existing.animator && typeof existing.animator.setMotion === 'function'
+                    && existing.currentRole === wantedRole) {
                   existing.animator.setMotion(m, { loop: true, applyRootTranslation: false })
                 }
               })
@@ -1034,6 +1059,7 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
         try { focusedAgentRestoreRef.current?.() } catch {}
         focusedAgentRestoreRef.current = null
         focusedAgentIdRef.current = null
+        onAgentFocusChangeRef.current?.(null)
       }
       if (handle.dispose) handle.dispose()
       live.delete(id)

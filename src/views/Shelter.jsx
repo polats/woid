@@ -2,6 +2,7 @@ import { useState } from 'react'
 import ShelterStage3D from './ShelterStage3D.jsx'
 import ShelterDebug from './ShelterDebug.jsx'
 import ShelterAgentList from './ShelterAgentList.jsx'
+import ShelterCharacterCard from './ShelterCharacterCard.jsx'
 
 const TABS = [
   { id: 'stage',  label: 'Stage',  glyph: '◆' },
@@ -11,6 +12,7 @@ const TABS = [
 export default function Shelter() {
   const [tab, setTab] = useState('stage')
   const [focused, setFocused] = useState(null)
+  const [focusedAgent, setFocusedAgent] = useState(null)
   return (
     <div className="game-view shelter-view">
       <div className="game-phone-frame">
@@ -25,10 +27,14 @@ export default function Shelter() {
                 context survives — same trick Sims uses. */}
             <div className="game-tab-pane" hidden={tab !== 'stage'}>
               <div className="shelter-screen-body">
-                <ShelterStage3D onFocusChange={setFocused} />
+                <ShelterStage3D
+                  onFocusChange={setFocused}
+                  onAgentFocusChange={setFocusedAgent}
+                />
                 <div className={`shelter-room-label${focused ? ' visible' : ''}`}>
                   {focused?.name ?? ''}
                 </div>
+                <ShelterCharacterCard agent={focusedAgent} />
                 {import.meta.env.DEV && <ShelterDebug />}
               </div>
             </div>

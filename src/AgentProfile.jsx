@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import config from './config.js'
 import { useBridgeModels } from './hooks/useBridgeModels.js'
+import { extractLivePersona, streamGenerateProfile } from './lib/personaStream.js'
 
 const PROVIDER_LABELS = { 'nvidia-nim': 'NIM', 'google': 'Google', 'local': 'Local' }
 
@@ -83,25 +84,6 @@ const HARNESS_OPTIONS = [
     hint: 'Bridge runs no LLM. Connect a remote driver via SSE + /act. See public/llms.txt.',
   },
 ]
-
-// Best-effort partial-JSON extraction so we can write the growing fields
-// back to the form as the stream arrives. Handles the case where the
-// closing `"` or `}` hasn't landed yet by falling back to "everything
-// after the key marker up to EOL".
-function extractLivePersona(raw) {
-  if (!raw) return { name: '', about: '' }
-  function pull(key) {
-    const closed = raw.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`))
-    if (closed) return closed[1].replace(/\\n/g, '\n').replace(/\\"/g, '"')
-    const open = raw.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)$`))
-    if (open) return open[1].replace(/\\n/g, '\n').replace(/\\"/g, '"')
-    return ''
-  }
-  return {
-    name: pull('name').slice(0, 80),
-    about: pull('about').slice(0, 1000),
-  }
-}
 
 export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, onDirtyChange }) {
   const [character, setCharacter] = useState(null)
@@ -329,78 +311,51 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
     streamAbortRef.current = ctrl
 
     try {
-      const res = await fetch(
-        `${cfg.bridgeUrl}/characters/${pubkey}/generate-profile/stream`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            seed: seed.trim() || undefined,
-            overwriteName: true,
-            model: genModel || undefined,
-          }),
-          signal: ctrl.signal,
-        },
-      )
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ''
       let rawDelta = ''
-
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const events = buf.split(/\n\n/)
-        buf = events.pop() ?? ''
-        for (const evChunk of events) {
-          const lines = evChunk.split('\n')
-          let eventType = 'message'
-          const dataLines = []
-          for (const line of lines) {
-            if (line.startsWith('event:')) eventType = line.slice(6).trim()
-            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+      await streamGenerateProfile({
+        bridgeUrl: cfg.bridgeUrl,
+        pubkey,
+        body: {
+          seed: seed.trim() || undefined,
+          overwriteName: true,
+          model: genModel || undefined,
+        },
+        signal: ctrl.signal,
+        onEvent: (evt, parsed) => {
+          if (!parsed) return
+          if (evt === 'model') {
+            setStreamModel(parsed.model)
+          } else if (evt === 'delta') {
+            rawDelta += parsed.content ?? ''
+            // Stream directly into the name + about inputs.
+            const live = extractLivePersona(rawDelta)
+            setForm((f) => ({
+              ...f,
+              name: live.name || f.name,
+              about: live.about || f.about,
+            }))
+          } else if (evt === 'persona-done') {
+            // Snap to the clean final values parsed on the server.
+            setForm((f) => ({
+              ...f,
+              name: parsed.name ?? f.name,
+              about: parsed.about ?? f.about,
+            }))
+          } else if (evt === 'avatar-start') {
+            setAvatarLoading(true)
+            setAvatarError(null)
+          } else if (evt === 'avatar-done') {
+            setAvatarLoading(false)
+            setCharacter((prev) => ({ ...prev, avatarUrl: parsed.avatarUrl }))
+          } else if (evt === 'avatar-error') {
+            setAvatarLoading(false)
+            setAvatarError(parsed.error || 'avatar generation failed')
+          } else if (evt === 'done') {
+            setCharacter((prev) => ({ ...prev, ...parsed }))
+            onUpdated?.(parsed)
           }
-          const data = dataLines.join('\n')
-          if (!data) continue
-          try {
-            const parsed = JSON.parse(data)
-            if (eventType === 'model') {
-              setStreamModel(parsed.model)
-            } else if (eventType === 'delta') {
-              rawDelta += parsed.content ?? ''
-              // Stream directly into the name + about inputs.
-              const live = extractLivePersona(rawDelta)
-              setForm((f) => ({ ...f, name: live.name || f.name, about: live.about || f.about }))
-            } else if (eventType === 'persona-done') {
-              // Snap to clean final values parsed on the server.
-              setForm((f) => ({
-                ...f,
-                name: parsed.name ?? f.name,
-                about: parsed.about ?? f.about,
-              }))
-            } else if (eventType === 'avatar-start') {
-              setAvatarLoading(true)
-              setAvatarError(null)
-            } else if (eventType === 'avatar-done') {
-              setAvatarLoading(false)
-              setCharacter((prev) => ({ ...prev, avatarUrl: parsed.avatarUrl }))
-            } else if (eventType === 'avatar-error') {
-              setAvatarLoading(false)
-              setAvatarError(parsed.error || 'avatar generation failed')
-            } else if (eventType === 'done') {
-              setCharacter((prev) => ({ ...prev, ...parsed }))
-              onUpdated?.(parsed)
-            } else if (eventType === 'error') {
-              throw new Error(parsed.error || 'stream error')
-            }
-          } catch {
-            /* tolerate malformed chunks */
-          }
-        }
-      }
+        },
+      })
     } catch (err) {
       if (err.name !== 'AbortError') setError(err.message || String(err))
     } finally {

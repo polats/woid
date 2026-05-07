@@ -5347,6 +5347,549 @@ body {
   transform: translate(-50%, 0);
 }
 
+/* Character profile card — overlays the top of the shelter stage when
+   an agent is tap-focused. Mirrors the agent-sandbox drawer aesthetic:
+   ink-on-paper header (dark band with avatar + name), paper body with
+   tab content, hard-bordered tab footer. Hard 2px ink border + 4px
+   shadow throughout so it reads as a tactile object stamped over the
+   stage. */
+.shelter-card {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  width: min(92%, 320px);
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  z-index: 4;
+  pointer-events: auto;
+  animation: shelter-card-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+@keyframes shelter-card-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.shelter-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--ink);
+  color: var(--paper);
+  border-bottom: 2px solid var(--ink);
+}
+.shelter-card-avatar {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  background: var(--paper-3, #20232a);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--paper);
+}
+.shelter-card-avatar img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.shelter-card-avatar span {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 900;
+  font-size: 20px;
+  color: var(--paper);
+  text-transform: uppercase;
+}
+.shelter-card-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+.shelter-card-title strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  color: var(--paper);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shelter-card-title code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--paper-3, rgba(255, 255, 255, 0.7));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shelter-card-body {
+  background: var(--paper);
+  padding: 12px 14px;
+  /* Fixed height — the card shouldn't change size between tabs.
+     Long bios scroll inside; the 4-slot schedule fits with margin. */
+  height: 220px;
+  overflow-y: auto;
+}
+.shelter-card-bio {
+  font-family: var(--font-sans, system-ui);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink);
+  margin: 0;
+  white-space: pre-wrap;
+}
+.shelter-card-bio-empty {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0;
+}
+
+.shelter-card-schedule {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.shelter-card-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-2, var(--paper));
+}
+.shelter-card-slot-glyph {
+  font-size: 16px;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+.shelter-card-slot-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+  width: 64px;
+}
+.shelter-card-slot-meta strong {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.shelter-card-slot-hours {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+}
+.shelter-card-slot-room {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shelter-card-tabs {
+  display: flex;
+  border-top: 2px solid var(--ink);
+  background: var(--paper-2, var(--paper));
+}
+.shelter-card-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 4px;
+  background: var(--paper-2, var(--paper));
+  color: var(--ink-3, var(--ink));
+  border: none;
+  border-right: 1.5px solid var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.shelter-card-tab:last-child { border-right: none; }
+.shelter-card-tab:hover:not(.active) { background: var(--paper); color: var(--ink); }
+.shelter-card-tab.active {
+  background: var(--ink);
+  color: var(--paper);
+}
+.shelter-card-tab svg { flex-shrink: 0; }
+
+/* ── NPCs view ───────────────────────────── */
+/* Layout reuses .sandbox3 + .sandbox3-cards from the agent sandbox so
+   the NPC roster on the left matches the player-character roster
+   visually. The right column stacks per-pane sections: detail/create
+   form on top, persona-prompt editor underneath. */
+.npcs-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: var(--sp-2);
+}
+.npcs-pane {
+  background: var(--card);
+  border: 2px solid var(--ink);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.npcs-pane h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -.02em;
+  text-transform: lowercase;
+  color: var(--ink);
+}
+.npcs-pane h3 {
+  margin: var(--sp-2) 0 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.npcs-pane-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1.5px solid var(--ink);
+}
+.npcs-pane-portrait {
+  width: 48px;
+  height: 48px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.npcs-pane-portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.npcs-pane-portrait span {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 900;
+  font-size: 22px;
+}
+.npcs-pane-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.npcs-pane-title strong {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 16px;
+}
+.npcs-bio {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.npcs-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.npcs-form label {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.npcs-form input,
+.npcs-form select {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  min-width: 0;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.npcs-form-actions {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-top: var(--sp-1, 4px);
+}
+
+.npcs-prompt {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 10px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-2);
+  color: var(--ink);
+  resize: vertical;
+  min-height: 200px;
+  box-sizing: border-box;
+}
+
+.npcs-btn {
+  padding: 4px 12px;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-stretch: 75%;
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.npcs-btn:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
+.npcs-btn:disabled { opacity: 0.4; cursor: default; }
+.npcs-btn.primary {
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 2px 2px 0 var(--transmit);
+}
+.npcs-btn.primary:hover:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--transmit);
+}
+.npcs-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+}
+
+/* Clickable portrait in the NPCs Profile card — opens a Lightbox
+   when an avatar is present. Subtle cursor + hover lift to signal
+   the affordance. */
+.agent-profile-card-portrait.is-clickable { cursor: zoom-in; }
+.agent-profile-card-portrait.is-clickable:hover {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/* Compact avatar seed — sits under the Regenerate-avatar button in
+   the 96px portrait column. Visually subordinate to the button so the
+   primary action is unambiguous. */
+.npcs-avatar-seed {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 3px 6px;
+  border: 1.5px dashed var(--ink-faint);
+  background: transparent;
+  color: var(--ink);
+  outline: none;
+}
+.npcs-avatar-seed:hover,
+.npcs-avatar-seed:focus { border-color: var(--ink-muted); }
+
+/* Persona regen row — seed input left, regen button right. Sits
+   directly under .agent-profile-about, inside the card body. */
+.npcs-persona-row {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: stretch;
+  margin-top: 4px;
+}
+.npcs-persona-seed {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1.5px dashed transparent;
+  background: transparent;
+  color: var(--ink);
+  outline: none;
+  border-bottom: 1.5px dashed var(--ink-faint);
+}
+.npcs-persona-seed:hover,
+.npcs-persona-seed:focus { border-bottom-color: var(--ink-muted); }
+
+/* Role + Default room fields inside the card body — same dashed-
+   underline aesthetic as .agent-profile-name/about so the whole card
+   reads as one editable surface. */
+.npcs-card-field {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-top: 4px;
+}
+.npcs-card-field input,
+.npcs-card-field select {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  min-width: 0;
+}
+
+/* Header buttons in the NPCs sidebar — `+ New` plus a gear-icon
+   settings toggle. Aligned to the right of the header. */
+.npcs-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Gear button shares the `+ New` style (dark ink fill, paper text)
+   so the SVG inherits paper via currentColor. Active (`is-open`)
+   inverts to a paper fill so the toggle state is visible. The
+   cascade puts .sandbox3-cards header button at higher specificity
+   than this class, so we bump specificity by combining selectors. */
+.sandbox3-cards header button.npcs-settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+.sandbox3-cards header button.npcs-settings-toggle.is-open {
+  background: var(--paper);
+  color: var(--ink);
+}
+.npcs-settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+  /* Persona prompt textarea inside is sized for the narrow sidebar —
+     scrolls vertically, wraps at the cards-column width. */
+}
+.npcs-settings-pane .npcs-pane {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+.npcs-settings-pane .npcs-prompt {
+  min-height: 160px;
+  font-size: 11px;
+}
+
+/* Page-level tabs — horizontal cousins of the agent-drawer side-tabs.
+   Same icon+uppercase-mono label, same ink-on-paper / inverted active
+   state, same chunky 2px ink border. The active tab "merges" into the
+   pane immediately below by sharing its background and dropping its
+   bottom border (.is-attached on the pane drops the matching top edge
+   under the active tab). */
+.npcs-tabs {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  margin-bottom: -2px; /* overlap onto the pane border below */
+}
+.npcs-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--paper-2);
+  color: var(--ink-muted);
+  border: 2px solid var(--ink);
+  border-radius: 8px 8px 0 0;
+  margin-right: -2px; /* stack borders */
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, padding-bottom 120ms ease;
+}
+.npcs-tab:hover:not(.active):not(:disabled) {
+  background: var(--paper);
+  color: var(--ink);
+}
+.npcs-tab.active {
+  background: var(--card);
+  color: var(--ink);
+  /* Pull the bottom border down by 2px so it sits *below* the pane's
+     top edge — the active tab visually merges with the pane. */
+  border-bottom-color: var(--card);
+  padding-bottom: 10px;
+}
+.npcs-tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.npcs-tab svg { flex-shrink: 0; }
+
+/* Pane that lives directly under .npcs-tabs gets `.is-attached` so its
+   top-left corner is square (matches the active tab's flush join). */
+.npcs-pane.is-attached { border-top-left-radius: 0; }
+
+.npcs-tab-panel {
+  margin-top: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
 /* Floating dev menu — only mounted in dev. Lives inside the phone
    screen so it's clipped to the framed viewport. */
 .shelter-debug-button {

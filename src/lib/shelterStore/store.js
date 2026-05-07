@@ -21,6 +21,12 @@ import { OFFLINE_CAP_MIN } from './clock.js'
 const STORAGE_KEY = 'woid.shelter.v1'
 const SCHEMA_VERSION = 1
 
+// Note on NPCs: there is no built-in NPC seed. NPCs are bridge-side
+// characters with `kind:'npc'` and the user adds them to a shelter via
+// the dev panel (ShelterDebug). The store treats them as ordinary
+// agent records with `kind:'npc'` set; tickAgents already skips those.
+// Production NPC distribution is documented in docs/design/npc-deploy.md.
+
 const blankSnapshot = () => ({
   version: SCHEMA_VERSION,
   lastTickWallClock: Date.now(),
@@ -29,6 +35,43 @@ const blankSnapshot = () => ({
   agents: {},
   events: [],
 })
+
+/**
+ * Build a full agent record from a partial. Single source of truth
+ * for the agent shape — used by addAgent (called from the bridge
+ * roster), seedDefaults (NPCs), and any future seed paths.
+ *
+ * Defaults are conservative: no schedule, no pos, no pacing fields.
+ * Caller decides what to populate.
+ */
+function makeAgentRecord(partial, simMinutes) {
+  return {
+    id: partial.id,
+    name: partial.name ?? 'Unnamed',
+    // 'employee' covers the player-driven agents that go through the
+    // schedule resolver; 'npc' is content (Edi etc.) skipped by tickAgents.
+    kind: partial.kind ?? 'employee',
+    role: partial.role ?? null,
+    pubkey: partial.pubkey ?? null,
+    llmEnabled: partial.llmEnabled ?? false,
+    traits: partial.traits ?? {},
+    scheduleId: partial.scheduleId ?? 'worker',
+    assignment: partial.assignment ?? null,
+    state: partial.state ?? 'idle',
+    stateSince: partial.stateSince ?? simMinutes,
+    pos: partial.pos ?? null,
+    walkFrom: partial.walkFrom ?? null,
+    walkTo: partial.walkTo ?? null,
+    paceFrom: partial.paceFrom ?? null,
+    paceTo: partial.paceTo ?? null,
+    paceStartedAt: partial.paceStartedAt ?? null,
+    paceMode: partial.paceMode ?? null,
+    paceRestUntil: partial.paceRestUntil ?? null,
+    paceRestRole: partial.paceRestRole ?? null,
+    relations: partial.relations ?? { parents: [], children: [] },
+    createdAt: partial.createdAt ?? simMinutes,
+  }
+}
 
 function readFromStorage() {
   try {
@@ -56,8 +99,35 @@ export const LocalOnlySync = {
   async pull() { return null },
 }
 
+// Legacy agent ids that were hardcoded as default NPCs in earlier
+// versions. Pruned on load so existing localStorage saves don't keep
+// rendering ghost NPCs after the hardcoded seed was removed. NPCs
+// now come exclusively from the bridge via the dev panel.
+const LEGACY_HARDCODED_NPC_IDS = ['edi-schmid']
+
+function pruneLegacyHardcodedNpcs(snapshot) {
+  let agents = snapshot.agents
+  let mutated = false
+  for (const id of LEGACY_HARDCODED_NPC_IDS) {
+    if (!agents[id]) continue
+    if (!mutated) { agents = { ...agents }; mutated = true }
+    delete agents[id]
+  }
+  if (!mutated) return snapshot
+  return { ...snapshot, agents }
+}
+
 export function createShelterStore({ sync = LocalOnlySync } = {}) {
   let snapshot = readFromStorage() ?? blankSnapshot()
+  // Persist the prune so localStorage stops carrying the legacy entry
+  // and reloads don't have to re-clean. pruneLegacyHardcodedNpcs is a
+  // no-op for fresh saves, so this only writes when there's actually
+  // something to drop.
+  const pruned = pruneLegacyHardcodedNpcs(snapshot)
+  if (pruned !== snapshot) {
+    snapshot = pruned
+    writeToStorage(snapshot)
+  }
   const listeners = new Set()
 
   // Apply offline catch-up immediately so consumers see a fresh
@@ -117,42 +187,7 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
       console.warn('[shelterStore] addAgent: duplicate id', id)
       return null
     }
-    const agent = {
-      id,
-      name: partial.name ?? 'Unnamed',
-      pubkey: partial.pubkey ?? null,
-      llmEnabled: partial.llmEnabled ?? false,
-      traits: partial.traits ?? {},
-      scheduleId: partial.scheduleId ?? 'worker',
-      assignment: partial.assignment ?? null,
-      state: partial.state ?? 'idle',
-      stateSince: partial.stateSince ?? snapshot.simMinutes,
-      pos: partial.pos ?? null,
-      // Lerp endpoints recorded at walk-start — used by the renderer
-      // to smoothly interpolate world position during
-      // `state === 'walking'`. Both cleared by the resolver when the
-      // walk settles.
-      walkFrom: partial.walkFrom ?? null,
-      walkTo: partial.walkTo ?? null,
-      // Intra-room pacing endpoints — set by the resolver each pace
-      // cycle while the agent is in a steady state (rest/work/social).
-      // Lerped by the renderer just like walks. Cleared on state
-      // transition and reset each cycle.
-      paceFrom: partial.paceFrom ?? null,
-      paceTo: partial.paceTo ?? null,
-      paceStartedAt: partial.paceStartedAt ?? null,
-      // Pacing alternates between two phases: 'moving' (lerping
-      // toward paceTo) and 'resting' (stationary, playing
-      // paceRestRole — 'idle' or 'wave' — for paceRestUntil sim
-      // minutes). When `paceMode === 'moving'`, paceFrom/To/StartedAt
-      // are populated; when 'resting', they're cleared and
-      // paceRestUntil + paceRestRole drive behavior.
-      paceMode: partial.paceMode ?? null,
-      paceRestUntil: partial.paceRestUntil ?? null,
-      paceRestRole: partial.paceRestRole ?? null,
-      relations: partial.relations ?? { parents: [], children: [] },
-      createdAt: snapshot.simMinutes,
-    }
+    const agent = makeAgentRecord({ ...partial, id }, snapshot.simMinutes)
     commit({ ...snapshot, agents: { ...snapshot.agents, [id]: agent } })
     return agent
   }
