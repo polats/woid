@@ -130,3 +130,61 @@ export async function deleteAvatar(pubkey) {
     } catch { /* best-effort cleanup */ }
   }
 }
+
+/**
+ * NPC asset shipping — large-file half of the Git+S3 hybrid (see
+ * docs/design/npc-deploy.md). Manifests + sk live in the woid repo;
+ * heavy assets (avatar.png, tpose.png, model.glb, rig.glb) live here.
+ *
+ * Keyspace: `npcs/<npub>/<filename>`. npub instead of pubkey hex
+ * because the bridge stores characters under their npub directory
+ * locally and we want one-to-one correspondence on disk.
+ */
+export function npcAssetKey(npub, filename) {
+  return `npcs/${npub}/${filename}`;
+}
+
+export async function putNpcAsset(npub, filename, buffer, contentType) {
+  if (!client) throw new Error("S3 not configured");
+  await client.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: npcAssetKey(npub, filename),
+    Body: buffer,
+    ContentType: contentType,
+    CacheControl: "public, max-age=31536000, immutable",
+  }));
+  return npcAssetKey(npub, filename);
+}
+
+export async function getNpcAsset(npub, filename) {
+  if (!client) throw new Error("S3 not configured");
+  try {
+    const out = await client.send(new GetObjectCommand({
+      Bucket: bucket,
+      Key: npcAssetKey(npub, filename),
+    }));
+    // Convert the body stream into a Buffer for the seed-script's
+    // simple file-write path. (Streaming straight to disk is also
+    // possible but adds complexity for a one-shot boot pull.)
+    const chunks = [];
+    for await (const chunk of out.Body) chunks.push(chunk);
+    return { buffer: Buffer.concat(chunks), contentType: out.ContentType };
+  } catch (err) {
+    if (err.$metadata?.httpStatusCode === 404 || err.name === "NoSuchKey") return null;
+    throw err;
+  }
+}
+
+export async function headNpcAsset(npub, filename) {
+  if (!client) return null;
+  try {
+    const out = await client.send(new HeadObjectCommand({
+      Bucket: bucket,
+      Key: npcAssetKey(npub, filename),
+    }));
+    return { contentType: out.ContentType, contentLength: out.ContentLength };
+  } catch (err) {
+    if (err.$metadata?.httpStatusCode === 404 || err.name === "NotFound") return null;
+    throw err;
+  }
+}

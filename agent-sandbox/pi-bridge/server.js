@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { spawn } from "child_process";
 import { createInterface } from "readline";
 import { EventEmitter } from "events";
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, appendFileSync, cpSync, rmSync, renameSync, createReadStream } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, appendFileSync, cpSync, rmSync, renameSync, createReadStream, unlinkSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir, tmpdir } from "os";
@@ -49,6 +49,7 @@ useWebSocketImplementation(WebSocket);
 import { buildSystemPrompt, buildUserTurn } from "./buildContext.js";
 import { readSessionTurns, readLatestUsage, readDirectTurns, readDirectLatestUsage } from "./sessionReader.js";
 import { joinRoom, leaveRoom, sendSay, sayAs, moveAs, moveAgent, onNewMessage, onPositionChange, roomSnapshot } from "./room-client.js";
+import { seedNpcs } from "./scripts/seed-npcs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -529,6 +530,50 @@ async function publishAdminWelcome({ agentPubkey, agentName, roomName }) {
 const CHARACTERS_DIR = join(WORKSPACE, "characters");
 mkdirSync(CHARACTERS_DIR, { recursive: true });
 
+// Prompts directory — editable system-prompt overrides for persona
+// generation, etc. The frontend lets a user tweak the prompt for
+// NPC personas at runtime; saved overrides land here as plain text
+// files. Each load checks for an override and falls back to the
+// in-source default if nothing is on disk.
+const PROMPTS_DIR = join(WORKSPACE, "prompts");
+mkdirSync(PROMPTS_DIR, { recursive: true });
+
+const PROMPT_REGISTRY = new Map(); // promptName → defaultText
+
+function registerPrompt(name, defaultText) {
+  PROMPT_REGISTRY.set(name, defaultText);
+}
+function loadPrompt(name) {
+  const def = PROMPT_REGISTRY.get(name);
+  if (def === undefined) return null;
+  const path = join(PROMPTS_DIR, `${name}.txt`);
+  if (existsSync(path)) {
+    try {
+      const text = readFileSync(path, "utf-8");
+      if (text.trim()) return text;
+    } catch {}
+  }
+  return def;
+}
+function savePromptOverride(name, text) {
+  if (!PROMPT_REGISTRY.has(name)) return false;
+  const path = join(PROMPTS_DIR, `${name}.txt`);
+  writeFileSync(path, String(text ?? ""), "utf-8");
+  return true;
+}
+function clearPromptOverride(name) {
+  if (!PROMPT_REGISTRY.has(name)) return false;
+  const path = join(PROMPTS_DIR, `${name}.txt`);
+  if (existsSync(path)) {
+    try { unlinkSync(path); } catch {}
+  }
+  return true;
+}
+function isPromptOverridden(name) {
+  if (!PROMPT_REGISTRY.has(name)) return false;
+  return existsSync(join(PROMPTS_DIR, `${name}.txt`));
+}
+
 // Characters are stored by npub for human browsability. Internal code
 // keeps the hex pubkey as the canonical id (that's what Nostr events sign
 // with and what /internal/post reports). Dir-name translation is local.
@@ -628,6 +673,13 @@ function listCharacters() {
         mood: c.mood ?? null,
         profileSource: c.profileSource ?? null,
         profileModel: c.profileModel ?? null,
+        // Default legacy records (no `kind` field) to 'player' so consumers
+        // can rely on the field always being present.
+        kind: c.kind ?? "player",
+        npc_role: c.npc_role ?? null,
+        npc_default_pos: c.npc_default_pos ?? null,
+        shift_start: c.shift_start ?? null,
+        shift_end: c.shift_end ?? null,
         createdAt: c.createdAt ?? null,
         updatedAt: c.updatedAt ?? null,
       };
@@ -662,7 +714,73 @@ function writeClaudeMd(dir, pubkey) {
   writeFileSync(path, content, "utf-8");
 }
 
-function createCharacter({ name } = {}) {
+// Validation helpers for NPC fields. Kept local to character creation
+// since these are unique to the bridge → Shelter pipeline.
+function validateNpcRole(role) {
+  if (role === null || role === undefined) return null;
+  const trimmed = String(role).trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 64) throw new Error("npc_role too long (max 64 chars)");
+  return trimmed;
+}
+function validateNpcDefaultPos(pos) {
+  if (pos === null || pos === undefined) return null;
+  if (typeof pos !== "object") throw new Error("npc_default_pos must be an object");
+  const roomId = pos.roomId;
+  const localU = Number(pos.localU);
+  const localV = Number(pos.localV);
+  if (typeof roomId !== "string" || !roomId) throw new Error("npc_default_pos.roomId required");
+  if (!Number.isFinite(localU) || localU < 0 || localU > 1) throw new Error("npc_default_pos.localU must be 0..1");
+  if (!Number.isFinite(localV) || localV < 0 || localV > 1) throw new Error("npc_default_pos.localV must be 0..1");
+  return { roomId, localU, localV };
+}
+function validateShiftMinute(n) {
+  if (n === null || n === undefined) return null;
+  const v = Number(n);
+  if (!Number.isFinite(v)) throw new Error("shift minute must be a number");
+  const i = Math.round(v);
+  if (i < 0 || i >= 1440) throw new Error("shift minute must be 0..1439");
+  return i;
+}
+// Find an existing NPC by role. Single-character lookup; tolerates
+// the "no such role" case by returning null. Used both for uniqueness
+// validation on create/patch and for runtime lookups by role.
+function findNpcByRole(role, { excludePubkey = null } = {}) {
+  if (!role) return null;
+  for (const c of listCharacters()) {
+    if (c.pubkey === excludePubkey) continue;
+    if (c.kind === "npc" && c.npc_role === role) return c;
+  }
+  return null;
+}
+
+function createCharacter({
+  name,
+  kind = "player",
+  npc_role = null,
+  npc_default_pos = null,
+  shift_start = null,
+  shift_end = null,
+} = {}) {
+  // Schema validation up front — any errors abort creation before we
+  // write a half-formed character to disk.
+  if (kind !== "player" && kind !== "npc") {
+    throw new Error(`kind must be 'player' or 'npc', got '${kind}'`);
+  }
+  const validatedRole = validateNpcRole(npc_role);
+  const validatedPos = validateNpcDefaultPos(npc_default_pos);
+  const validatedShiftStart = validateShiftMinute(shift_start);
+  const validatedShiftEnd = validateShiftMinute(shift_end);
+  // NPC role uniqueness: only one Receptionist, one Floor Manager, etc.
+  if (kind === "npc" && validatedRole) {
+    const existing = findNpcByRole(validatedRole);
+    if (existing) {
+      const err = new Error(`npc_role '${validatedRole}' already in use by ${existing.pubkey.slice(0, 12)}...`);
+      err.statusCode = 409;
+      throw err;
+    }
+  }
+
   const sk = generateSecretKey();
   const pubkey = getPublicKey(sk);
   const dir = getCharDir(pubkey);
@@ -690,6 +808,14 @@ function createCharacter({ name } = {}) {
     // decay over the next sim-hours. Mood / friction is the moodlet
     // system's job; character voice lives in `about`.
     needs: { energy: 75, social: 75 },
+    // NPC vs player. Immutable after creation — patch endpoints
+    // accept changes to npc_role / npc_default_pos / shift_*, but
+    // not to kind itself.
+    kind,
+    npc_role: validatedRole,
+    npc_default_pos: validatedPos,
+    shift_start: validatedShiftStart,
+    shift_end: validatedShiftEnd,
     follows: seedFollows,
     createdAt: Date.now(),
   });
@@ -727,6 +853,63 @@ const PERSONA_MODELS = (process.env.PI_PERSONA_MODELS ?? [
   "mistralai/ministral-14b-instruct-2512",
   "openai/gpt-oss-20b",
 ].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
+
+// NPC persona prompt — distinct from the player-character persona above.
+// NPCs in Shelter (the Severance-flavoured base-builder) are role-bound
+// figures inside a corporate facility: receptionists, floor managers,
+// wellness counsellors, archive clerks. The persona orbits the *job*;
+// the character's life outside the facility is deliberately absent
+// (innie-side only). Voice should read like a clinical onboarding-
+// handbook entry — slightly off, mid-century corporate, never quite
+// explaining what the work is.
+const PERSONA_SYSTEM_NPC = [
+  "You generate short character profiles for NPCs in a Severance-flavoured",
+  "corporate-mystery game. Each NPC is bound to a role inside a closed",
+  "facility — a Receptionist, a Floor Manager, a Wellness Counsellor, an",
+  "Archive Clerk, etc. The user supplies the role; you build a persona that",
+  "orbits the work.",
+  "",
+  "Voice goals:",
+  "- Mid-century corporate / clinical / Lumon-adjacent — controlled, polite,",
+  "  slightly off. Compliance-document register.",
+  "- Role-bound. The 'about' describes who they are AT WORK: their post,",
+  "  their procedural quirks, the talismans on their desk, the small rituals",
+  "  that define the day.",
+  "- The character's life outside the facility is intentionally absent.",
+  "  No mention of partners, hobbies, weekends, hometowns. The reader should",
+  "  feel they don't know what this person does after their shift, and that",
+  "  the character may not entirely know either.",
+  "- Specific, not abstract. A particular drawer, a recurring memo number,",
+  "  a phrase they end every interaction with. Avoid 'mystery', 'shadowy',",
+  "  'corporate' as adjectives — the tone IS corporate; don't say it.",
+  "",
+  "These become NIP-01 kind:0 Nostr profiles — only name + about.",
+  "",
+  "Respond ONLY with valid JSON. Both fields are REQUIRED.",
+  "No markdown, no code fences, no trailing text.",
+  "{",
+  '  "name": "A formal full name appropriate for a corporate name-plate. First + last; occasionally a single distinctive surname. 2-40 characters. Mix of cultures welcome. No emoji, no nicknames.",',
+  '  "about": "REQUIRED. 2-4 sentences. Describe the NPC at their post: what they handle, one verbal tic or procedural quirk, a small specific thing on their desk or in their pocket, a line they might say to anyone passing through. Tone is calm, polished, slightly impersonal."',
+  "}",
+  "",
+  "Examples of the register (do not copy, just sense the tone):",
+  "- 'Edi Schmid manages the Lobby. She processes arrivals with a single",
+  "   ledger pen and refers to every visitor as Guest, regardless of",
+  "   familiarity. A small ceramic dish of unwrapped peppermints sits at",
+  "   the corner of her desk; the mints rotate quarterly. To employees",
+  "   crossing the threshold she is in the habit of saying, simply,",
+  "   Welcome back.'",
+  "",
+  "Surprise the reader with the role's *specific texture*, not with",
+  "personality archetypes. Two receptionists should feel different because",
+  "their desks are different, not because one is bubbly and one is grumpy.",
+].join("\n");
+
+// The NPC prompt is registered as overridable so the frontend can
+// tweak it from the NPCs view without a server restart. Generation
+// paths call `loadPrompt('npc-persona')` to get the current effective
+// text — saved override if any, default otherwise.
+registerPrompt("npc-persona", PERSONA_SYSTEM_NPC);
 
 const PERSONA_SYSTEM = [
   "You generate short character profiles for a Scooby-Doo-style mystery cartoon —",
@@ -845,10 +1028,24 @@ async function nimChatJson({ model, systemPrompt, userPrompt }) {
   return data?.choices?.[0]?.message?.content ?? "";
 }
 
-async function generatePersona({ seed } = {}) {
-  const userPrompt = seed?.trim()
-    ? `Seed from the user: ${seed.trim()}\n\nInvent a persona that fits. Return JSON only.`
-    : "Invent a fresh, surprising persona. Return JSON only.";
+async function generatePersona({ seed, kind = "player", role = null } = {}) {
+  // NPC personas use the role-bound, clinical Severance-flavour prompt.
+  // Player personas use the existing teen-mystery prompt unchanged.
+  const isNpc = kind === "npc";
+  // NPC prompt is overridable via the prompt registry; player prompt
+  // is fixed in source for now.
+  const systemPrompt = isNpc ? loadPrompt("npc-persona") : PERSONA_SYSTEM;
+  let userPrompt;
+  if (isNpc) {
+    const roleLine = role ? `Role: ${role}.` : "";
+    const seedLine = seed?.trim() ? `User seed: ${seed.trim()}.` : "";
+    userPrompt = [roleLine, seedLine, "Invent the NPC's profile. Return JSON only."]
+      .filter(Boolean).join("\n\n");
+  } else {
+    userPrompt = seed?.trim()
+      ? `Seed from the user: ${seed.trim()}\n\nInvent a persona that fits. Return JSON only.`
+      : "Invent a fresh, surprising persona. Return JSON only.";
+  }
 
   const tried = new Set();
   let lastErr;
@@ -858,7 +1055,7 @@ async function generatePersona({ seed } = {}) {
     const model = candidates[Math.floor(Math.random() * candidates.length)];
     tried.add(model);
     try {
-      const raw = await nimChatJson({ model, systemPrompt: PERSONA_SYSTEM, userPrompt });
+      const raw = await nimChatJson({ model, systemPrompt, userPrompt });
       const persona = parsePersonaJson(raw);
       console.log(`[persona] generated via ${model}`);
       return { ...persona, _model: model };
@@ -942,20 +1139,26 @@ async function generateImageBytes({ prompt }) {
 }
 
 // Avatar prompt is portrait-framed; everything else is raw-prompt.
-async function generateAvatarBytes({ name, about, promptOverride }) {
+async function generateAvatarBytes({ name, about, promptOverride, seed }) {
   const override = (promptOverride ?? "").trim().slice(0, 1800);
   const bio = (about ?? "").trim().slice(0, 600);
+  const userSeed = (seed ?? "").trim().slice(0, 400);
   let prompt;
   if (override) {
     prompt = override;
   } else {
     const subject = bio ? `${name} — ${bio}` : name;
+    // `seed` is a soft nudge — appended to the default prompt as a
+    // user-direction line. `promptOverride` (mutually exclusive)
+    // still replaces the whole prompt for callers that want full
+    // control. NPC avatar regen uses `seed`.
     prompt = [
       `Stylized portrait illustration of: ${subject}.`,
+      userSeed ? `User direction: ${userSeed}.` : null,
       "Use the description as thematic inspiration for mood, role, and atmosphere rather than copying specific nouns into the image.",
       "Composition: square 1:1, centered, strong silhouette, clear subject, clean negative space around the figure.",
       "No text, no watermark, no signatures, no UI chrome, no logos.",
-    ].join(" ");
+    ].filter(Boolean).join(" ");
   }
   const { buffer, mime, ext } = await generateImageBytes({ prompt });
   return { buffer, mime, ext, prompt };
@@ -993,8 +1196,8 @@ async function generatePostImage({ pubkey, prompt }) {
   return { url, mime, ext, sha256: sha, prompt: framed };
 }
 
-async function generateAvatar({ pubkey, name, about, promptOverride }) {
-  const { buffer, mime, ext, prompt } = await generateAvatarBytes({ name, about, promptOverride });
+async function generateAvatar({ pubkey, name, about, promptOverride, seed }) {
+  const { buffer, mime, ext, prompt } = await generateAvatarBytes({ name, about, promptOverride, seed });
   const filename = `avatar.${ext}`;
 
   // Prefer S3 when configured (prod). Local dev with no S3 env vars
@@ -3518,6 +3721,52 @@ app.get("/v1/personas/status", (_req, res) => {
   });
 });
 
+// ── Editable system prompts ──
+// Currently exposes a single overridable prompt: npc-persona, used by
+// the persona generator when a character has kind:'npc'. Saving an
+// override writes a text file under <WORKSPACE>/prompts/; the next
+// generate call reads it. Reset returns to the in-source default.
+
+app.get("/v1/prompts/:name", (req, res) => {
+  const name = req.params.name;
+  if (!PROMPT_REGISTRY.has(name)) return res.status(404).json({ error: "unknown prompt" });
+  res.json({
+    name,
+    text: loadPrompt(name),
+    default: PROMPT_REGISTRY.get(name),
+    overridden: isPromptOverridden(name),
+  });
+});
+
+app.put("/v1/prompts/:name", (req, res) => {
+  const name = req.params.name;
+  if (!PROMPT_REGISTRY.has(name)) return res.status(404).json({ error: "unknown prompt" });
+  const text = req.body?.text;
+  if (typeof text !== "string") return res.status(400).json({ error: "text required (string)" });
+  if (text.length > 16000) return res.status(400).json({ error: "text too long (max 16k chars)" });
+  // Empty body means "use the default" — same effect as DELETE.
+  if (!text.trim()) clearPromptOverride(name);
+  else savePromptOverride(name, text);
+  res.json({
+    name,
+    text: loadPrompt(name),
+    default: PROMPT_REGISTRY.get(name),
+    overridden: isPromptOverridden(name),
+  });
+});
+
+app.delete("/v1/prompts/:name", (req, res) => {
+  const name = req.params.name;
+  if (!PROMPT_REGISTRY.has(name)) return res.status(404).json({ error: "unknown prompt" });
+  clearPromptOverride(name);
+  res.json({
+    name,
+    text: loadPrompt(name),
+    default: PROMPT_REGISTRY.get(name),
+    overridden: false,
+  });
+});
+
 app.get("/v1/personas/log", (req, res) => {
   const limit = Number(req.query.limit) || 50;
   const cursor = Number(req.query.cursor) || 0;
@@ -4001,27 +4250,50 @@ app.post("/complete", async (req, res) => {
 
 // ── Characters (persistent identities) ──
 
-app.get("/characters", (_req, res) => {
-  const list = listCharacters().map((c) => ({
+app.get("/characters", (req, res) => {
+  // Optional `?kind=npc|player` filter — Shelter pulls NPCs only on
+  // mount, the sandbox usually wants everything. Unknown values fall
+  // through to the unfiltered list rather than 400ing.
+  const wantKind = typeof req.query.kind === "string" ? req.query.kind : null;
+  let list = listCharacters().map((c) => ({
     ...c,
     runtime: runtimeSnapshot(c.pubkey),
   }));
+  if (wantKind === "npc" || wantKind === "player") {
+    list = list.filter((c) => (c.kind ?? "player") === wantKind);
+  }
   res.json({ characters: list });
 });
 
 app.post("/characters", (req, res) => {
   try {
-    const { name } = req.body || {};
-    const c = createCharacter({ name });
+    const { name, kind, npc_role, npc_default_pos, shift_start, shift_end } = req.body || {};
+    const c = createCharacter({
+      name,
+      kind,
+      npc_role,
+      npc_default_pos,
+      shift_start,
+      shift_end,
+    });
     res.json({
       pubkey: c.pubkey,
       npub: npubEncode(c.pubkey),
       name: c.name,
+      kind: c.kind ?? "player",
+      npc_role: c.npc_role ?? null,
+      npc_default_pos: c.npc_default_pos ?? null,
+      shift_start: c.shift_start ?? null,
+      shift_end: c.shift_end ?? null,
       createdAt: c.createdAt,
     });
   } catch (err) {
-    console.error("[char:create]", err);
-    res.status(500).json({ error: err.message });
+    // Validation / uniqueness errors → 4xx; everything else → 500.
+    const status = err.statusCode ?? (
+      /^npc_|kind must be|must be 0\.\.|must be a number/.test(err.message) ? 400 : 500
+    );
+    if (status >= 500) console.error("[char:create]", err);
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -4042,6 +4314,13 @@ app.get("/characters/:pubkey", (req, res) => {
     needs: c.needs ?? null,
     profileSource: c.profileSource ?? null,
     profileModel: c.profileModel ?? null,
+    // Default legacy records to 'player' so consumers can rely on the
+    // field always being present.
+    kind: c.kind ?? "player",
+    npc_role: c.npc_role ?? null,
+    npc_default_pos: c.npc_default_pos ?? null,
+    shift_start: c.shift_start ?? null,
+    shift_end: c.shift_end ?? null,
     createdAt: c.createdAt ?? null,
     updatedAt: c.updatedAt ?? null,
     runtime: runtimeSnapshot(c.pubkey),
@@ -4400,12 +4679,13 @@ app.post("/characters/:pubkey/generate-avatar", apiQuota.middleware, async (req,
   const ip = apiQuota.clientIp(req);
   const startedAt = Date.now();
   try {
-    const { promptOverride } = req.body || {};
+    const { promptOverride, seed } = req.body || {};
     const { avatarUrl, prompt } = await generateAvatar({
       pubkey,
       name: c.name,
       about: c.about,
       promptOverride,
+      seed,
     });
     saveCharacterManifest(pubkey, { avatarUrl });
     publishCharacterProfile(pubkey).catch(() => {});
@@ -5050,15 +5330,31 @@ app.post("/characters/:pubkey/generate-profile/stream", apiQuota.middleware, asy
   };
 
   try {
-    const { seed, overwriteName, model: pinnedModel } = req.body || {};
+    const { seed, overwriteName, model: pinnedModel, skipAvatar } = req.body || {};
     const model = (pinnedModel && PERSONA_MODELS.includes(pinnedModel))
       ? pinnedModel
       : PERSONA_MODELS[Math.floor(Math.random() * PERSONA_MODELS.length)];
     send("model", { model });
 
-    const userPrompt = seed?.trim()
-      ? `Seed from the user: ${seed.trim()}\n\nInvent a persona that fits. Return JSON only.`
-      : "Invent a fresh, surprising persona. Return JSON only.";
+    // NPC personas use a different prompt — clinical, role-bound,
+    // Severance-adjacent — and the user-prompt scaffolding leans on
+    // the role string instead of a free seed. Player characters keep
+    // the existing teen-mystery prompt unchanged.
+    const isNpc = (c.kind ?? "player") === "npc";
+    // NPC prompt is overridable via the prompt registry; player prompt
+    // is fixed in source for now.
+    const systemPrompt = isNpc ? loadPrompt("npc-persona") : PERSONA_SYSTEM;
+    let userPrompt;
+    if (isNpc) {
+      const role = c.npc_role ? `Role: ${c.npc_role}.` : "";
+      const seedLine = seed?.trim() ? `User seed: ${seed.trim()}.` : "";
+      userPrompt = [role, seedLine, "Invent the NPC's profile. Return JSON only."]
+        .filter(Boolean).join("\n\n");
+    } else {
+      userPrompt = seed?.trim()
+        ? `Seed from the user: ${seed.trim()}\n\nInvent a persona that fits. Return JSON only.`
+        : "Invent a fresh, surprising persona. Return JSON only.";
+    }
 
     const nimRes = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
       method: "POST",
@@ -5069,7 +5365,7 @@ app.post("/characters/:pubkey/generate-profile/stream", apiQuota.middleware, asy
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: PERSONA_SYSTEM },
+          { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
         temperature: 1.0,
@@ -5128,20 +5424,24 @@ app.post("/characters/:pubkey/generate-profile/stream", apiQuota.middleware, asy
 
     // Chain avatar generation so the portrait appears in the same flow.
     // Skipping silently on NIM image failure — persona is still saved.
-    try {
-      send("avatar-start", {});
-      const { avatarUrl } = await generateAvatar({
-        pubkey,
-        name: after.name,
-        about: after.about,
-      });
-      saveCharacterManifest(pubkey, { avatarUrl });
-      publishCharacterProfile(pubkey).catch(() => {});
-      after = loadCharacter(pubkey);
-      send("avatar-done", { avatarUrl });
-    } catch (err) {
-      console.warn("[char:generate-stream] avatar skipped:", err.message);
-      send("avatar-error", { error: err.message });
+    // The NPCs view explicitly separates avatar regen from persona regen,
+    // so it passes `skipAvatar: true` to disable this step.
+    if (!skipAvatar) {
+      try {
+        send("avatar-start", {});
+        const { avatarUrl } = await generateAvatar({
+          pubkey,
+          name: after.name,
+          about: after.about,
+        });
+        saveCharacterManifest(pubkey, { avatarUrl });
+        publishCharacterProfile(pubkey).catch(() => {});
+        after = loadCharacter(pubkey);
+        send("avatar-done", { avatarUrl });
+      } catch (err) {
+        console.warn("[char:generate-stream] avatar skipped:", err.message);
+        send("avatar-error", { error: err.message });
+      }
     }
 
     send("done", {
@@ -5192,7 +5492,11 @@ app.post("/characters/:pubkey/generate-profile", apiQuota.middleware, async (req
   const logStartedAt = Date.now();
   try {
     const { seed, overwriteName } = req.body || {};
-    const persona = await generatePersona({ seed });
+    const persona = await generatePersona({
+      seed,
+      kind: c.kind ?? "player",
+      role: c.npc_role ?? null,
+    });
     const patch = {
       about: persona.about ?? c.about ?? null,
       profileSource: "ai",
@@ -5240,7 +5544,10 @@ app.patch("/characters/:pubkey", async (req, res) => {
   const pubkey = req.params.pubkey;
   const c = loadCharacter(pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
-  const { name, about, state, avatarUrl, model, harness, promptStyle, mood, needs } = req.body || {};
+  const {
+    name, about, state, avatarUrl, model, harness, promptStyle, mood, needs,
+    npc_role, npc_default_pos, shift_start, shift_end,
+  } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = String(name).trim() || c.name;
   if (about !== undefined) patch.about = about ? String(about) : null;
@@ -5286,6 +5593,38 @@ app.patch("/characters/:pubkey", async (req, res) => {
       }
     }
     patch.needs = nextNeeds;
+  }
+  // NPC field mutations. `kind` is intentionally NOT patchable — once
+  // a character is created as a player or NPC, it stays that way; the
+  // only escape hatch is to delete and recreate. Role uniqueness is
+  // re-validated on each role change. Pos and shift hours are free.
+  const isNpc = (c.kind ?? "player") === "npc";
+  try {
+    if (npc_role !== undefined) {
+      if (!isNpc && npc_role !== null) {
+        return res.status(400).json({ error: "npc_role only valid for kind:'npc'" });
+      }
+      const validated = validateNpcRole(npc_role);
+      if (validated && validated !== c.npc_role) {
+        const conflict = findNpcByRole(validated, { excludePubkey: pubkey });
+        if (conflict) {
+          return res.status(409).json({
+            error: `npc_role '${validated}' already in use by ${conflict.pubkey.slice(0, 12)}...`,
+          });
+        }
+      }
+      patch.npc_role = validated;
+    }
+    if (npc_default_pos !== undefined) {
+      if (!isNpc && npc_default_pos !== null) {
+        return res.status(400).json({ error: "npc_default_pos only valid for kind:'npc'" });
+      }
+      patch.npc_default_pos = validateNpcDefaultPos(npc_default_pos);
+    }
+    if (shift_start !== undefined) patch.shift_start = validateShiftMinute(shift_start);
+    if (shift_end !== undefined) patch.shift_end = validateShiftMinute(shift_end);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
   }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
   saveCharacterManifest(pubkey, patch);
@@ -5487,6 +5826,16 @@ app.listen(PORT, () => {
   // current PUBLIC_BRIDGE_URL. No-op when nothing's stale.
   rebaseStaleAvatarUrls().catch((err) => {
     console.error("[rebase] failed:", err?.message || err);
+  });
+  // Seed NPCs from the repo's seed-npcs/ tree (manifest+sk) and the
+  // bucket's npcs/<npub>/ prefix (heavy assets). Idempotent; honours
+  // RESEED_NPCS=1 for a forced manifest refresh. Fire-and-forget so
+  // S3 latency doesn't delay bridge readiness.
+  seedNpcs({
+    charactersDir: CHARACTERS_DIR,
+    publishProfile: (pk) => publishCharacterProfile(pk),
+  }).catch((err) => {
+    console.error("[seed-npcs] failed:", err?.message || err);
   });
 });
 
