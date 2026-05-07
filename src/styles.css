@@ -7547,6 +7547,58 @@ body {
   border-color: var(--ink);
 }
 
+/* Action stack — publish + delete share the same top-right corner. */
+.studio-card-actions {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+}
+.studio-card-actions .studio-card-delete,
+.studio-card-actions .studio-card-publish {
+  position: static;
+}
+.studio-card-publish {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  transition: background 80ms ease, color 80ms ease;
+}
+.studio-card-publish:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* Persistent state badges for prod-publish status. */
+.studio-card.is-published {
+  border-color: var(--ink);
+}
+.studio-card.needs-publish {
+  border-color: var(--transmit);
+}
+.studio-card-role-badge.is-published {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--ink);
+}
+.studio-card-role-badge.is-warning {
+  background: var(--transmit);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+}
+
 .studio-empty {
   font-style: italic;
   color: var(--ink-faint);

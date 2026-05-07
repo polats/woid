@@ -69,8 +69,15 @@ function seedState() {
   return { tags: [...BUILTIN_TAGS], assignments: {} }
 }
 
-function writeState(state) {
+function writeStateLocal(state) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) } catch { /* quota */ }
+}
+
+// Write-through: persist to localStorage immediately + push to bridge
+// asynchronously. Offline-tolerant — bridge failures don't block.
+function writeState(state) {
+  writeStateLocal(state)
+  pushTagsToBridge(state)
 }
 
 function isValidTag(t) {
@@ -98,6 +105,57 @@ export function normalizeTag(input) {
 import config from '../../config.js'
 
 const _bridgeUrl = config.agentSandbox?.bridgeUrl || null
+
+// ── Tag map sync with the bridge ────────────────────────────────
+// Tag map is kept in S3 (via the bridge) so prod and dev share the
+// same assignments. localStorage stays as a write-through cache so
+// the UI works offline. On boot we pull from the bridge once and
+// merge: bridge wins when it has any assignments, otherwise we push
+// the local state up. Mutations write to localStorage instantly and
+// fire a PUT in the background.
+
+function pushTagsToBridge(state) {
+  if (!_bridgeUrl) return
+  fetch(`${_bridgeUrl}/v1/tags`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state),
+  }).catch(() => { /* offline tolerated; localStorage holds the truth */ })
+}
+
+async function pullTagsFromBridge() {
+  if (!_bridgeUrl) return
+  try {
+    const r = await fetch(`${_bridgeUrl}/v1/tags`)
+    if (!r.ok) return
+    const remote = await r.json()
+    const remoteAssignments = (remote && typeof remote.assignments === 'object' && remote.assignments) || {}
+    const remoteTags = Array.isArray(remote?.tags) ? remote.tags.filter(isValidTag) : []
+    const remoteEmpty = remoteTags.length === 0 && Object.keys(remoteAssignments).length === 0
+    const local = readState()
+    if (remoteEmpty && Object.keys(local.assignments).length > 0) {
+      // First-time push: bridge has nothing, local has assignments — promote.
+      pushTagsToBridge(local)
+      return
+    }
+    if (!remoteEmpty) {
+      // Bridge wins. Apply locally without re-pushing.
+      const merged = {
+        tags: remoteTags.length ? remoteTags : [...BUILTIN_TAGS],
+        assignments: remoteAssignments,
+      }
+      writeStateLocal(merged)
+      notify('tags', { tags: merged.tags })
+      notify('assignment', { tag: null, animId: null })
+    }
+  } catch { /* offline tolerated */ }
+}
+
+if (typeof window !== 'undefined' && _bridgeUrl) {
+  // Fire-and-forget on module load. Subscribers (Animations tab,
+  // Shelter render path) react via the existing notify channel.
+  pullTagsFromBridge()
+}
 
 async function tryFetchMotion(url) {
   try {

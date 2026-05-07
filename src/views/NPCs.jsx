@@ -175,6 +175,21 @@ export default function NPCs() {
     } catch (e) { setError(e.message || String(e)) }
   }
 
+  // Publish the NPC's manifest + sk + heavy assets to S3 so the
+  // production bridge picks them up on next deploy / restart. The
+  // bridge endpoint reads from its own workspace (which on dev is
+  // the same disk we generated assets onto).
+  async function publishNpc(pubkey, onStatus) {
+    const r = await fetch(`${bridgeUrl}/v1/npcs/${pubkey}/publish`, { method: 'POST' })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `HTTP ${r.status}`)
+    }
+    const json = await r.json()
+    onStatus?.(json)
+    return json
+  }
+
   async function savePrompt() {
     setPromptStatus('saving…')
     try {
@@ -301,6 +316,7 @@ export default function NPCs() {
             onPatch={(patch) => patchNpc(selected.pubkey, patch)}
             onRegenPersona={(seed, onDelta) => regeneratePersona(selected.pubkey, seed, onDelta)}
             onRegenAvatar={(seed) => regenerateAvatar(selected.pubkey, seed)}
+            onPublish={(onStatus) => publishNpc(selected.pubkey, onStatus)}
             onDelete={() => deleteNpc(selected.pubkey)}
             onClose={() => setSelectedPubkey(null)}
           />
@@ -346,7 +362,7 @@ function NpcTabs({ tab, setTab, disabled }) {
   )
 }
 
-function NpcDetail({ tab, npc, rooms, bridgeUrl, onPatch, onRegenPersona, onRegenAvatar, onDelete, onClose }) {
+function NpcDetail({ tab, npc, rooms, bridgeUrl, onPatch, onRegenPersona, onRegenAvatar, onPublish, onDelete, onClose }) {
   const initial = (npc.name || '?').trim().charAt(0).toUpperCase()
   return (
     <section className="npcs-pane is-attached" role="tabpanel">
@@ -383,6 +399,7 @@ function NpcDetail({ tab, npc, rooms, bridgeUrl, onPatch, onRegenPersona, onRege
             onPatch={onPatch}
             onRegenPersona={onRegenPersona}
             onRegenAvatar={onRegenAvatar}
+            onPublish={onPublish}
             onDelete={onDelete}
           />
         )}
@@ -395,7 +412,7 @@ function NpcDetail({ tab, npc, rooms, bridgeUrl, onPatch, onRegenPersona, onRege
 
 /* ── Profile tab ───────────────────────────────────────────────── */
 
-function ProfileTab({ npc, rooms, onPatch, onRegenPersona, onRegenAvatar, onDelete }) {
+function ProfileTab({ npc, rooms, onPatch, onRegenPersona, onRegenAvatar, onPublish, onDelete }) {
   const [name, setName] = useState(npc.name || '')
   const [about, setAbout] = useState(npc.about || '')
   const [role, setRole] = useState(npc.npc_role || '')
@@ -407,6 +424,8 @@ function ProfileTab({ npc, rooms, onPatch, onRegenPersona, onRegenAvatar, onDele
   const [personaStatus, setPersonaStatus] = useState(null)
   const [avatarLoading, setAvatarLoading] = useState(false)
   const [avatarStatus, setAvatarStatus] = useState(null)
+  const [publishLoading, setPublishLoading] = useState(false)
+  const [publishStatus, setPublishStatus] = useState(null)
   const [lightbox, setLightbox] = useState(null)  // { src, alt } | null
 
   // Re-sync local state when the underlying NPC changes (switch / regen).
@@ -463,6 +482,18 @@ function ProfileTab({ npc, rooms, onPatch, onRegenPersona, onRegenAvatar, onDele
       setAvatarStatus('done')
     } catch (e) { setAvatarStatus(`error: ${e.message || String(e)}`) }
     finally { setAvatarLoading(false) }
+  }
+
+  async function publish() {
+    setPublishLoading(true)
+    setPublishStatus('uploading…')
+    try {
+      const result = await onPublish()
+      const uploaded = (result?.uploaded ?? []).length
+      const skipped = (result?.skipped ?? []).length
+      setPublishStatus(`published — ${uploaded} file(s) uploaded${skipped ? `, ${skipped} skipped` : ''}`)
+    } catch (e) { setPublishStatus(`error: ${e.message || String(e)}`) }
+    finally { setPublishLoading(false) }
   }
 
   const initial = (name || '?').trim().charAt(0).toUpperCase()
@@ -597,6 +628,26 @@ function ProfileTab({ npc, rooms, onPatch, onRegenPersona, onRegenAvatar, onDele
           </div>
         </div>
       </div>
+
+      <fieldset className="agent-profile-section">
+        <legend>Publish to prod</legend>
+        <p className="muted">
+          Uploads this NPC's manifest, sk, and generated assets (avatar / t-pose
+          / model / rig) to the bucket the production bridge reads on boot.
+          Idempotent — re-publishing overwrites in place.
+        </p>
+        <div className="npcs-form-actions">
+          <button
+            type="button"
+            className="npcs-btn primary"
+            onClick={publish}
+            disabled={publishLoading}
+          >
+            {publishLoading ? 'Publishing…' : 'Publish'}
+          </button>
+          {publishStatus && <span className="npcs-status">{publishStatus}</span>}
+        </div>
+      </fieldset>
 
       <fieldset className="agent-profile-danger">
         <legend>Danger zone</legend>

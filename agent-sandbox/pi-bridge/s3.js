@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 
 /**
@@ -226,4 +227,97 @@ export async function getAnimationStream(id) {
     if (err.$metadata?.httpStatusCode === 404 || err.name === "NoSuchKey") return null;
     throw err;
   }
+}
+
+/**
+ * Enumerate published animation IDs from the bucket. Used by the
+ * Animations tab to mark cards as "published". Paginates over the
+ * `animations/` prefix; in practice we expect tens-to-hundreds, so
+ * a single ListObjectsV2 call is enough.
+ */
+export async function listAnimations() {
+  if (!client) return [];
+  const results = [];
+  let continuationToken;
+  do {
+    const out = await client.send(new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: "animations/",
+      ContinuationToken: continuationToken,
+    }));
+    for (const obj of out.Contents ?? []) {
+      const m = obj.Key?.match(/^animations\/([a-f0-9]{8,32})\.json$/);
+      if (!m) continue;
+      results.push({
+        id: m[1],
+        sizeKb: Math.round((obj.Size ?? 0) / 1024),
+        publishedAt: obj.LastModified?.getTime() ?? null,
+      });
+    }
+    continuationToken = out.IsTruncated ? out.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return results;
+}
+
+/**
+ * Tag map storage — single-tenant key/value blob. Lives in S3 so it
+ * survives a Railway volume wipe. Shape is identical to what the
+ * frontend's animationLibrary stores in localStorage:
+ *   { tags: string[], assignments: Record<string, string> }
+ */
+const TAGS_KEY = "tags.json";
+
+export async function getTagMap() {
+  if (!client) return null;
+  try {
+    const out = await client.send(new GetObjectCommand({
+      Bucket: bucket,
+      Key: TAGS_KEY,
+    }));
+    const chunks = [];
+    for await (const chunk of out.Body) chunks.push(chunk);
+    return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+  } catch (err) {
+    if (err.$metadata?.httpStatusCode === 404 || err.name === "NoSuchKey") return null;
+    throw err;
+  }
+}
+
+export async function putTagMap(tagMap) {
+  if (!client) throw new Error("S3 not configured");
+  const buf = Buffer.from(JSON.stringify(tagMap));
+  await client.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: TAGS_KEY,
+    Body: buf,
+    ContentType: "application/json",
+    // Mutable; let clients revalidate.
+    CacheControl: "no-cache",
+  }));
+  return TAGS_KEY;
+}
+
+/**
+ * Enumerate NPCs published to S3 — returns the unique npub directory
+ * prefixes under `npcs/`. Used at bridge boot to find which NPCs to
+ * seed onto the local volume. Replaces the legacy seed-npcs/ dir
+ * walk for the publish-from-frontend flow.
+ */
+export async function listPublishedNpcs() {
+  if (!client) return [];
+  const npubs = new Set();
+  let continuationToken;
+  do {
+    const out = await client.send(new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: "npcs/",
+      ContinuationToken: continuationToken,
+    }));
+    for (const obj of out.Contents ?? []) {
+      const m = obj.Key?.match(/^npcs\/(npub1[a-z0-9]+)\//);
+      if (m) npubs.add(m[1]);
+    }
+    continuationToken = out.IsTruncated ? out.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return [...npubs];
 }

@@ -1,24 +1,26 @@
 /**
- * Boot-time NPC seeder. Companion to scripts/publish-npc.js.
+ * Boot-time NPC seeder.
  *
- * The pipeline:
+ * Two sources, in order of precedence:
  *
- *   1. For each `<npub>/` directory under `seed-npcs/`, copy the
- *      manifest + sk into the workspace's `characters/<npub>/` dir
- *      (creating it if missing). Existing characters are not
- *      overwritten unless RESEED_NPCS=1 is set in env.
- *   2. For each canonical asset filename, if the workspace copy is
- *      missing, fetch from S3 (`npcs/<npub>/<filename>`) and write
- *      to disk. Skipped silently if S3 isn't configured or the asset
- *      doesn't exist remotely.
- *   3. Publish the character's kind:0 profile to the relay so any
- *      relay-connected client (Jumble, the woid network view) sees
- *      the NPC immediately on a fresh deploy.
+ *   1. S3 — `s3://<bucket>/npcs/<npub>/{agent.json, sk.hex, …}`. This
+ *      is the canonical store. The Animations / NPCs views POST to
+ *      `/v1/npcs/<pubkey>/publish` which uploads everything here, no
+ *      git commit needed.
+ *   2. Legacy repo dir — `seed-npcs/<npub>/{agent.json, sk.hex}` (the
+ *      old git-tracked path). Used as a fallback for NPCs that haven't
+ *      been migrated to the S3 path yet, and only runs if S3 is
+ *      unconfigured or has no entries. Will be removed once everything
+ *      is on S3.
  *
- * Idempotent — running twice on the same workspace is a no-op the
- * second time.
+ * For each NPC found, copy manifest + sk into
+ * `<charactersDir>/<npub>/`, pull missing heavy assets from S3
+ * (avatar / tpose / model / rig / mapping JSONs), and publish a
+ * fresh kind:0 to the relay so external clients see the NPC. Existing
+ * characters are not overwritten unless RESEED_NPCS=1 is set.
  *
- * Called once from server.js before `app.listen()`.
+ * Idempotent — running twice on the same workspace re-pulls only
+ * missing assets the second time.
  */
 
 import {
@@ -32,18 +34,17 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decode as nip19Decode } from "nostr-tools/nip19";
 
-import { s3Configured, getNpcAsset } from "../s3.js";
+import {
+  s3Configured,
+  getNpcAsset,
+  listPublishedNpcs,
+} from "../s3.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Repo-side seed directory. Co-located with scripts/ so it's at a
-// stable path on both local dev and the Railway build.
-const SEED_DIR = join(__dirname, "..", "seed-npcs");
+// Legacy seed dir — kept as a fallback for the transition period.
+const LEGACY_SEED_DIR = join(__dirname, "..", "seed-npcs");
 
-// Canonical asset filenames the seeder pulls from S3 when missing
-// locally. Order doesn't matter; missing files are tolerated (the
-// frontend's avatar factory has fallbacks for everything except the
-// manifest itself).
 const SEED_ASSETS = [
   "avatar.png",
   "avatar.jpg",
@@ -68,89 +69,122 @@ function decodeNpub(npub) {
 }
 
 /**
- * Seed NPCs into the workspace.
- *
- * @param {object}   opts
- * @param {string}   opts.charactersDir  Absolute path to <WORKSPACE>/characters/.
- * @param {function} [opts.publishProfile]  Optional async fn called per seeded
- *   NPC with the pubkey hex; used to publish kind:0 to the relay. Pass null
- *   to skip relay publication.
- * @returns {Promise<{ seeded: string[], reseeded: string[], skipped: string[] }>}
+ * Resolve the manifest + sk for an NPC by trying S3 first, then the
+ * legacy repo directory. Returns `null` if neither has the files.
  */
-export async function seedNpcs({ charactersDir, publishProfile = null }) {
-  if (!existsSync(SEED_DIR)) {
-    return { seeded: [], reseeded: [], skipped: [] };
+async function loadSeed(npub) {
+  // S3 path.
+  if (s3Configured) {
+    const manifest = await getNpcAsset(npub, "agent.json").catch(() => null);
+    if (manifest) {
+      const sk = await getNpcAsset(npub, "sk.hex").catch(() => null);
+      if (sk) {
+        return {
+          source: "s3",
+          manifest: manifest.buffer,
+          sk: sk.buffer,
+        };
+      }
+    }
   }
+  // Legacy repo dir.
+  const legacyDir = join(LEGACY_SEED_DIR, npub);
+  const manifestPath = join(legacyDir, "agent.json");
+  const skPath = join(legacyDir, "sk.hex");
+  if (existsSync(manifestPath) && existsSync(skPath)) {
+    return {
+      source: "legacy",
+      manifest: readFileSync(manifestPath),
+      sk: readFileSync(skPath),
+    };
+  }
+  return null;
+}
+
+/** Enumerate every npub we know about across both sources. */
+async function enumerateNpcs() {
+  const npubs = new Set();
+  if (s3Configured) {
+    try {
+      for (const npub of await listPublishedNpcs()) npubs.add(npub);
+    } catch (err) {
+      console.warn(`[seed-npcs] S3 list failed:`, err.message);
+    }
+  }
+  if (existsSync(LEGACY_SEED_DIR)) {
+    try {
+      for (const dirent of readdirSync(LEGACY_SEED_DIR, { withFileTypes: true })) {
+        if (dirent.isDirectory() && dirent.name.startsWith("npub1")) {
+          npubs.add(dirent.name);
+        }
+      }
+    } catch (err) {
+      console.warn(`[seed-npcs] legacy dir read failed:`, err.message);
+    }
+  }
+  return [...npubs];
+}
+
+export async function seedNpcs({ charactersDir, publishProfile = null }) {
   const reseed = process.env.RESEED_NPCS === "1";
   const seeded = [];
   const reseeded = [];
   const skipped = [];
 
-  let entries;
-  try {
-    entries = readdirSync(SEED_DIR, { withFileTypes: true })
-      .filter((d) => d.isDirectory());
-  } catch (err) {
-    console.warn(`[seed-npcs] failed to read ${SEED_DIR}:`, err.message);
+  const npubs = await enumerateNpcs();
+  if (npubs.length === 0) {
     return { seeded, reseeded, skipped };
   }
 
-  for (const dirent of entries) {
-    const npub = dirent.name;
+  for (const npub of npubs) {
     const pubkey = decodeNpub(npub);
     if (!pubkey) {
-      console.warn(`[seed-npcs] skipping invalid npub directory: ${npub}`);
+      console.warn(`[seed-npcs] skipping invalid npub: ${npub}`);
       skipped.push(npub);
       continue;
     }
 
-    const seedDirNpc = join(SEED_DIR, npub);
+    const seed = await loadSeed(npub);
+    if (!seed) {
+      console.warn(`[seed-npcs] ${npub}: no manifest+sk in S3 or legacy dir; skipping`);
+      skipped.push(npub);
+      continue;
+    }
+
     const targetDir = join(charactersDir, npub);
-    const manifestSeed = join(seedDirNpc, "agent.json");
-    const skSeed = join(seedDirNpc, "sk.hex");
-
-    if (!existsSync(manifestSeed) || !existsSync(skSeed)) {
-      console.warn(`[seed-npcs] ${npub}: missing agent.json or sk.hex; skipping`);
-      skipped.push(npub);
-      continue;
-    }
-
     const alreadyExists = existsSync(join(targetDir, "agent.json"));
+
     if (alreadyExists && !reseed) {
-      // Manifest already in workspace; assets may still be missing
-      // on a fresh volume so fall through to the asset-pull pass.
-      // No "seeded" classification — this is a partial sync.
+      // Manifest already present — fall through to asset-pull pass.
     } else {
       // Fresh seed (or RESEED_NPCS=1): copy manifest + sk and write
-      // the .pi/identity helper file. Rewrite avatarUrl using the
-      // CURRENT PUBLIC_BRIDGE_URL so a manifest exported from a
-      // local-network bridge doesn't leave a LAN IP baked in on
-      // prod. If the seed manifest has no avatarUrl at all, we
-      // synthesise one — the bridge serves /characters/:pubkey/avatar
-      // from disk regardless, but frontends read the field to render.
+      // the .pi/identity helper. Rewrite avatarUrl to use the current
+      // PUBLIC_BRIDGE_URL so a manifest exported on a local-network
+      // machine doesn't leave a LAN IP baked into prod.
       mkdirSync(join(targetDir, ".pi"), { recursive: true });
-      const rawManifest = JSON.parse(readFileSync(manifestSeed, "utf-8"));
+      const rawManifest = JSON.parse(seed.manifest.toString("utf-8"));
       const publicUrl = process.env.PUBLIC_BRIDGE_URL;
       if (publicUrl) {
         rawManifest.avatarUrl = `${publicUrl}/characters/${pubkey}/avatar?t=${Date.now()}`;
       }
       writeFileSync(join(targetDir, "agent.json"), JSON.stringify(rawManifest, null, 2));
-      writeFileSync(join(targetDir, "sk.hex"), readFileSync(skSeed), { mode: 0o600 });
+      writeFileSync(join(targetDir, "sk.hex"), seed.sk, { mode: 0o600 });
       writeFileSync(join(targetDir, ".pi", "identity"), pubkey);
       if (alreadyExists) reseeded.push(npub);
       else seeded.push(npub);
     }
 
-    // Asset pull — silent skip when S3 isn't configured.
+    // Asset pull — missing-locally only. Tolerated when remote also
+    // missing (frontend has a fallback render path).
     if (s3Configured) {
       for (const filename of SEED_ASSETS) {
         const dest = join(targetDir, filename);
         if (existsSync(dest)) continue;
         try {
           const got = await getNpcAsset(npub, filename);
-          if (!got) continue; // remote missing too; tolerated
+          if (!got) continue;
           writeFileSync(dest, got.buffer);
-          console.log(`[seed-npcs] ${npub}: pulled ${filename} (${got.buffer.length} bytes)`);
+          console.log(`[seed-npcs] ${npub}: pulled ${filename} (${got.buffer.length} bytes) from S3`);
         } catch (err) {
           console.warn(`[seed-npcs] ${npub}: failed to pull ${filename}:`, err.message);
         }

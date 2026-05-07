@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import {
   listAnimations, fetchAnimation, deleteAnimation, generateAnimation,
 } from './lib/animationStore.js'
 import { animationLibrary } from './lib/shelterWorld/animationLibrary.js'
+import config from './config.js'
 import AnimationPreview from './views/AnimationPreview.jsx'
+
+const cfg = config.agentSandbox || {}
 
 export default function AnimationsSandbox() {
   const [items, setItems] = useState([])
@@ -11,6 +14,9 @@ export default function AnimationsSandbox() {
   const [selectedId, setSelectedId] = useState(null)
   const [motion, setMotion] = useState(null)
   const [loadingMotion, setLoadingMotion] = useState(false)
+  // Set of motion IDs already published to prod (in S3 via the bridge).
+  const [publishedSet, setPublishedSet] = useState(() => new Set())
+  const [publishingId, setPublishingId] = useState(null)
 
   const [prompt, setPrompt] = useState('')
   const [seconds, setSeconds] = useState(2.5)
@@ -77,6 +83,52 @@ export default function AnimationsSandbox() {
   }
 
   useEffect(() => { refresh() /* on mount */ }, []) // eslint-disable-line
+
+  const refreshPublished = useCallback(async () => {
+    if (!cfg.bridgeUrl) return
+    try {
+      const r = await fetch(`${cfg.bridgeUrl}/v1/animations`)
+      if (!r.ok) return
+      const json = await r.json()
+      const ids = (json.animations ?? []).map((a) => a.id)
+      setPublishedSet(new Set(ids))
+    } catch { /* offline tolerated */ }
+  }, [])
+
+  useEffect(() => { refreshPublished() }, [refreshPublished])
+
+  // Publish a motion to prod. Fetches the JSON via the local kimodo
+  // proxy (only reachable on dev) and PUTs it to the bridge, which
+  // uploads to S3. Idempotent — content-addressed by id.
+  async function onPublish(id, e) {
+    e?.stopPropagation?.()
+    if (!cfg.bridgeUrl || publishingId) return
+    setPublishingId(id)
+    try {
+      const motionJson = await fetchAnimation(id)
+      if (!motionJson || !Array.isArray(motionJson.bone_names)) {
+        throw new Error('motion missing bone_names — kimodo unreachable?')
+      }
+      const r = await fetch(`${cfg.bridgeUrl}/v1/animations/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(motionJson),
+      })
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${r.status}`)
+      }
+      setPublishedSet((prev) => {
+        const next = new Set(prev)
+        next.add(id)
+        return next
+      })
+    } catch (err) {
+      alert(`publish failed: ${err.message || String(err)}`)
+    } finally {
+      setPublishingId(null)
+    }
+  }
 
   useEffect(() => {
     if (!selectedId) { setMotion(null); return }
@@ -464,11 +516,14 @@ export default function AnimationsSandbox() {
             {items.map((a) => {
               const id = a.id ?? a.name
               const assignedRoles = tags.filter((t) => assignments[t]?.id === id)
+              const isPublished = publishedSet.has(id)
+              const isAssigned = assignedRoles.length > 0
+              const needsPublish = isAssigned && !isPublished
               return (
                 <button
                   key={id}
                   type="button"
-                  className={`studio-card${selectedId === id ? ' is-selected' : ''}`}
+                  className={`studio-card${selectedId === id ? ' is-selected' : ''}${isPublished ? ' is-published' : ''}${needsPublish ? ' needs-publish' : ''}`}
                   onClick={() => setSelectedId(id)}
                 >
                   <strong>{id}</strong>
@@ -476,20 +531,43 @@ export default function AnimationsSandbox() {
                   <span className="studio-card-meta">
                     {a.seconds ? `${a.seconds}s · ${a.fps ?? '?'}fps` : ''}
                   </span>
-                  {assignedRoles.length > 0 && (
+                  {(assignedRoles.length > 0 || isPublished) && (
                     <span className="studio-card-roles">
                       {assignedRoles.map((r) => (
                         <span key={r} className="studio-card-role-badge">{r}</span>
                       ))}
+                      {isPublished && (
+                        <span className="studio-card-role-badge is-published" title="Published to prod">
+                          published ✓
+                        </span>
+                      )}
+                      {needsPublish && (
+                        <span className="studio-card-role-badge is-warning" title="Tagged but not published — prod can't play it yet">
+                          ⚠ unpublished
+                        </span>
+                      )}
                     </span>
                   )}
-                  <span
-                    className="studio-card-delete"
-                    role="button"
-                    aria-label="Delete animation"
-                    title="Delete animation"
-                    onClick={(e) => onDelete(id, e)}
-                  >×</span>
+                  <span className="studio-card-actions">
+                    {!isPublished && cfg.bridgeUrl && (
+                      <span
+                        className="studio-card-publish"
+                        role="button"
+                        aria-label="Publish to prod"
+                        title="Publish this motion to prod"
+                        onClick={(e) => onPublish(id, e)}
+                      >
+                        {publishingId === id ? '…' : '↑'}
+                      </span>
+                    )}
+                    <span
+                      className="studio-card-delete"
+                      role="button"
+                      aria-label="Delete animation"
+                      title="Delete animation"
+                      onClick={(e) => onDelete(id, e)}
+                    >×</span>
+                  </span>
                 </button>
               )
             })}

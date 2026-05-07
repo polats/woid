@@ -4658,6 +4658,149 @@ app.get("/v1/animations/:id", async (req, res) => {
   }
 });
 
+// PUT /v1/animations/:id — accepts a kimodo motion JSON body and
+// uploads it to S3. The Animations tab calls this directly with the
+// motion data the frontend already has cached, so no kimodo round
+// trip happens server-side. Validates payload shape so junk doesn't
+// poison the cache. Idempotent (PUT + immutable cache).
+app.put("/v1/animations/:id", express.json({ limit: "5mb" }), async (req, res) => {
+  const id = req.params.id;
+  if (!/^[a-f0-9]{8,32}$/i.test(id)) {
+    return res.status(400).json({ error: "bad animation id" });
+  }
+  if (!s3.s3Configured) return res.status(503).json({ error: "S3 not configured" });
+  const body = req.body;
+  if (!body || typeof body !== "object" || !Array.isArray(body.bone_names)) {
+    return res.status(400).json({ error: "not a kimodo motion (missing bone_names)" });
+  }
+  try {
+    const buf = Buffer.from(JSON.stringify(body));
+    await s3.putAnimation(id, buf);
+    res.json({
+      id,
+      sizeKb: Math.round(buf.length / 1024),
+      publishedAt: Date.now(),
+    });
+  } catch (err) {
+    console.error(`[v1/animations:put] ${id}:`, err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// GET /v1/animations — list of published animation ids. Drives the
+// "Published" badge in the Animations tab.
+app.get("/v1/animations", async (req, res) => {
+  if (!s3.s3Configured) return res.json({ animations: [] });
+  try {
+    const animations = await s3.listAnimations();
+    res.json({ animations });
+  } catch (err) {
+    console.error(`[v1/animations:list]`, err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Tag map — single-tenant key/value of tag → animation id. Replaces
+// per-browser localStorage so prod + dev share the same map. Stored
+// as `tags.json` in the bucket. Shape:
+//   { tags: string[], assignments: Record<string, string> }
+app.get("/v1/tags", async (_req, res) => {
+  if (!s3.s3Configured) return res.json({ tags: [], assignments: {} });
+  try {
+    const map = await s3.getTagMap();
+    res.json(map ?? { tags: [], assignments: {} });
+  } catch (err) {
+    console.error(`[v1/tags:get]`, err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.put("/v1/tags", express.json(), async (req, res) => {
+  const body = req.body || {};
+  if (!Array.isArray(body.tags)
+      || typeof body.assignments !== "object"
+      || body.assignments === null) {
+    return res.status(400).json({ error: "expected { tags: string[], assignments: Record<string,string> }" });
+  }
+  if (!s3.s3Configured) return res.status(503).json({ error: "S3 not configured" });
+  try {
+    // Normalize: strip non-string assignments.
+    const clean = {
+      tags: body.tags.filter((t) => typeof t === "string"),
+      assignments: Object.fromEntries(
+        Object.entries(body.assignments).filter(([_, v]) => typeof v === "string")
+      ),
+    };
+    await s3.putTagMap(clean);
+    res.json(clean);
+  } catch (err) {
+    console.error(`[v1/tags:put]`, err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Publish an NPC's full content (manifest + sk + assets) from the
+// bridge's local workspace dir to S3. After this, prod's bridge
+// boot pulls the NPC into its own workspace from the S3 keyspace —
+// no git commit / push, no seed-npcs/ directory. Idempotent.
+app.post("/v1/npcs/:pubkey/publish", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "character not found" });
+  if ((c.kind ?? "player") !== "npc") {
+    return res.status(400).json({ error: "not an NPC" });
+  }
+  if (!c.npc_role || !c.npc_default_pos) {
+    return res.status(400).json({ error: "NPC needs npc_role + npc_default_pos before publishing" });
+  }
+  if (!s3.s3Configured) return res.status(503).json({ error: "S3 not configured" });
+
+  const npub = npubEncode(pubkey);
+  const dir = getCharDir(pubkey);
+
+  try {
+    // Strip avatarUrl from the manifest before publishing — it carries
+    // whatever bridge origin generated it (often a LAN IP). The seeder
+    // synthesises a fresh URL from PUBLIC_BRIDGE_URL on each install.
+    const manifestPath = join(dir, "agent.json");
+    const manifestRaw = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    const cleanManifest = { ...manifestRaw };
+    delete cleanManifest.avatarUrl;
+    await s3.putNpcAsset(npub, "agent.json", Buffer.from(JSON.stringify(cleanManifest, null, 2)), "application/json");
+
+    // sk.hex
+    const skPath = join(dir, "sk.hex");
+    if (!existsSync(skPath)) throw new Error("sk.hex missing");
+    await s3.putNpcAsset(npub, "sk.hex", readFileSync(skPath), "text/plain");
+
+    // Heavy assets — best-effort, all tolerated as missing.
+    const ASSETS = [
+      ["avatar.png", "image/png"],
+      ["avatar.jpg", "image/jpeg"],
+      ["avatar.jpeg", "image/jpeg"],
+      ["avatar.webp", "image/webp"],
+      ["tpose.png", "image/png"],
+      ["model.glb", "model/gltf-binary"],
+      ["rig.glb", "model/gltf-binary"],
+      ["rig_palmsdown.glb", "model/gltf-binary"],
+      ["rig_mapping.json", "application/json"],
+      ["kimodo.json", "application/json"],
+    ];
+    const uploaded = [];
+    const skipped = [];
+    for (const [filename, mime] of ASSETS) {
+      const path = join(dir, filename);
+      if (!existsSync(path)) { skipped.push(filename); continue; }
+      await s3.putNpcAsset(npub, filename, readFileSync(path), mime);
+      uploaded.push({ filename, sizeKb: Math.round(statSync(path).size / 1024) });
+    }
+    res.json({ pubkey, npub, name: c.name, uploaded, skipped });
+  } catch (err) {
+    console.error(`[v1/npcs:publish] ${pubkey}:`, err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Post-image serving (#355). Filename pattern: <shortId>.<ext>.
 // Prefers S3 when configured; falls back to disk under the character
 // dir for local dev. Immutable URLs — no cache-buster needed.
