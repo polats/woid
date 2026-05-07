@@ -193,6 +193,11 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
   const projectorRef = useRef(null)
   const worldRootRef = useRef(null)
   const liveAvatarsRef = useRef(new Map())  // npub → spawn handle
+  // Agent-focus state lives in refs so both the setup effect (which
+  // owns the click handler + per-frame face-camera) and the sync
+  // effect (which despawns avatars) can read/write it.
+  const focusedAgentIdRef = useRef(null)
+  const focusedAgentRestoreRef = useRef(null)
   // Bumped when the registry signals a model change for a visible
   // npub — forces the sync effect to re-run and respawn that agent.
   const invalidationRef = useRef(0)
@@ -297,6 +302,71 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
     let focusedRoomMeta = null
     let homeFrame = null  // { centerX, centerY, zoom }
     let homeBounds = null
+    // Agent-focus state. Independent of room focus, but room focus
+    // is also driven for the agent's current room when focusing.
+    // Mirrored from refs (`focusedAgentIdRef`, `focusedAgentRestoreRef`)
+    // so the despawn handler in the sync effect can also read/clear them.
+
+    // Build a yellow silhouette by adding a sibling/child mesh per host
+    // mesh: same geometry, BackSide rendering, vertices pushed slightly
+    // along their normal in object space. The original material is never
+    // touched, so shadows and material-specific shading stay correct;
+    // the outline mesh sets castShadow=false so it doesn't introduce any
+    // shadow artefacts of its own.
+    const HIGHLIGHT_COLOR = 0xffd866
+    const OUTLINE_THICKNESS = 0.012  // object-space units; tuned by eye
+    // Reused per-frame to avoid GC churn while the focus stays on.
+    const _faceCamMat = new THREE.Matrix4()
+    const _faceCamVec = new THREE.Vector3()
+
+    const applyOutline = (object3d) => {
+      const added = []
+      // Collect first; appending children during traverse can re-enter.
+      const hosts = []
+      object3d.traverse((o) => {
+        if ((o.isSkinnedMesh || o.isMesh) && !o.userData.__isOutline) {
+          hosts.push(o)
+        }
+      })
+      for (const host of hosts) {
+        const mat = new THREE.MeshBasicMaterial({
+          color: HIGHLIGHT_COLOR,
+          side: THREE.BackSide,
+          // No fog/lighting — the silhouette should read consistently
+          // regardless of scene environment intensity.
+          fog: false,
+        })
+        // Inflate along the normal in object space. For skinned meshes
+        // the normal here is the un-skinned bind-pose normal; the resulting
+        // outline can drift slightly during extreme bone rotations but
+        // looks correct for typical poses.
+        mat.onBeforeCompile = (shader) => {
+          shader.vertexShader = shader.vertexShader.replace(
+            '#include <begin_vertex>',
+            `#include <begin_vertex>\n        transformed += normal * ${OUTLINE_THICKNESS.toFixed(4)};`,
+          )
+        }
+        let outline
+        if (host.isSkinnedMesh) {
+          outline = new THREE.SkinnedMesh(host.geometry, mat)
+          outline.bind(host.skeleton, host.bindMatrix)
+        } else {
+          outline = new THREE.Mesh(host.geometry, mat)
+        }
+        outline.userData.__isOutline = true
+        outline.frustumCulled = false
+        outline.castShadow = false
+        outline.receiveShadow = false
+        host.add(outline)
+        added.push({ outline, host })
+      }
+      return () => {
+        for (const { outline, host } of added) {
+          host.remove(outline)
+          try { outline.material.dispose() } catch {}
+        }
+      }
+    }
 
     // Centralised focus-state setter — keeps focusedRoomId, the
     // pan-zoom lock, the bounds, and the parent-facing onFocusChange
@@ -326,6 +396,22 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
     }
 
     const exitFocus = () => {
+      // Always clear agent focus alongside room focus — both are user-
+      // visible "selection" state and the agent highlight should never
+      // outlive the room zoom that framed it.
+      if (focusedAgentRestoreRef.current) {
+        try { focusedAgentRestoreRef.current() } catch {}
+      }
+      focusedAgentRestoreRef.current = null
+      // Force the previously-focused agent's currentRole to null so the
+      // role swap on the next sync tick re-resolves to walk / idle /
+      // resting, instead of sticking on 'wave'.
+      const prevFocusId = focusedAgentIdRef.current
+      if (prevFocusId) {
+        const prevHandle = liveAvatarsRef.current.get(prevFocusId)
+        if (prevHandle) prevHandle.currentRole = null
+      }
+      focusedAgentIdRef.current = null
       if (!focusedRoomId || !homeFrame) return
       const fx = camera.position.x
       const fy = camera.position.y
@@ -344,6 +430,143 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       tween.ty = homeFrame.centerY
       tween.tz = homeFrame.zoom
       tween.onDone = null
+    }
+
+    // Character-focus reuses the room-focus Y centre (meta.cy) so the
+    // vertical framing matches double-tap-room exactly — characters
+    // can't be "too high" or "too low" in frame, because rooms are
+    // already framed to fit. Only the X shifts to follow the
+    // character. If the agent has no resolvable room we fall back to
+    // an approximate mid-body Y.
+    const CHARACTER_FALLBACK_Y_OFFSET = 0.5
+
+    // Tween the camera to a specific character's world position, then
+    // lock pan to their containing room (if known). Used by tap-to-
+    // focus so the avatar stays framed even if the room's centre would
+    // have left them off-screen — characters drift to room edges as
+    // they pace, and the room-cover framing can crop them out.
+    const focusCharacter = (handle, agent) => {
+      if (!handle || !handle.object3d) return
+      const wrapper = handle.object3d
+      // Match the zoom AND vertical centre of the room-focus path,
+      // shifting only the horizontal centre to follow the character.
+      // Without a resolvable room, fall back to a manual mid-body Y.
+      const rgForZoom = roomGroupForAgent(agent)
+      let toZoom = 3
+      let ty = wrapper.position.y + CHARACTER_FALLBACK_Y_OFFSET
+      if (rgForZoom) {
+        const aspect = (renderer.domElement.clientWidth || 1) / (renderer.domElement.clientHeight || 1)
+        const meta = rgForZoom.userData.room
+        const zoomByH = FRUSTUM_HEIGHT / meta.h
+        const zoomByW = (FRUSTUM_HEIGHT * aspect) / meta.w
+        toZoom = Math.min(Math.max(zoomByH, zoomByW), 8)
+        ty = meta.cy
+      }
+      const tx = wrapper.position.x
+      controls.setLock({})
+      tween.active = true
+      tween.t0 = performance.now()
+      tween.dur = FOCUS_TWEEN_MS
+      tween.fx = camera.position.x
+      tween.fy = camera.position.y
+      tween.fz = camera.zoom
+      tween.tx = tx
+      tween.ty = ty
+      tween.tz = toZoom
+      tween.onDone = () => {
+        // Lock pan to the room bounds (so the user can drag laterally
+        // within the room) but keep the lock's Y at the character's
+        // head height — that's the settled centre.
+        const rg = roomGroupForAgent(agent)
+        if (!rg) return
+        const meta = rg.userData.room
+        const visW = (camera.right - camera.left) / camera.zoom
+        const halfVis = visW / 2
+        let xMin = meta.cx - meta.w / 2 + halfVis
+        let xMax = meta.cx + meta.w / 2 - halfVis
+        if (xMin > xMax) { xMin = xMax = meta.cx }
+        controls.setBounds({ minX: xMin, maxX: xMax, minY: ty, maxY: ty })
+        controls.setLock({ y: ty, zoom: true, onExit: exitFocus })
+        focusedRoomId = meta.id
+        focusedRoomMeta = meta
+        onFocusChangeRef.current?.({ id: meta.id, name: meta.name })
+      }
+    }
+
+    // Run the same camera tween + lock that double-tap-room uses, but
+    // for an arbitrary roomGroup. Extracted so agent-tap can drive the
+    // same focus path. Idempotent if `roomGroup` is already focused.
+    const focusRoom = (roomGroup) => {
+      if (!roomGroup) return
+      if (focusedRoomId === roomGroup.userData.room?.id) return
+      const aspect = (renderer.domElement.clientWidth || 1) / (renderer.domElement.clientHeight || 1)
+      const meta = roomGroup.userData.room
+      const zoomByH = FRUSTUM_HEIGHT / meta.h
+      const zoomByW = (FRUSTUM_HEIGHT * aspect) / meta.w
+      const toZoom = Math.min(Math.max(zoomByH, zoomByW), 8)
+      controls.setLock({})
+      tween.active = true
+      tween.t0 = performance.now()
+      tween.dur = FOCUS_TWEEN_MS
+      tween.fx = camera.position.x
+      tween.fy = camera.position.y
+      tween.fz = camera.zoom
+      tween.tx = meta.cx
+      tween.ty = meta.cy
+      tween.tz = toZoom
+      tween.onDone = () => applyFocus(roomGroup)
+    }
+
+    // Lookup the roomGroup for an agent — uses pos.roomId when settled
+    // or assignment.roomId when walking. Returns null if neither maps
+    // to a known room (e.g. fresh agent, untracked room).
+    const roomGroupForAgent = (agent) => {
+      const roomId = agent?.pos?.roomId ?? agent?.assignment?.roomId
+      if (!roomId) return null
+      return roomGroups.find((g) => g.userData.room?.id === roomId) ?? null
+    }
+
+    const focusAgent = (agentId) => {
+      const handle = liveAvatarsRef.current.get(agentId)
+      if (!handle || handle.pending || !handle.object3d) return
+      // Switching from another agent: restore the previous outline
+      // and reset its currentRole so the next sync tick re-resolves
+      // it to whatever the FSM wants (idle / walk / resting).
+      if (focusedAgentRestoreRef.current) {
+        try { focusedAgentRestoreRef.current() } catch {}
+      }
+      const prevFocusId = focusedAgentIdRef.current
+      if (prevFocusId && prevFocusId !== agentId) {
+        const prevHandle = liveAvatarsRef.current.get(prevFocusId)
+        if (prevHandle) prevHandle.currentRole = null
+      }
+      focusedAgentIdRef.current = agentId
+      focusedAgentRestoreRef.current = applyOutline(handle.object3d)
+      // Force-play 'wave' immediately so the selection has visible
+      // feedback before the next per-snapshot role swap. The role-swap
+      // path in the sync effect re-checks focused state and keeps
+      // 'wave' assigned while focus persists.
+      if (handle.animator) {
+        const waveId = animationLibrary.getRoleId('wave')
+        const cached = animationLibrary.peek(waveId)
+        if (cached) {
+          handle.animator.setMotion(cached, { loop: true, applyRootTranslation: false })
+          handle.currentRole = 'wave'
+        } else {
+          handle.currentRole = 'wave' // optimistic
+          animationLibrary.getRole('wave').then((m) => {
+            if (m && handle.animator && focusedAgentIdRef.current === agentId) {
+              handle.animator.setMotion(m, { loop: true, applyRootTranslation: false })
+            }
+          })
+        }
+      }
+      // Camera focus on the character itself, not the room — characters
+      // can pace to room edges and the room-cover framing then crops
+      // them out. focusCharacter still locks pan to the room so the
+      // user can drag around afterward.
+      const agent = shelterStore.getSnapshot().agents?.[agentId]
+      focusCharacter(handle, agent)
     }
 
     // Debug rotation offsets (Ctrl+drag) — layered on top of the
@@ -469,8 +692,42 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
       raycaster.setFromCamera(ndc, camera)
+
+      // Prefer avatar hits — the user's intent when tapping a character
+      // standing in a room is "select this character", not "double-tap
+      // the room". A single tap is enough; double-tap-on-character
+      // would be a separate gesture and we don't have a use for it.
+      const avatarObjs = []
+      for (const handle of liveAvatarsRef.current.values()) {
+        if (handle && !handle.pending && handle.object3d) avatarObjs.push(handle.object3d)
+      }
+      const avatarHits = avatarObjs.length
+        ? raycaster.intersectObjects(avatarObjs, true)
+        : []
+      if (avatarHits.length) {
+        let node = avatarHits[0].object
+        let agentId = null
+        while (node) {
+          if (node.userData?.agentId) { agentId = node.userData.agentId; break }
+          node = node.parent
+        }
+        if (agentId) {
+          if (focusedAgentIdRef.current === agentId) {
+            // Tap-toggle off.
+            exitFocus()
+          } else {
+            focusAgent(agentId)
+          }
+          return
+        }
+      }
+
       const hits = raycaster.intersectObjects(roomGroups, true)
-      if (!hits.length) return
+      if (!hits.length) {
+        // Tapped empty space — clear any active selection.
+        if (focusedAgentIdRef.current) exitFocus()
+        return
+      }
       let node = hits[0].object
       let roomGroup = null
       while (node) {
@@ -552,6 +809,9 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
         for (const a of Object.values(snapshot.agents ?? {})) {
           const handle = live.get(a.id)
           if (!handle || handle.pending) continue
+          // Focused agents freeze — face-camera below still rotates
+          // them, but no position writes here.
+          if (focusedAgentIdRef.current === a.id) continue
 
           let from, to, started, duration
           if (a.state === 'walking' && a.walkFrom && a.walkTo) {
@@ -580,10 +840,33 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
           // by atan2(dx, dz) aligns +Z with the heading vector.
           // When stationary (no lerp), we leave rotation alone so
           // they keep facing wherever they last walked toward.
-          const dx = end.world.x - start.world.x
-          const dz = end.world.z - start.world.z
-          if (dx * dx + dz * dz > 1e-6) {
-            handle.object3d.rotation.y = Math.atan2(dx, dz)
+          // Focused agents skip this — face-camera below wins.
+          if (focusedAgentIdRef.current !== a.id) {
+            const dx = end.world.x - start.world.x
+            const dz = end.world.z - start.world.z
+            if (dx * dx + dz * dz > 1e-6) {
+              handle.object3d.rotation.y = Math.atan2(dx, dz)
+            }
+          }
+        }
+
+        // Focused-agent face-camera. Compute the camera position in
+        // worldRoot-local space (worldRoot has tilt + debug-Y) so that
+        // setting wrapper.rotation.y around its own local axis lands
+        // the wrapper-local +Z (avatar forward) toward the camera.
+        const focusId = focusedAgentIdRef.current
+        if (focusId) {
+          const handle = live.get(focusId)
+          if (handle && !handle.pending && handle.object3d) {
+            worldRoot.updateMatrixWorld(true)
+            const inv = _faceCamMat.copy(worldRoot.matrixWorld).invert()
+            const camLocal = _faceCamVec.copy(camera.position).applyMatrix4(inv)
+            const wrapper = handle.object3d
+            const dx = camLocal.x - wrapper.position.x
+            const dz = camLocal.z - wrapper.position.z
+            if (dx * dx + dz * dz > 1e-6) {
+              wrapper.rotation.y = Math.atan2(dx, dz)
+            }
           }
         }
       }
@@ -659,10 +942,18 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       // so the sync effect doesn't pop the avatar back to its stale
       // anchor pos between resolver ticks.
       const isWalking = a.state === 'walking' && a.walkFrom && a.walkTo
-      const isPacing = !!(a.paceFrom && a.paceTo && a.paceStartedAt != null)
+      const isPacing = a.paceMode === 'moving'
+        && !!(a.paceFrom && a.paceTo && a.paceStartedAt != null)
       const isLerping = isWalking || isPacing
+      const isResting = a.paceMode === 'resting'
       if (existing && !existing.pending) {
-        if (!isLerping) {
+        // Focused agents are frozen in place — skip both the lerp
+        // (handled in the per-frame loop) and the snapshot-driven
+        // position write here. Without this, a resolver tick that
+        // shifts agent.pos (e.g. move→rest sets pos=paceTo) would
+        // teleport the focused character mid-wave.
+        const isFocused = focusedAgentIdRef.current === a.id
+        if (!isLerping && !isFocused) {
           existing.object3d.position.set(
             projection.world.x,
             projection.world.y,
@@ -677,7 +968,14 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
         // idle. Each handle remembers its current role so we don't
         // churn setMotion() every frame.
         if (existing.animator) {
-          const wantedRole = isLerping ? 'walk' : 'idle'
+          const isFocused = focusedAgentIdRef.current === a.id
+          const wantedRole = isFocused
+            ? 'wave'
+            : isLerping
+              ? 'walk'
+              : isResting
+                ? (a.paceRestRole ?? 'idle')
+                : 'idle'
           if (existing.currentRole !== wantedRole) {
             const wantedId = animationLibrary.getRoleId(wantedRole)
             const motion = animationLibrary.peek(wantedId)
@@ -703,6 +1001,9 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
       const lookupKey = a.pubkey ?? a.id
       factory.spawn(lookupKey).then((handle) => {
         if (cancelled) { handle.dispose(); return }
+        // Tag the wrapper with the agent id so the click raycast can
+        // walk parents from a mesh hit back to the owning agent.
+        handle.object3d.userData.agentId = a.id
         worldRoot.add(handle.object3d)
         // For lerping agents (walking or pacing), place at the
         // current source so they don't pop to the destination before
@@ -726,6 +1027,14 @@ export default function ShelterStage3D({ onFocusChange = null } = {}) {
     }
     for (const [id, handle] of [...live.entries()]) {
       if (desired.has(id)) continue
+      // If the focused agent is being despawned, clear focus before
+      // their wrapper goes away — otherwise the next per-frame tick
+      // dereferences a disposed handle.
+      if (focusedAgentIdRef.current === id) {
+        try { focusedAgentRestoreRef.current?.() } catch {}
+        focusedAgentRestoreRef.current = null
+        focusedAgentIdRef.current = null
+      }
       if (handle.dispose) handle.dispose()
       live.delete(id)
     }
