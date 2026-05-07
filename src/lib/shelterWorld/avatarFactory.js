@@ -225,8 +225,26 @@ export function createAvatarFactory({ registry } = {}) {
     }
     const entry = registry?.get(npub) ?? null
     let result = null
+    // If the registry has both rig URL + inline mapping (dev path via
+    // kimodo-tools), use them directly. Otherwise, if a mappingUrl is
+    // set (prod / bridge fallback), fetch it on demand and synthesize
+    // an entry for buildKimodo.
+    let kimodoEntry = null
     if (entry?.kimodoUrl && entry?.mapping) {
-      try { result = await buildKimodo(entry) } catch (err) {
+      kimodoEntry = entry
+    } else if (entry?.kimodoUrl && entry?.mappingUrl) {
+      try {
+        const r = await fetch(entry.mappingUrl)
+        if (r.ok) {
+          const mapping = await r.json()
+          kimodoEntry = { ...entry, mapping }
+        }
+      } catch (err) {
+        console.warn('[avatarFactory] mapping fetch failed for', npub, err?.message || err)
+      }
+    }
+    if (kimodoEntry) {
+      try { result = await buildKimodo(kimodoEntry) } catch (err) {
         console.warn('[avatarFactory] kimodo load failed for', npub, err?.message || err)
       }
     }

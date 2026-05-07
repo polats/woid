@@ -64,6 +64,18 @@ export function createCharacterRegistry({ bridgeUrl } = {}) {
       // from `:pubkey/model` (added by Phase 3 — until then this is
       // a 404 if no model.glb exists, and the factory falls through
       // to the generic avatar.glb).
+      // kimodoUrl + mapping resolution: prefer kimodo-tools data (dev,
+      // when /api/kimodo/characters is reachable). On prod the bridge
+      // serves the same artefacts at /characters/:pubkey/{rig,rig-mapping}
+      // — set bridgeKimodoUrl + mappingUrl so the avatar factory can
+      // fetch the mapping JSON on-demand and build the rigged avatar
+      // exactly the same way.
+      const bridgeKimodoUrl = bridgeUrl
+        ? `${bridgeUrl}/characters/${pubkey}/rig`
+        : null
+      const bridgeMappingUrl = bridgeUrl
+        ? `${bridgeUrl}/characters/${pubkey}/rig-mapping`
+        : null
       const next = {
         pubkey,
         npub: ch.npub ?? null,
@@ -72,8 +84,11 @@ export function createCharacterRegistry({ bridgeUrl } = {}) {
         modelUrl: ch.model?.modelUrl ?? (bridgeUrl ? `${bridgeUrl}/characters/${pubkey}/model` : null),
         modelMtime: ch.model?.modelMtime ?? null,
         kimodoCharId: kim?.id ?? ch.model?.kimodoCharId ?? null,
-        kimodoUrl: kim?.url ? `/api/kimodo${kim.url}` : null,
+        kimodoUrl: kim?.url ? `/api/kimodo${kim.url}` : bridgeKimodoUrl,
         mapping: kim?.mapping ?? null,
+        // Set when mapping is missing inline; the avatar factory will
+        // fetch from this URL before calling buildKimodo.
+        mappingUrl: kim?.mapping ? null : bridgeMappingUrl,
         backend: kim?.backend ?? ch.model?.backend ?? null,
       }
       const prev = entries.get(pubkey)

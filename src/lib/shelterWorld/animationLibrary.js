@@ -82,22 +82,42 @@ export function normalizeTag(input) {
   return isValidTag(slug) ? slug : null
 }
 
-function fetchMotion(id) {
-  if (!id) return Promise.resolve(null)
-  if (cache.has(id)) return Promise.resolve(cache.get(id))
+// Motion JSON resolution: try the bundled-static path first
+// (`/animations/<id>.json` — works on prod where there's no kimodo
+// proxy), then fall back to `/api/kimodo/animations/<id>` (the Vite
+// dev middleware route). The static bundle ships with the built-in
+// defaults; user-generated motions still flow through /api/kimodo
+// in dev. On prod, missing motions resolve to null and the avatar
+// factory's fallback path takes over.
+async function fetchMotion(id) {
+  if (!id) return null
+  if (cache.has(id)) return cache.get(id)
   const existing = inflight.get(id)
   if (existing) return existing
-  const p = fetch(`/api/kimodo/animations/${id}`)
-    .then((r) => (r.ok ? r.json() : null))
-    .then((m) => {
+  const p = (async () => {
+    try {
+      const fromStatic = await fetch(`/animations/${id}.json`)
+      if (fromStatic.ok) {
+        const ct = fromStatic.headers.get('content-type') || ''
+        if (ct.includes('application/json')) {
+          const m = await fromStatic.json()
+          if (m && typeof m === 'object' && Array.isArray(m.bone_names)) {
+            cache.set(id, m)
+            return m
+          }
+        }
+      }
+    } catch { /* fall through to /api/kimodo */ }
+    try {
+      const r = await fetch(`/api/kimodo/animations/${id}`)
+      if (!r.ok) return null
+      const m = await r.json()
       if (m) cache.set(id, m)
-      inflight.delete(id)
       return m
-    })
-    .catch(() => {
-      inflight.delete(id)
+    } catch {
       return null
-    })
+    }
+  })().finally(() => { inflight.delete(id) })
   inflight.set(id, p)
   return p
 }
