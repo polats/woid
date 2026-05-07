@@ -5356,11 +5356,10 @@ body {
 .shelter-card {
   position: absolute;
   top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 12px;
+  right: 12px;
   display: flex;
   flex-direction: column;
-  width: min(92%, 320px);
   background: var(--paper);
   border: 2px solid var(--ink);
   box-shadow: 4px 4px 0 var(--ink);
@@ -5371,8 +5370,8 @@ body {
   color: var(--ink);
 }
 @keyframes shelter-card-in {
-  from { opacity: 0; transform: translate(-50%, -6px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .shelter-card-head {
@@ -5436,10 +5435,11 @@ body {
 
 .shelter-card-body {
   background: var(--paper);
-  padding: 12px 14px;
+  padding: 8px 12px;
   /* Fixed height — the card shouldn't change size between tabs.
-     Long bios scroll inside; the 4-slot schedule fits with margin. */
-  height: 220px;
+     Long bios scroll inside; the schedule transposes to 4 horizontal
+     columns to fit comfortably in this height. */
+  height: 96px;
   overflow-y: auto;
 }
 .shelter-card-bio {
@@ -5463,52 +5463,51 @@ body {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  height: 100%;
 }
 .shelter-card-slot {
-  display: flex;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
+  justify-items: center;
+  gap: 1px;
+  padding: 4px 4px;
   border: 1.5px solid var(--ink);
   background: var(--paper-2, var(--paper));
+  min-width: 0;
+  text-align: center;
 }
 .shelter-card-slot-glyph {
-  font-size: 16px;
+  font-size: 14px;
   color: var(--ink);
-  flex-shrink: 0;
+  line-height: 1;
 }
-.shelter-card-slot-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  flex-shrink: 0;
-  width: 64px;
-}
-.shelter-card-slot-meta strong {
+.shelter-card-slot-name {
   font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-size: 9px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink);
 }
 .shelter-card-slot-hours {
   font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.1em;
+  font-size: 8px;
+  letter-spacing: 0.08em;
   color: var(--ink-faint);
 }
 .shelter-card-slot-room {
-  flex: 1;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
   color: var(--ink);
-  text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
+  align-self: end;
+  margin-top: 2px;
 }
 
 .shelter-card-tabs {

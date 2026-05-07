@@ -310,19 +310,26 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     // so the despawn handler in the sync effect can also read/clear them.
 
     // Build a yellow silhouette by adding a sibling/child mesh per host
-    // mesh: same geometry, BackSide rendering, vertices pushed slightly
-    // along their normal in object space. The original material is never
-    // touched, so shadows and material-specific shading stay correct;
-    // the outline mesh sets castShadow=false so it doesn't introduce any
-    // shadow artefacts of its own.
-    const HIGHLIGHT_COLOR = 0xffd866
-    const OUTLINE_THICKNESS = 0.012  // object-space units; tuned by eye
+    // mesh: same geometry, BackSide rendering, vertices pushed along
+    // their normal by a shader-uniform thickness so we can pulse it
+    // per-frame. Original materials are never touched; outline meshes
+    // set castShadow=false so shadows stay clean.
+    const HIGHLIGHT_BASE = new THREE.Color(0xffe600)  // bright saturated yellow
+    const HIGHLIGHT_PEAK = new THREE.Color(0xfffaa0)  // hot near-white peak
+    const OUTLINE_THICKNESS_MIN = 0.022
+    const OUTLINE_THICKNESS_MAX = 0.034
+    const PULSE_PERIOD_SEC = 1.1
     // Reused per-frame to avoid GC churn while the focus stays on.
     const _faceCamMat = new THREE.Matrix4()
     const _faceCamVec = new THREE.Vector3()
+    const _pulseColor = new THREE.Color()
+    // Materials currently driving the focused agent's outline; pulsed
+    // each frame from the render tick.
+    let pulseTargets = []
 
     const applyOutline = (object3d) => {
       const added = []
+      const targets = []
       // Collect first; appending children during traverse can re-enter.
       const hosts = []
       object3d.traverse((o) => {
@@ -332,21 +339,25 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       })
       for (const host of hosts) {
         const mat = new THREE.MeshBasicMaterial({
-          color: HIGHLIGHT_COLOR,
+          color: HIGHLIGHT_BASE.clone(),
           side: THREE.BackSide,
-          // No fog/lighting — the silhouette should read consistently
-          // regardless of scene environment intensity.
           fog: false,
         })
-        // Inflate along the normal in object space. For skinned meshes
-        // the normal here is the un-skinned bind-pose normal; the resulting
-        // outline can drift slightly during extreme bone rotations but
-        // looks correct for typical poses.
+        // Shader uniform `uThickness` so we can pulse thickness per
+        // frame without recompiling. mat.userData.uThickness is the
+        // canonical reference the render tick writes to.
+        mat.userData.uThickness = { value: OUTLINE_THICKNESS_MIN }
         mat.onBeforeCompile = (shader) => {
-          shader.vertexShader = shader.vertexShader.replace(
-            '#include <begin_vertex>',
-            `#include <begin_vertex>\n        transformed += normal * ${OUTLINE_THICKNESS.toFixed(4)};`,
-          )
+          shader.uniforms.uThickness = mat.userData.uThickness
+          shader.vertexShader = shader.vertexShader
+            .replace(
+              '#include <common>',
+              '#include <common>\nuniform float uThickness;',
+            )
+            .replace(
+              '#include <begin_vertex>',
+              '#include <begin_vertex>\n        transformed += normal * uThickness;',
+            )
         }
         let outline
         if (host.isSkinnedMesh) {
@@ -361,8 +372,12 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         outline.receiveShadow = false
         host.add(outline)
         added.push({ outline, host })
+        targets.push(mat)
       }
+      pulseTargets = targets
       return () => {
+        // Stop driving the now-stale materials before disposal.
+        if (pulseTargets === targets) pulseTargets = []
         for (const { outline, host } of added) {
           host.remove(outline)
           try { outline.material.dispose() } catch {}
@@ -883,6 +898,21 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
             const dz = camLocal.z - wrapper.position.z
             if (dx * dx + dz * dz > 1e-6) {
               wrapper.rotation.y = Math.atan2(dx, dz)
+            }
+          }
+          // Pulse the outline every frame: smooth sine wave drives both
+          // colour (HIGHLIGHT_BASE → HIGHLIGHT_PEAK) and shader-uniform
+          // thickness (OUTLINE_THICKNESS_MIN → MAX), so the highlight
+          // breathes rather than just sitting there.
+          if (pulseTargets.length) {
+            const t = (performance.now() / 1000) * (Math.PI * 2 / PULSE_PERIOD_SEC)
+            const k = (Math.sin(t) + 1) / 2
+            _pulseColor.copy(HIGHLIGHT_BASE).lerp(HIGHLIGHT_PEAK, k)
+            const thickness = OUTLINE_THICKNESS_MIN
+              + (OUTLINE_THICKNESS_MAX - OUTLINE_THICKNESS_MIN) * k
+            for (const mat of pulseTargets) {
+              mat.color.copy(_pulseColor)
+              if (mat.userData.uThickness) mat.userData.uThickness.value = thickness
             }
           }
         }

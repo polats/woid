@@ -124,10 +124,8 @@ export default function ShelterCharacterCard({ agent }) {
               return (
                 <li key={slot} className="shelter-card-slot">
                   <span className="shelter-card-slot-glyph">{SLOT_GLYPH[slot]}</span>
-                  <div className="shelter-card-slot-meta">
-                    <strong>{slot}</strong>
-                    <span className="shelter-card-slot-hours">{SLOT_HOURS[slot]}</span>
-                  </div>
+                  <strong className="shelter-card-slot-name">{slot}</strong>
+                  <span className="shelter-card-slot-hours">{SLOT_HOURS[slot]}</span>
                   <span className="shelter-card-slot-room">
                     {roomLabel(s?.roomId)}
                   </span>
