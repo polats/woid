@@ -16,17 +16,20 @@
  *                                                    blocks until the user taps if tapToAdvance
  *   { type: "parallel", actions: Action[] }         run a list of actions concurrently; resolves
  *                                                    when all of them finish
- *   { type: "walkCharacterRole",
- *           role: string, dx?: number,
- *           dy?: number, ms?: number }              animate the agent (matched by role) along (dx,dy)
- *                                                    over `ms` while playing the walk motion
+ *
+ * Actor-targeting actions. The `target` selector resolves to a pubkey
+ * via resolveTarget(): `"hired"` (the most-recently-Hired carousel
+ * agent), `{ pubkey }`, or `{ role }` (looked up via ctx.resolveCharacter).
+ *   { type: "walkAgent", target,
+ *           dx?, dy?, ms? }                         animate the matched agent along (dx,dy) over
+ *                                                    `ms` while playing the walk motion
+ *   { type: "walkInAgent", target,
+ *           fromOffsetX?, dx?, ms? }                 park the matched agent at fromOffsetX off-
+ *                                                    camera, then walk dx units in
+ *   { type: "focusAgent", target,
+ *           outline?, motion?, closeup?, ms? }       focus the matched agent (outline + motion swap)
+ *
  *   { type: "panCamera", dx?, dy?, ms? }             pan the stage camera by (dx, dy) over `ms`
- *   { type: "walkInHired", fromOffsetX?, dx?, ms? } park the most-recently-Hired carousel agent at
- *                                                    fromOffsetX off-camera, then walk dx units in
- *   { type: "focusHired", outline?, motion?,
- *                          closeup?, ms? }            focus the most-recently-Hired agent (outline +
- *                                                    motion swap), like focusCharacterRole but for
- *                                                    a pubkey instead of a role tag
  *   { type: "showCarousel", source?: "starter" }    slide in the agent-card carousel sourced from
  *                                                    starter-tagged characters; remains visible
  *                                                    until `hideCarousel` or step end
@@ -35,20 +38,15 @@
  *   { type: "playStep", id: string }                 chain into another step from scripts.json
  *                                                    (runs its actions inline within this run, so
  *                                                    the cancel-token still works)
- *   { type: "focusCharacterRole", role: string,
- *                                 ms?: number,
- *                                 outline?: bool,
- *                                 motion?: string|null,
- *                                 closeup?: bool }   camera focus on the NPC with that role;
- *                                                    waits `ms` for the tween to settle.
- *                                                    `closeup:true` gives a tight full-body
- *                                                    framing, `outline:false` skips the red
- *                                                    selection outline, `motion` overrides the
- *                                                    role tag played on focus (default 'wave')
+ *
+ * Deprecated action aliases kept for one release: walkCharacterRole,
+ * walkInHired, focusCharacterRole, focusHired — each warns once and
+ * routes to its target-shaped equivalent.
  *
  * The runtime is decoupled from any specific view — the caller passes
- * a context with `resolveCharacter(role)` and `focusCharacter(pubkey)`
- * so the same runtime can drive Shelter today and any future scene.
+ * a context with `resolveCharacter(role)`, `walk(pubkey, ...)`,
+ * `walkIn(pubkey, ...)`, and `focus(pubkey, ...)` so the same runtime
+ * can drive Shelter today and any future scene.
  *
  * Tap delivery: external code (the tap-hint button) calls `tap()` to
  * resolve any in-flight `awaitForTap()`. If no tap is pending, it's a
@@ -91,7 +89,7 @@ export function subscribe(fn) {
 }
 
 /** Records which carousel card the player Hire'd. The runtime later
- *  reads this in actions like `walkInHired` so the chosen recruit
+ *  reads this when actions resolve `target: "hired"` so the chosen recruit
  *  walks in. Cleared on reset / step end. */
 export function setHired(pubkey) {
   console.log('[tutorial-walkin] setHired', pubkey)
@@ -140,6 +138,31 @@ async function tweenOverlay(toAlpha, ms, isCancelled) {
   }
 }
 
+/**
+ * Resolve an actor-targeting selector to a pubkey string.
+ *
+ * Accepted shapes:
+ *   "hired"            — the most-recently-Hired carousel agent (state.hiredPubkey)
+ *   { hired: true }    — same as above
+ *   { pubkey: "abc…" } — explicit pubkey
+ *   { role: "..." }    — role lookup via ctx.resolveCharacter
+ *
+ * Returns null when the selector can't resolve. Callers fall back to
+ * an `await sleep(ms)` so a missing target stalls gracefully instead
+ * of deadlocking the run.
+ */
+function resolveTarget(target, ctx) {
+  if (target == null) return null
+  if (target === 'hired' || target?.hired) return state.hiredPubkey ?? null
+  if (typeof target === 'string') return null
+  if (target.pubkey) return String(target.pubkey)
+  if (target.role && ctx?.resolveCharacter) {
+    const c = ctx.resolveCharacter({ role: target.role })
+    return c?.pubkey ?? null
+  }
+  return null
+}
+
 async function runAction(action, ctx, isCancelled) {
   switch (action.type) {
     case 'hideHud':
@@ -183,13 +206,12 @@ async function runAction(action, ctx, isCancelled) {
       await Promise.all(list.map((a) => runAction(a, ctx, isCancelled)))
       return
     }
-    case 'walkCharacterRole': {
-      const speaker = ctx.resolveCharacter
-        ? ctx.resolveCharacter({ role: action.role })
-        : null
-      if (speaker?.pubkey && ctx.walkAgent) {
-        await ctx.walkAgent(speaker.pubkey, action.dx ?? 0, action.dy ?? 0, action.ms ?? 1500)
+    case 'walkAgent': {
+      const pubkey = resolveTarget(action.target, ctx)
+      if (pubkey && ctx.walk) {
+        await ctx.walk(pubkey, action.dx ?? 0, action.dy ?? 0, action.ms ?? 1500)
       } else {
+        if (!pubkey) console.warn('[tutorial] walkAgent: target did not resolve', action.target)
         await sleep(action.ms ?? 1500)
       }
       return
@@ -207,37 +229,31 @@ async function runAction(action, ctx, isCancelled) {
       else await sleep(action.ms ?? 1500)
       return
     }
-    case 'walkInHired': {
-      console.log('[tutorial-walkin] action fired', {
-        hiredPubkey: state.hiredPubkey,
-        hasCtxWalkIn: !!ctx.walkInHired,
-        fromOffsetX: action.fromOffsetX, dx: action.dx, ms: action.ms,
-      })
-      if (!state.hiredPubkey) {
-        console.warn('[tutorial-walkin] no hiredPubkey set — did the carousel onHire fire?')
-      }
-      if (state.hiredPubkey && ctx.walkInHired) {
-        await ctx.walkInHired(state.hiredPubkey, action.fromOffsetX ?? 1.5, action.dx ?? -1.5, action.ms ?? 2500)
+    case 'walkInAgent': {
+      const pubkey = resolveTarget(action.target, ctx)
+      if (pubkey && ctx.walkIn) {
+        await ctx.walkIn(pubkey, action.fromOffsetX ?? 1.5, action.dx ?? -1.5, action.ms ?? 2500)
       } else {
+        if (!pubkey) console.warn('[tutorial] walkInAgent: target did not resolve', action.target)
         await sleep(action.ms ?? 1500)
       }
       return
     }
-    case 'focusHired': {
-      // Once the new recruit has walked into frame, focus them so
-      // they pick up the red selection outline + the requested motion
-      // (default 'wave' for that "say hi" beat). Reuses the same
-      // ctx.focusCharacter path the focusCharacterRole action uses,
-      // pointed at the carousel-Hire'd pubkey instead of a role.
-      if (state.hiredPubkey && ctx.focusCharacter) {
+    case 'focusAgent': {
+      const pubkey = resolveTarget(action.target, ctx)
+      if (pubkey && ctx.focus) {
         const focusOpts = {
           outline: action.outline !== false,
           motionRole: action.motion === undefined ? 'wave' : action.motion,
           closeup: !!action.closeup,
         }
-        try { await ctx.focusCharacter(state.hiredPubkey, focusOpts) } catch {}
+        try { await ctx.focus(pubkey, focusOpts) } catch {}
+      } else if (!pubkey) {
+        console.warn('[tutorial] focusAgent: target did not resolve', action.target)
       }
-      await sleep(Number(action.ms ?? 1200))
+      // Camera tween + role swap settle. Default 1500ms matches
+      // FOCUS_TWEEN_MS in ShelterStage3D.
+      await sleep(Number(action.ms ?? 1500))
       return
     }
     case 'showCarousel': {
@@ -269,26 +285,33 @@ async function runAction(action, ctx, isCancelled) {
       }
       return
     }
-    case 'focusCharacterRole': {
-      const speaker = ctx.resolveCharacter
-        ? ctx.resolveCharacter({ role: action.role })
-        : null
-      if (speaker?.pubkey && ctx.focusCharacter) {
-        const focusOpts = {
-          outline: action.outline !== false,
-          motionRole: action.motion === undefined ? 'wave' : action.motion,
-          closeup: !!action.closeup,
-        }
-        try { await ctx.focusCharacter(speaker.pubkey, focusOpts) } catch {}
-      }
-      // Let the camera tween + role swap settle. Default 1500ms matches
-      // the existing FOCUS_TWEEN_MS in ShelterStage3D.
-      await sleep(Number(action.ms ?? 1500))
-      return
-    }
+    // ── Deprecated action names — aliases that translate to the new
+    // target-shaped actions. Will be removed once we're confident no
+    // scripts depend on them; for now they warn and pass through.
+    case 'walkCharacterRole':
+      deprecate('walkCharacterRole', 'walkAgent')
+      return runAction({ ...action, type: 'walkAgent', target: { role: action.role } }, ctx, isCancelled)
+    case 'walkInHired':
+      deprecate('walkInHired', 'walkInAgent')
+      return runAction({ ...action, type: 'walkInAgent', target: 'hired' }, ctx, isCancelled)
+    case 'focusCharacterRole':
+      deprecate('focusCharacterRole', 'focusAgent')
+      return runAction({ ...action, type: 'focusAgent', target: { role: action.role } }, ctx, isCancelled)
+    case 'focusHired':
+      deprecate('focusHired', 'focusAgent')
+      return runAction({ ...action, type: 'focusAgent', target: 'hired' }, ctx, isCancelled)
     default:
       console.warn('[tutorial] unknown action', action)
   }
+}
+
+// One warn per deprecated action name per page load — without this a
+// long script that uses an old name a dozen times floods the console.
+const _deprecatedSeen = new Set()
+function deprecate(oldName, newName) {
+  if (_deprecatedSeen.has(oldName)) return
+  _deprecatedSeen.add(oldName)
+  console.warn(`[tutorial] action "${oldName}" is deprecated; use "${newName}" with target: { … } instead`)
 }
 
 /**

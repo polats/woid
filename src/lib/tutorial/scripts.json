@@ -17,8 +17,8 @@
           "tapToAdvance": true
         },
         {
-          "type": "focusCharacterRole",
-          "role": "receptionist",
+          "type": "focusAgent",
+          "target": { "role": "receptionist" },
           "closeup": true,
           "outline": false,
           "motion": "arms-crossed",
@@ -60,8 +60,8 @@
           "type": "parallel",
           "actions": [
             {
-              "type": "walkCharacterRole",
-              "role": "receptionist",
+              "type": "walkAgent",
+              "target": { "role": "receptionist" },
               "dx": -0.6,
               "ms": 3000
             },
@@ -70,13 +70,15 @@
         },
         { "type": "panCamera", "dx": -0.35, "ms": 1000 },
         {
-          "type": "walkInHired",
+          "type": "walkInAgent",
+          "target": "hired",
           "fromOffsetX": -0.3,
           "dx": 0.3,
           "ms": 1800
         },
         {
-          "type": "focusHired",
+          "type": "focusAgent",
+          "target": "hired",
           "outline": true,
           "motion": "wave",
           "ms": 1200

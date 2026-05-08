@@ -75,7 +75,8 @@ export default function TutorialOverlay() {
         visible={!!t.carousel}
         onHire={(active) => {
           // Record which carousel card was selected so later actions
-          // (walkInHired) know whose avatar to animate. Then advance.
+          // (walkInAgent / focusAgent with target: "hired") know whose
+          // avatar to animate. Then advance.
           if (active?.pubkey) setHired(active.pubkey)
           tap()
         }}
