@@ -11,16 +11,6 @@
       "gridW": 2,
       "gridH": 1,
       "color": "#cfd4dc"
-    },
-    {
-      "id": "pattern-sorting",
-      "name": "Pattern Sorting",
-      "category": "work",
-      "gridX": 0,
-      "gridY": -1,
-      "gridW": 2,
-      "gridH": 1,
-      "color": "#9aa3b0"
     }
   ]
 }

@@ -39,6 +39,59 @@ export default function Sandbox() {
   const profileDirtyRef = useRef(false)
   const chatlogRef = useRef(null)
 
+  // Persona prompt editor (gear icon next to + New) — mirrors the NPCs
+  // view's settings panel. Lets the user inspect and override the
+  // 'player-persona' system prompt that drives kind:'player' character
+  // generation, with a one-click reset to the bridge default.
+  const [showSettings, setShowSettings] = useState(false)
+  const [promptText, setPromptText] = useState('')
+  const [promptDefault, setPromptDefault] = useState('')
+  const [promptOverridden, setPromptOverridden] = useState(false)
+  const [promptStatus, setPromptStatus] = useState(null)
+  const promptDirty = promptText !== '' && promptText !== promptDefault
+
+  const refreshPrompt = useCallback(async () => {
+    if (!cfg.bridgeUrl) return
+    try {
+      const r = await fetch(`${cfg.bridgeUrl}/v1/prompts/player-persona`)
+      if (!r.ok) return
+      const j = await r.json()
+      setPromptText(j.text || '')
+      setPromptDefault(j.default || '')
+      setPromptOverridden(!!j.overridden)
+    } catch { /* transient */ }
+  }, [])
+  useEffect(() => { refreshPrompt() }, [refreshPrompt])
+
+  async function savePrompt() {
+    setPromptStatus('saving…')
+    try {
+      const r = await fetch(`${cfg.bridgeUrl}/v1/prompts/player-persona`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: promptText }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const j = await r.json()
+      setPromptText(j.text || '')
+      setPromptOverridden(!!j.overridden)
+      setPromptStatus('saved')
+      setTimeout(() => setPromptStatus(null), 2000)
+    } catch (e) { setPromptStatus(`error: ${e.message || e}`) }
+  }
+  async function resetPromptToDefault() {
+    setPromptStatus('resetting…')
+    try {
+      const r = await fetch(`${cfg.bridgeUrl}/v1/prompts/player-persona`, { method: 'DELETE' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const j = await r.json()
+      setPromptText(j.text || '')
+      setPromptOverridden(false)
+      setPromptStatus('reset')
+      setTimeout(() => setPromptStatus(null), 2000)
+    } catch (e) { setPromptStatus(`error: ${e.message || e}`) }
+  }
+
   // Wraps setInspectedId with a confirm prompt when the drawer's
   // profile tab has unsaved changes. Used by every place that might
   // swap the inspected character (card click, runtime click, etc).
@@ -261,10 +314,50 @@ export default function Sandbox() {
       <aside className="sandbox3-cards">
         <header>
           <h2>Agents</h2>
-          <button onClick={newCharacter} title="Create a new character with a random name + keypair">
-            + New
-          </button>
+          <div className="npcs-header-actions">
+            <button onClick={newCharacter} title="Create a new character with a random name + keypair">
+              + New
+            </button>
+            <button
+              type="button"
+              className={`npcs-settings-toggle${showSettings ? ' is-open' : ''}`}
+              onClick={() => setShowSettings((v) => !v)}
+              title={showSettings ? 'Hide settings' : 'Persona settings'}
+              aria-expanded={showSettings}
+            >
+              <SandboxIconSettings />
+            </button>
+          </div>
         </header>
+        {showSettings && (
+          <div className="npcs-settings-pane">
+            <section className="npcs-pane">
+              <h2>Persona prompt</h2>
+              <p className="muted">
+                System prompt used when generating a player character's persona.{' '}
+                {promptOverridden
+                  ? <strong>Currently overridden.</strong>
+                  : <span>Currently the default.</span>}
+              </p>
+              <textarea
+                className="npcs-prompt"
+                value={promptText}
+                onChange={(e) => setPromptText(e.target.value)}
+                spellCheck={false}
+                rows={14}
+              />
+              <div className="npcs-form-actions">
+                <button type="button" className="npcs-btn primary" onClick={savePrompt} disabled={!promptDirty}>
+                  Save
+                </button>
+                <button type="button" className="npcs-btn" onClick={resetPromptToDefault} disabled={!promptOverridden}>
+                  Reset to default
+                </button>
+                {promptStatus && <span className="npcs-status">{promptStatus}</span>}
+              </div>
+            </section>
+          </div>
+        )}
         {spawnError && <p className="agent-sandbox-error">{spawnError}</p>}
         {characters.length === 0 ? (
           <p className="muted">No agents yet. Click + New to mint one.</p>
@@ -347,6 +440,14 @@ export default function Sandbox() {
                           : m.split('/').pop().replace(/-(?:E?\d+B|Q\d+_K_M).*$/i, '')
                       return (
                         <div className="sandbox3-card-tags">
+                          {c.starter && (
+                            <span
+                              className="sandbox3-card-tag sandbox3-card-tag-starter"
+                              title="Featured in the wake-up tutorial recruit carousel"
+                            >
+                              starter
+                            </span>
+                          )}
                           {m && (
                             <span
                               className="sandbox3-card-tag sandbox3-card-tag-model"
@@ -535,5 +636,14 @@ export default function Sandbox() {
         />
       )}
     </div>
+  )
+}
+
+function SandboxIconSettings() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </svg>
   )
 }

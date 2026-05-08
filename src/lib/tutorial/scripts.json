@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "description": "Severance-flavoured tutorial scripts. Each step is a sequence of actions executed in order by src/lib/tutorial/runtime.js. Action shapes are documented in that file.",
+  "steps": [
+    {
+      "id": "wake-up",
+      "name": "Waking up",
+      "summary": "Player opens their eyes in the Lobby. Edi greets them — already framed up close as the screen fades in.",
+      "actions": [
+        { "type": "hideHud" },
+        { "type": "setOverlay", "alpha": 1.0 },
+        { "type": "delay", "ms": 600 },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "... Are you awake?",
+          "tapToAdvance": true
+        },
+        {
+          "type": "focusCharacterRole",
+          "role": "receptionist",
+          "closeup": true,
+          "outline": false,
+          "motion": "arms-crossed",
+          "ms": 600
+        },
+        { "type": "fadeOverlay", "to": 0.0, "ms": 2400 },
+        { "type": "playStep", "id": "edi-greeting" }
+      ]
+    },
+    {
+      "id": "edi-greeting",
+      "name": "Edi greets you",
+      "summary": "Cinematic closeup on Edi, arms-crossed, welcoming the new shift. Slides in the starter recruit carousel.",
+      "actions": [
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Good. Right in time for today's shift.",
+          "tapToAdvance": true
+        },
+        { "type": "showCarousel", "source": "starter" },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Here are the candidates for today. Choose one.",
+          "tapToAdvance": true
+        },
+        { "type": "hideCarousel" },
+        { "type": "delay", "ms": 400 },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Good choice. Let's welcome them to The Company.",
+          "tapToAdvance": true
+        },
+        { "type": "cameraTo", "state": "room", "ms": 1400 },
+        { "type": "delay", "ms": 300 },
+        {
+          "type": "parallel",
+          "actions": [
+            {
+              "type": "walkCharacterRole",
+              "role": "receptionist",
+              "dx": -0.6,
+              "ms": 3000
+            },
+            { "type": "panCamera", "dx": -0.5, "ms": 3000 }
+          ]
+        },
+        { "type": "panCamera", "dx": -0.35, "ms": 1000 },
+        {
+          "type": "walkInHired",
+          "fromOffsetX": -0.3,
+          "dx": 0.3,
+          "ms": 1800
+        },
+        {
+          "type": "focusHired",
+          "outline": true,
+          "motion": "wave",
+          "ms": 1200
+        }
+      ]
+    }
+  ]
+}

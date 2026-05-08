@@ -676,6 +676,10 @@ function listCharacters() {
         // Default legacy records (no `kind` field) to 'player' so consumers
         // can rely on the field always being present.
         kind: c.kind ?? "player",
+        // Tutorial-starter flag — surfaces a "STARTER" pill on the
+        // sandbox card and feeds the wake-up tutorial's recruit
+        // carousel. Defaults to false for legacy records.
+        starter: !!c.starter,
         npc_role: c.npc_role ?? null,
         npc_default_pos: c.npc_default_pos ?? null,
         shift_start: c.shift_start ?? null,
@@ -911,32 +915,60 @@ const PERSONA_SYSTEM_NPC = [
 // text — saved override if any, default otherwise.
 registerPrompt("npc-persona", PERSONA_SYSTEM_NPC);
 
+// Player persona prompt — Severance-flavoured world tone, but the
+// profiles describe WHO THE PERSON IS, not what they do for a living.
+// Personality, temperament, small private habits — no job titles,
+// departments, ledgers, or workplace technicalities. Registered as
+// overridable below so the agent-sandbox UI can edit it without a
+// server restart.
 const PERSONA_SYSTEM = [
-  "You generate short character profiles for a Scooby-Doo-style mystery cartoon —",
-  "a crew of teenagers who solve supernatural-seeming cases in small-town America.",
-  "Think Mystery Inc., Stranger Things kids, Gravity Falls — earnest teens, a",
-  "van or bike-club, a local legend per episode.",
+  "You generate short character profiles for the recruits of a Severance-flavoured",
+  "corporate-mystery game. The world's register is calm, polite, slightly off —",
+  "but the profiles you write are about WHO THE PERSON IS, not what they do.",
+  "Focus on temperament and inner life. Do not mention jobs, titles, departments,",
+  "ledgers, procedures, or any technical or workplace jargon.",
   "",
   "These become NIP-01 kind:0 Nostr profiles — only name + about.",
+  "",
+  "Voice goals:",
+  "- Personality-first. Write about how the person moves through a room, what",
+  "  they notice, what they care too much about, how they speak when they're",
+  "  alone, the small habits a friend would tease them for.",
+  "- Plain language. No technical or corporate vocabulary — no 'department',",
+  "  'protocol', 'intake', 'compliance', 'directive', 'clearance', 'shift',",
+  "  'procedure', or similar. Describe the person, not the institution.",
+  "- Specific over abstract. Concrete details (the way they hold a teacup,",
+  "  the songs they hum when nervous, the friend they always quote, the colour",
+  "  of the scarf folded in a coat pocket) instead of general adjectives like",
+  "  'mysterious', 'kind', 'introverted'.",
+  "- Calm, polished tone — quiet observation rather than dramatic flourish.",
+  "  The reader should feel like they've watched this person for an afternoon,",
+  "  not been handed a personnel file.",
   "",
   "Respond ONLY with valid JSON. Both fields are REQUIRED.",
   "No markdown, no code fences, no trailing text.",
   "{",
-  '  "name": "A realistic human name — a first name, or first + last, or a nickname a real teenager might go by. Examples: \'Mitsy Alvarado\', \'Ravi K.\', \'Buzz\', \'Jules Okafor\', \'Mei-Lin\'. Mix of cultures welcome. 2-40 characters. No emoji, no underscores, no digit-suffixes like x3 or 420.",',
-  '  "about": "REQUIRED. 2-4 sentences. Give the character a life: what they do, a distinctive habit or prop, something concrete about their week. Quote a line they might say. The character should feel specific, not a stock archetype."',
+  '  "name": "A formal full name. First + last; occasionally a single distinctive surname. 2-40 characters. Mix of cultures welcome. No emoji, no nicknames, no digit-suffixes.",',
+  '  "about": "REQUIRED. 2-4 sentences. Describe the person\'s temperament and texture: how they speak, what they pay attention to, a private habit, an opinion they hold gently but firmly. No job descriptions, no workplace terminology."',
   "}",
   "",
-  "Surprise the reader. Do not reuse the same role type across generations —",
-  "the brain, the jock, the skeptic, the tinkerer are all valid, but so are",
-  "the delivery driver, the community-theater lead, the grandparent's helper,",
-  "the pirate-radio host, the quiet one with the garden. Let temperature do its job.",
+  "Examples of register (do not copy, sense the tone):",
+  "- 'Tomas Akin listens longer than most people do, which leaves him with",
+  "   the unsettling reputation of always remembering what you said. He",
+  "   carries a thin notebook he never opens in public, and is given to",
+  "   short, careful smiles. Asked anything direct, he tilts his head a",
+  "   degree before answering, as if the question deserved courtesy.'",
   "",
-  "Keep it grounded: school, part-time jobs, family cars, weekend plans.",
-  "The supernatural is just the backdrop, not the only register.",
-  'Avoid "mystery", "spooky", "clue", "haunted", "ghost" as the first adjective —',
-  "reach for concrete, specific nouns (band posters, dented lockers, a diner called",
-  "something like The Griddle, a Xerox-smelling yearbook, a folding-chair stakeout).",
+  "Surprise the reader with each character's particular texture, not with",
+  "personality archetypes. Two thoughtful people should feel different because",
+  "of what they think about, not because one is bubbly and one is grumpy.",
 ].join("\n");
+
+// Registered as overridable so the agent-sandbox UI can edit the player
+// persona prompt without a server restart, matching how the NPCs view
+// edits 'npc-persona'. Generation paths below call
+// `loadPrompt('player-persona')` to get the current effective text.
+registerPrompt("player-persona", PERSONA_SYSTEM);
 
 // Characters can now carry realistic human names (spaces, accents, hyphens,
 // apostrophes, periods). Kind:0 profiles are display names, not DNS labels.
@@ -1034,7 +1066,7 @@ async function generatePersona({ seed, kind = "player", role = null } = {}) {
   const isNpc = kind === "npc";
   // NPC prompt is overridable via the prompt registry; player prompt
   // is fixed in source for now.
-  const systemPrompt = isNpc ? loadPrompt("npc-persona") : PERSONA_SYSTEM;
+  const systemPrompt = isNpc ? loadPrompt("npc-persona") : loadPrompt("player-persona");
   let userPrompt;
   if (isNpc) {
     const roleLine = role ? `Role: ${role}.` : "";
@@ -3133,7 +3165,10 @@ function findAgentByPubkey(pubkey) {
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+// Default 100KB is too small for kimodo motion JSONs (~600-800KB) that
+// the frontend PUTs to /v1/animations/:id when publishing. 4MB gives
+// headroom for longer clips without inviting unbounded payloads.
+app.use(express.json({ limit: "4mb" }));
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -4317,6 +4352,7 @@ app.get("/characters/:pubkey", (req, res) => {
     // Default legacy records to 'player' so consumers can rely on the
     // field always being present.
     kind: c.kind ?? "player",
+    starter: !!c.starter,
     npc_role: c.npc_role ?? null,
     npc_default_pos: c.npc_default_pos ?? null,
     shift_start: c.shift_start ?? null,
@@ -5512,7 +5548,7 @@ app.post("/characters/:pubkey/generate-profile/stream", apiQuota.middleware, asy
     const isNpc = (c.kind ?? "player") === "npc";
     // NPC prompt is overridable via the prompt registry; player prompt
     // is fixed in source for now.
-    const systemPrompt = isNpc ? loadPrompt("npc-persona") : PERSONA_SYSTEM;
+    const systemPrompt = isNpc ? loadPrompt("npc-persona") : loadPrompt("player-persona");
     let userPrompt;
     if (isNpc) {
       const role = c.npc_role ? `Role: ${c.npc_role}.` : "";
@@ -5715,7 +5751,7 @@ app.patch("/characters/:pubkey", async (req, res) => {
   if (!c) return res.status(404).json({ error: "not found" });
   const {
     name, about, state, avatarUrl, model, harness, promptStyle, mood, needs,
-    npc_role, npc_default_pos, shift_start, shift_end,
+    npc_role, npc_default_pos, shift_start, shift_end, starter,
   } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = String(name).trim() || c.name;
@@ -5792,6 +5828,10 @@ app.patch("/characters/:pubkey", async (req, res) => {
     }
     if (shift_start !== undefined) patch.shift_start = validateShiftMinute(shift_start);
     if (shift_end !== undefined) patch.shift_end = validateShiftMinute(shift_end);
+    // Tutorial-starter flag — coerced to boolean. Persisted on the
+    // manifest so the wake-up scenario can pull "the three starters"
+    // without hardcoding pubkeys.
+    if (starter !== undefined) patch.starter = !!starter;
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }

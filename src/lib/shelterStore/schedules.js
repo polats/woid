@@ -18,14 +18,17 @@
 
 export const SLOT_ACTIONS = ['rest', 'work', 'social']
 
+// Single-room layout for now — every slot routes to the lobby.
+// When more rooms come back online, restore the per-action room ids
+// (the resolver and FSM already understand multi-room schedules).
 export const SCHEDULES = {
   worker: [
-    { from:  0 * 60, action: 'rest',   roomId: 'living-1' },
-    { from:  7 * 60, action: 'work',   roomId: 'office-1' },
-    { from: 12 * 60, action: 'social', roomId: 'break-room-1' },
-    { from: 13 * 60, action: 'work',   roomId: 'office-1' },
-    { from: 18 * 60, action: 'social', roomId: 'wellness-1' },
-    { from: 21 * 60, action: 'rest',   roomId: 'living-1' },
+    { from:  0 * 60, action: 'rest',   roomId: 'lobby' },
+    { from:  7 * 60, action: 'work',   roomId: 'lobby' },
+    { from: 12 * 60, action: 'social', roomId: 'lobby' },
+    { from: 13 * 60, action: 'work',   roomId: 'lobby' },
+    { from: 18 * 60, action: 'social', roomId: 'lobby' },
+    { from: 21 * 60, action: 'rest',   roomId: 'lobby' },
   ],
 }
 

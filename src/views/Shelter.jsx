@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import ShelterStage3D from './ShelterStage3D.jsx'
 import ShelterDebug from './ShelterDebug.jsx'
 import ShelterAgentList from './ShelterAgentList.jsx'
 import ShelterCharacterCard from './ShelterCharacterCard.jsx'
+import TutorialOverlay from './TutorialOverlay.jsx'
+import { subscribe as subTutorial, getState as getTutorial } from '../lib/tutorial/runtime.js'
 
 const TABS = [
   { id: 'stage',  label: 'Stage',  glyph: '◆' },
@@ -13,6 +15,11 @@ export default function Shelter() {
   const [tab, setTab] = useState('stage')
   const [focused, setFocused] = useState(null)
   const [focusedAgent, setFocusedAgent] = useState(null)
+  const tutorial = useSyncExternalStore(subTutorial, getTutorial)
+  // The character card overlays the lower portion of the stage. While
+  // a tutorial is running it would block the cinematic framing, so we
+  // suppress it for the duration of the run.
+  const cardAgent = tutorial.active ? null : focusedAgent
   return (
     <div className="game-view shelter-view">
       <div className="game-phone-frame">
@@ -34,12 +41,16 @@ export default function Shelter() {
                 <div className={`shelter-room-label${focused ? ' visible' : ''}`}>
                   {focused?.name ?? ''}
                 </div>
-                <ShelterCharacterCard agent={focusedAgent} />
+                <ShelterCharacterCard agent={cardAgent} />
                 {/* Dev panel — hidden behind a backtick toggle (or the
                     floating "DEV" button) so it stays out of the way for
                     casual viewers but is reachable on prod for adding
                     NPCs / inspecting state. */}
                 <ShelterDebug />
+                {/* Tutorial scrim + dialog box. Sits above the stage
+                    but below the dev panel so the panel can still be
+                    toggled while a step is paused for input. */}
+                <TutorialOverlay />
               </div>
             </div>
             <div className="game-tab-pane" hidden={tab !== 'agents'}>

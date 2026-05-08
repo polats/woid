@@ -138,6 +138,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           model: c.model ?? '',
           harness: c.harness ?? 'direct',
           promptStyle: c.promptStyle ?? 'minimal',
+          starter: !!c.starter,
           needs: {
             energy: c.needs?.energy ?? 75,
             social: c.needs?.social ?? 75,
@@ -231,6 +232,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
       (form.model || null) !== (character.model || null) ||
       (form.harness || 'direct') !== (character.harness || 'direct') ||
       (form.promptStyle || 'minimal') !== (character.promptStyle || 'minimal') ||
+      !!form.starter !== !!character.starter ||
       NEEDS_AXES.some((a) => (form.needs?.[a] ?? 75) !== (character.needs?.[a] ?? 75))
     )
   }, [character, form])
@@ -259,6 +261,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           model: form.model || null,
           harness: form.harness || null,
           promptStyle: form.promptStyle || null,
+          starter: !!form.starter,
           needs: form.needs ?? undefined,
         }),
       })
@@ -279,6 +282,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
         model: next.model ?? '',
         harness: next.harness ?? 'direct',
         promptStyle: next.promptStyle ?? 'minimal',
+        starter: !!next.starter,
         needs: { ...(f.needs || {}), ...(next.needs || {}) },
       }))
       onUpdated?.(next)
@@ -649,6 +653,22 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           </div>
           <small className="agent-profile-field-hint">
             {PROMPT_STYLE_OPTIONS.find((p) => p.id === form.promptStyle)?.hint || ''}
+          </small>
+        </label>
+        {/* Starter flag — picked up by the Shelter wake-up tutorial,
+            which slides in a card carousel of "the three starters" so
+            the player can review them. Manifest-only metadata, no
+            runtime impact. */}
+        <label className="agent-profile-field agent-profile-field-checkbox">
+          <input
+            type="checkbox"
+            checked={!!form.starter}
+            onChange={(e) => setForm((f) => ({ ...f, starter: e.target.checked }))}
+            disabled={saving || generating}
+          />
+          <span className="agent-profile-field-label">Starter</span>
+          <small className="agent-profile-field-hint">
+            Show this character in the wake-up tutorial's recruit carousel.
           </small>
         </label>
         </div>

@@ -13,6 +13,7 @@ import {
   createAvatarFactory,
   createPresenceProjector,
 } from '../lib/shelterWorld/index.js'
+import { registerStageHandler } from '../lib/shelterStageBus.js'
 
 /**
  * Shelter diorama renderer.
@@ -28,6 +29,17 @@ import {
 const FRUSTUM_HEIGHT = 4
 const PAN_MARGIN = 1
 const TILT_MAX = 0.15  // rad — full dollhouse tilt at min zoom
+
+// Named camera framings used by the tutorial runtime so scripts.json
+// can reference 'room' / 'home' / 'closeup' instead of hand-tuned zoom
+// numbers. Closeup is driven by the focused agent's bbox (see
+// focusCharacter); the other two are room-level / home-level frames
+// computed at scene setup.
+export const CAMERA_STATE = Object.freeze({
+  HOME: 'home',
+  ROOM: 'room',
+  CLOSEUP: 'closeup',
+})
 const TILT_MIN = 0.04  // rad — flatter when zoomed into a single room
 const FOCUS_TWEEN_MS = 420
 const DOUBLE_TAP_MS = 320
@@ -426,7 +438,10 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       const prevFocusId = focusedAgentIdRef.current
       if (prevFocusId) {
         const prevHandle = liveAvatarsRef.current.get(prevFocusId)
-        if (prevHandle) prevHandle.currentRole = null
+        if (prevHandle) {
+          prevHandle.currentRole = null
+          prevHandle.focusRole = null
+        }
       }
       focusedAgentIdRef.current = null
       onAgentFocusChangeRef.current?.(null)
@@ -463,7 +478,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     // focus so the avatar stays framed even if the room's centre would
     // have left them off-screen — characters drift to room edges as
     // they pace, and the room-cover framing can crop them out.
-    const focusCharacter = (handle, agent) => {
+    const focusCharacter = (handle, agent, opts = {}) => {
       if (!handle || !handle.object3d) return
       const wrapper = handle.object3d
       // Match the zoom AND vertical centre of the room-focus path,
@@ -472,7 +487,20 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       const rgForZoom = roomGroupForAgent(agent)
       let toZoom = 3
       let ty = wrapper.position.y + CHARACTER_FALLBACK_Y_OFFSET
-      if (rgForZoom) {
+      if (opts.closeup) {
+        // Cinematic closeup: tight framing where the character takes
+        // up most of the screen — feet crop at the bottom, head fits
+        // at the top. Uses the world-space bbox of the avatar so it's
+        // proportional even when the rig is mid-animation. Visible
+        // height is < charH so the character overflows the frame; the
+        // center is shifted upward so the crop falls on the feet.
+        const box = new THREE.Box3().setFromObject(wrapper)
+        const charH = Math.max(0.4, box.max.y - box.min.y)
+        const charCenterY = (box.max.y + box.min.y) / 2
+        const desiredVisibleH = charH * 0.85   // shows ~85% of body
+        toZoom = Math.min(8, FRUSTUM_HEIGHT / desiredVisibleH)
+        ty = charCenterY + charH * 0.075       // shift up → feet crop
+      } else if (rgForZoom) {
         const aspect = (renderer.domElement.clientWidth || 1) / (renderer.domElement.clientHeight || 1)
         const meta = rgForZoom.userData.room
         const zoomByH = FRUSTUM_HEIGHT / meta.h
@@ -492,6 +520,13 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       tween.ty = ty
       tween.tz = toZoom
       tween.onDone = () => {
+        // Cinematic closeup pins the camera completely — no drift, no
+        // user-driven pan — so the framing the tutorial set up holds.
+        if (opts.closeup) {
+          controls.setBounds({ minX: tx, maxX: tx, minY: ty, maxY: ty })
+          controls.setLock({ y: ty, zoom: true, onExit: exitFocus })
+          return
+        }
         // Lock pan to the room bounds (so the user can drag laterally
         // within the room) but keep the lock's Y at the character's
         // head height — that's the settled centre.
@@ -544,7 +579,15 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       return roomGroups.find((g) => g.userData.room?.id === roomId) ?? null
     }
 
-    const focusAgent = (agentId) => {
+    // opts:
+    //   outline    — apply the red selection outline (default true)
+    //   motionRole — role tag to play immediately, or null to skip
+    //                (default 'wave'; tutorial cinematic passes e.g.
+    //                'arms-crossed')
+    //   closeup    — tighter cinematic framing (default false)
+    const focusAgent = (agentId, opts = {}) => {
+      const useOutline = opts.outline !== false
+      const motionRole = opts.motionRole === undefined ? 'wave' : opts.motionRole
       const handle = liveAvatarsRef.current.get(agentId)
       if (!handle || handle.pending || !handle.object3d) return
       // Switching from another agent: restore the previous outline
@@ -556,10 +599,13 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       const prevFocusId = focusedAgentIdRef.current
       if (prevFocusId && prevFocusId !== agentId) {
         const prevHandle = liveAvatarsRef.current.get(prevFocusId)
-        if (prevHandle) prevHandle.currentRole = null
+        if (prevHandle) {
+          prevHandle.currentRole = null
+          prevHandle.focusRole = null
+        }
       }
       focusedAgentIdRef.current = agentId
-      focusedAgentRestoreRef.current = applyOutline(handle.object3d)
+      focusedAgentRestoreRef.current = useOutline ? applyOutline(handle.object3d) : null
       // Notify the parent so it can render the character card. Look up
       // profile fields (name, avatarUrl) from the character registry,
       // falling back to the agent's stored name and the bridge fallback
@@ -572,25 +618,29 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         name: reg?.name ?? agentRecord?.name ?? null,
         avatarUrl: reg?.avatarUrl ?? null,
       })
-      // Force-play 'wave' immediately so the selection has visible
+      // Force-play `motionRole` immediately so the focus has visible
       // feedback before the next per-snapshot role swap. Only kimodo-
       // tier avatars expose setMotion; static / fallback animators
       // (e.g. NPCs without a kimodo rig like Edi) get no role swap —
       // they hold whatever default motion the fallback path assigned.
-      if (typeof handle.animator?.setMotion === 'function') {
-        const waveId = animationLibrary.getRoleId('wave')
-        const cached = animationLibrary.peek(waveId)
+      // Stash the focus motion on the handle so the per-frame sync
+      // loop respects it instead of hardcoding 'wave' — without this,
+      // the next snapshot tick swaps the motion back to wave.
+      handle.focusRole = motionRole ?? null
+      if (motionRole && typeof handle.animator?.setMotion === 'function') {
+        const motionId = animationLibrary.getRoleId(motionRole)
+        const cached = motionId ? animationLibrary.peek(motionId) : null
         if (cached) {
           handle.animator.setMotion(cached, { loop: true, applyRootTranslation: false })
-          handle.currentRole = 'wave'
+          handle.currentRole = motionRole
         } else {
-          handle.currentRole = 'wave' // optimistic
-          animationLibrary.getRole('wave').then((m) => {
+          handle.currentRole = motionRole // optimistic
+          animationLibrary.getRole(motionRole).then((m) => {
             if (m && typeof handle.animator?.setMotion === 'function'
                 && focusedAgentIdRef.current === agentId) {
               handle.animator.setMotion(m, { loop: true, applyRootTranslation: false })
             }
-          })
+          }).catch(() => {})
         }
       }
       // Camera focus on the character itself, not the room — characters
@@ -598,8 +648,280 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       // them out. focusCharacter still locks pan to the room so the
       // user can drag around afterward.
       const agent = shelterStore.getSnapshot().agents?.[agentId]
-      focusCharacter(handle, agent)
+      focusCharacter(handle, agent, { closeup: !!opts.closeup })
     }
+
+    // Outside callers (currently the tutorial runtime) drive focus
+    // through this bus. Registered here so the closure has access to
+    // the live focusAgent/exitFocus closures.
+    // Tutorial cinematic helpers — animate wrapper positions /
+    // override motion / pan the camera. All keep working closures
+    // off the live setup so they have access to camera, controls,
+    // tween, and liveAvatarsRef without re-resolving.
+    const animateAgentWalk = (pubkey, dx, dy, ms, opts = {}) => {
+      const agentRecord = Object.values(shelterStore.getSnapshot().agents ?? {})
+        .find((a) => a.pubkey === pubkey)
+      if (!agentRecord) return Promise.resolve()
+      const handle = liveAvatarsRef.current.get(agentRecord.id)
+      if (!handle || !handle.object3d) return Promise.resolve()
+      handle.tutorialRole = 'walk'
+      // Force-swap to walk motion right now so the avatar doesn't
+      // slide along on whatever pose was active (e.g. arms-crossed).
+      // The per-frame sync would eventually do this on the next
+      // snapshot tick, but visually it lags — the wrapper translates
+      // for several frames before the motion changes.
+      if (typeof handle.animator?.setMotion === 'function') {
+        const walkId = animationLibrary.getRoleId('walk')
+        const cached = walkId ? animationLibrary.peek(walkId) : null
+        if (cached) {
+          handle.animator.setMotion(cached, { loop: true, applyRootTranslation: false })
+          handle.currentRole = 'walk'
+        } else {
+          animationLibrary.getRole('walk').then((m) => {
+            if (m && handle.tutorialRole === 'walk' && typeof handle.animator?.setMotion === 'function') {
+              handle.animator.setMotion(m, { loop: true, applyRootTranslation: false })
+              handle.currentRole = 'walk'
+            }
+          }).catch(() => {})
+        }
+      }
+      // Face the walk direction. Mirrors the existing walking-heading
+      // formula at line ~1023: rotation.y = atan2(dx, dz). Pure-X
+      // motion (dz=0): negative dx → -π/2 (face left), positive dx →
+      // +π/2 (face right).
+      if (dx < 0) handle.object3d.rotation.y = -Math.PI / 2
+      else if (dx > 0) handle.object3d.rotation.y = Math.PI / 2
+      const fromX = handle.object3d.position.x
+      const fromY = handle.object3d.position.y
+      const toX = fromX + dx
+      const toY = fromY + dy
+      handle.tutorialPosition = { x: fromX, y: fromY }
+      const startedAt = performance.now()
+      const dur = Math.max(1, ms)
+      return new Promise((resolve) => {
+        const step = () => {
+          const t = Math.min(1, (performance.now() - startedAt) / dur)
+          const x = fromX + (toX - fromX) * t
+          const y = fromY + (toY - fromY) * t
+          handle.object3d.position.x = x
+          handle.object3d.position.y = y
+          handle.tutorialPosition = { x, y }
+          if (t >= 1) {
+            // Hold the override position so subsequent snapshot ticks
+            // don't snap the avatar back to its store position. Caller
+            // can clear by setting opts.releasePosition.
+            if (opts.releasePosition) handle.tutorialPosition = null
+            handle.tutorialRole = null
+            resolve()
+            return
+          }
+          requestAnimationFrame(step)
+        }
+        requestAnimationFrame(step)
+      })
+    }
+
+    // Resolve a named camera state to a (tx, ty, zoom) target. Keeps
+    // the tutorial scripts free of magic numbers — they ask for
+    // `room` or `home` and the math lives here.
+    const computeCameraTarget = (state) => {
+      if (state === CAMERA_STATE.HOME) {
+        return homeFrame
+          ? { x: homeFrame.centerX, y: homeFrame.centerY, zoom: homeFrame.zoom }
+          : null
+      }
+      if (state === CAMERA_STATE.ROOM) {
+        // Use the focused agent's room first (the tutorial usually
+        // has Edi focused), then fall back to whichever room the
+        // user last focused, then the first room in the layout.
+        let roomMeta = null
+        const focusId = focusedAgentIdRef.current
+        if (focusId) {
+          const ag = shelterStore.getSnapshot().agents?.[focusId]
+          const rg = roomGroupForAgent(ag)
+          if (rg) roomMeta = rg.userData.room
+        }
+        if (!roomMeta && focusedRoomMeta) roomMeta = focusedRoomMeta
+        if (!roomMeta && roomGroups.length > 0) roomMeta = roomGroups[0].userData.room
+        if (!roomMeta) return null
+        const aspect = (renderer.domElement.clientWidth || 1) / (renderer.domElement.clientHeight || 1)
+        const zoomByH = FRUSTUM_HEIGHT / roomMeta.h
+        const zoomByW = (FRUSTUM_HEIGHT * aspect) / roomMeta.w
+        const zoom = Math.min(Math.max(zoomByH, zoomByW), 8)
+        return { x: roomMeta.cx, y: roomMeta.cy, zoom }
+      }
+      // Closeup not handled here — focusAgent({closeup:true}) is the
+      // path that frames the bbox. Returning null leaves the caller
+      // to no-op.
+      return null
+    }
+
+    // Tween the camera to a named state WITHOUT clearing the current
+    // focus state — focusRole / focusedAgentIdRef stay intact so the
+    // sync loop keeps Edi in arms-crossed during the zoom out.
+    const animateCameraTo = (state, ms) => {
+      const target = computeCameraTarget(state)
+      if (!target) return Promise.resolve()
+      const dur = Math.max(1, ms ?? 1500)
+      controls.setLock({})
+      // Restore wide bounds so the camera can move freely; room-state
+      // tweens don't need a tight clamp during the cinematic.
+      if (homeBounds) controls.setBounds(homeBounds)
+      tween.active = true
+      tween.t0 = performance.now()
+      tween.dur = dur
+      tween.fx = camera.position.x
+      tween.fy = camera.position.y
+      tween.fz = camera.zoom
+      tween.tx = target.x
+      tween.ty = target.y
+      tween.tz = target.zoom
+      tween.onDone = null
+      const startedAt = performance.now()
+      return new Promise((resolve) => {
+        const wait = () => {
+          if (performance.now() - startedAt >= dur) resolve()
+          else requestAnimationFrame(wait)
+        }
+        requestAnimationFrame(wait)
+      })
+    }
+
+    // Drop any cinematic-only overrides on every live avatar AND
+    // force-snap their wrapper position back to the snapshot's
+    // projection so a tutorial restart puts Edi back in the middle
+    // of the room without waiting for the next snapshot tick.
+    const clearTutorialOverrides = () => {
+      const projector = projectorRef.current
+      const snapshot = shelterStore.getSnapshot()
+      for (const [id, handle] of liveAvatarsRef.current.entries()) {
+        if (!handle?.object3d) continue
+        handle.tutorialPosition = null
+        handle.tutorialRole = null
+        handle.object3d.rotation.y = 0
+        const ag = snapshot.agents?.[id]
+        if (ag?.pos && projector) {
+          const proj = projector.projectLocal(ag.pos.roomId, ag.pos.localU, ag.pos.localV)
+          if (proj) {
+            handle.object3d.position.set(proj.world.x, proj.world.y, proj.world.z)
+          }
+        }
+      }
+    }
+
+    // Linear pan in lockstep with the parallel walk action — the
+    // global tween system applies easeInOutCubic which gives a slow
+    // start, so the camera lagged behind a linearly-walking Edi
+    // during the parallel block. We bypass the tween here and write
+    // camera.position directly each frame, matching animateAgentWalk.
+    const animateCameraPan = (dx, dy, ms) => {
+      const fromX = camera.position.x
+      const fromY = camera.position.y
+      const toX = fromX + dx
+      const toY = fromY + dy
+      controls.setLock({})
+      tween.active = false   // cancel any prior eased tween
+      const startedAt = performance.now()
+      const dur = Math.max(1, ms)
+      return new Promise((resolve) => {
+        const step = () => {
+          const t = Math.min(1, (performance.now() - startedAt) / dur)
+          camera.position.x = fromX + (toX - fromX) * t
+          camera.position.y = fromY + (toY - fromY) * t
+          camera.updateProjectionMatrix()
+          if (t >= 1) { resolve(); return }
+          requestAnimationFrame(step)
+        }
+        requestAnimationFrame(step)
+      })
+    }
+
+    const animateAgentWalkIn = async (pubkey, fromOffsetX, dx, ms) => {
+      console.log('[tutorial-walkin] animateAgentWalkIn start', { pubkey, fromOffsetX, dx, ms })
+      // The character may have just been added to the store and the
+      // kimodo rig may still be loading; poll until the handle is
+      // mounted and non-pending before parking them off-camera.
+      // Bails after ~4s if nothing shows up so a missing avatar
+      // doesn't deadlock the cinematic.
+      let handle = null
+      let agentId = null
+      for (let i = 0; i < 40; i++) {
+        const agents = Object.values(shelterStore.getSnapshot().agents ?? {})
+        const agentRecord = agents.find((a) => a.pubkey === pubkey)
+        if (i === 0) {
+          console.log('[tutorial-walkin] initial poll — agent records:',
+            agents.map((a) => ({ id: a.id, pubkey: a.pubkey?.slice(0, 12), pos: a.pos })))
+        }
+        if (agentRecord) {
+          agentId = agentRecord.id
+          const h = liveAvatarsRef.current.get(agentRecord.id)
+          if (i % 5 === 0) {
+            console.log('[tutorial-walkin] poll iter', i,
+              'agent.id:', agentRecord.id,
+              'agent.pos:', agentRecord.pos,
+              'handle exists:', !!h,
+              'pending:', h?.pending,
+              'has object3d:', !!h?.object3d)
+          }
+          if (h && !h.pending && h.object3d) { handle = h; break }
+        } else if (i % 5 === 0) {
+          console.log('[tutorial-walkin] poll iter', i, 'no agent record yet for pubkey', pubkey?.slice(0, 12))
+        }
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      if (!handle) {
+        console.warn('[tutorial-walkin] timed out waiting for handle. agentId:', agentId,
+          'liveAvatars keys:', [...liveAvatarsRef.current.keys()])
+        return
+      }
+      const wrapper = handle.object3d
+      console.log('[tutorial-walkin] handle ready', {
+        cameraX: camera.position.x, cameraY: camera.position.y, cameraZoom: camera.zoom,
+        wrapperBefore: { x: wrapper.position.x, y: wrapper.position.y, z: wrapper.position.z },
+        scale: { x: wrapper.scale.x, y: wrapper.scale.y, z: wrapper.scale.z },
+        visible: wrapper.visible,
+        parent: wrapper.parent?.name || wrapper.parent?.type || 'none',
+        childCount: wrapper.children.length,
+      })
+      const startX = camera.position.x + fromOffsetX
+      const startY = wrapper.position.y
+      wrapper.position.x = startX
+      handle.tutorialPosition = { x: startX, y: startY }
+      wrapper.visible = true
+      await animateAgentWalk(pubkey, dx, 0, ms)
+      // World-space position so we know exactly where they ended up
+      // relative to the camera (which is also in worldRoot's child
+      // tree but with the pan applied to camera.position).
+      const worldPos = new THREE.Vector3()
+      wrapper.getWorldPosition(worldPos)
+      console.log('[tutorial-walkin] walk-in animation complete', {
+        wrapperLocal: { x: wrapper.position.x, y: wrapper.position.y, z: wrapper.position.z },
+        wrapperWorld: { x: worldPos.x, y: worldPos.y, z: worldPos.z },
+        cameraX: camera.position.x, cameraY: camera.position.y, cameraZoom: camera.zoom,
+        visible: wrapper.visible,
+        // Compute the visible world rectangle in worldRoot-local space
+        // — anything outside this is off-screen.
+        visibleHalfW: ((camera.right - camera.left) / 2) / camera.zoom,
+        visibleHalfH: ((camera.top - camera.bottom) / 2) / camera.zoom,
+      })
+    }
+
+    const unregisterStageHandler = registerStageHandler((cmd) => {
+      if (cmd?.type === 'focusAgent' && cmd.agentId) focusAgent(cmd.agentId, cmd.opts)
+      else if (cmd?.type === 'exitFocus') exitFocus()
+      else if (cmd?.type === 'walkAgent') {
+        animateAgentWalk(cmd.pubkey, cmd.dx, cmd.dy, cmd.ms).then(() => cmd.onComplete?.())
+      } else if (cmd?.type === 'panCamera') {
+        animateCameraPan(cmd.dx, cmd.dy, cmd.ms).then(() => cmd.onComplete?.())
+      } else if (cmd?.type === 'walkInAgent') {
+        animateAgentWalkIn(cmd.pubkey, cmd.fromOffsetX, cmd.dx, cmd.ms).then(() => cmd.onComplete?.())
+      } else if (cmd?.type === 'cameraTo') {
+        animateCameraTo(cmd.state, cmd.ms).then(() => cmd.onComplete?.())
+      } else if (cmd?.type === 'clearTutorialOverrides') {
+        clearTutorialOverrides()
+        cmd.onComplete?.()
+      }
+    })
 
     // Debug rotation offsets (Ctrl+drag) — layered on top of the
     // auto-tilt that's driven by zoom, so the camera flatten-on-zoom
@@ -844,6 +1166,12 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           // Focused agents freeze — face-camera below still rotates
           // them, but no position writes here.
           if (focusedAgentIdRef.current === a.id) continue
+          // Cinematic-controlled agents own their position + heading
+          // for the duration. Skip the walker/pacer lerp so the 4Hz
+          // resolver tick (which sets paceFrom/paceTo on idle
+          // employees) doesn't yank the recruit back to the resolver's
+          // path while the tutorial is animating them in.
+          if (handle.tutorialPosition || handle.tutorialRole) continue
 
           let from, to, started, duration
           if (a.state === 'walking' && a.walkFrom && a.walkTo) {
@@ -889,7 +1217,11 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         const focusId = focusedAgentIdRef.current
         if (focusId) {
           const handle = live.get(focusId)
-          if (handle && !handle.pending && handle.object3d) {
+          // Skip the face-camera override while a cinematic walk is
+          // animating — it would fight the walk's atan2-heading and
+          // snap the avatar to face the camera (looks like they're
+          // staring at the player while walking sideways).
+          if (handle && !handle.pending && handle.object3d && !handle.tutorialRole) {
             worldRoot.updateMatrixWorld(true)
             const inv = _faceCamMat.copy(worldRoot.matrixWorld).invert()
             const camLocal = _faceCamVec.copy(camera.position).applyMatrix4(inv)
@@ -897,7 +1229,22 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
             const dx = camLocal.x - wrapper.position.x
             const dz = camLocal.z - wrapper.position.z
             if (dx * dx + dz * dz > 1e-6) {
-              wrapper.rotation.y = Math.atan2(dx, dz)
+              const target = Math.atan2(dx, dz)
+              const cur = wrapper.rotation.y
+              // Wrap delta to shortest signed angle so a snap from
+              // +π/2 (walk-right) to 0 (face-camera) lerps the short
+              // way around instead of looping through ±π. Without
+              // this, the wrapper briefly rotates through angles
+              // where parts of the rig overlap weirdly and the
+              // avatar reads as "disappearing" for a few frames.
+              let delta = target - cur
+              while (delta > Math.PI) delta -= Math.PI * 2
+              while (delta < -Math.PI) delta += Math.PI * 2
+              if (Math.abs(delta) < 0.005) {
+                wrapper.rotation.y = target
+              } else {
+                wrapper.rotation.y = cur + delta * 0.18
+              }
             }
           }
           // Pulse the outline every frame: smooth sine wave drives both
@@ -940,6 +1287,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       controls.dispose()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('click', onClick)
+      try { unregisterStageHandler() } catch {}
       try { unsubRegistry() } catch {}
       try { unsubRoles() } catch {}
       try { registry.dispose() } catch {}
@@ -1000,7 +1348,12 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         // shifts agent.pos (e.g. move→rest sets pos=paceTo) would
         // teleport the focused character mid-wave.
         const isFocused = focusedAgentIdRef.current === a.id
-        if (!isLerping && !isFocused) {
+        // Cinematic position lock — when the tutorial is animating
+        // the wrapper itself (e.g. Edi walking off-frame), keep it
+        // at the override and skip both the snapshot write and the
+        // lerp that would fight us.
+        const tutorialPinned = !!existing.tutorialPosition
+        if (!isLerping && !isFocused && !tutorialPinned) {
           existing.object3d.position.set(
             projection.world.x,
             projection.world.y,
@@ -1016,13 +1369,18 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         // churn setMotion() every frame.
         if (existing.animator) {
           const isFocused = focusedAgentIdRef.current === a.id
-          const wantedRole = isFocused
-            ? 'wave'
-            : isLerping
-              ? 'walk'
-              : isResting
-                ? (a.paceRestRole ?? 'idle')
-                : 'idle'
+          // tutorialRole wins over everything — the cinematic owns
+          // motion while it's animating. Otherwise, focused agents
+          // use focusRole, then fall through to lerp/rest/idle.
+          const wantedRole = existing.tutorialRole
+            ? existing.tutorialRole
+            : isFocused
+              ? (existing.focusRole ?? 'wave')
+              : isLerping
+                ? 'walk'
+                : isResting
+                  ? (a.paceRestRole ?? 'idle')
+                  : 'idle'
           // Only the kimodo-rigged avatar tier exposes setMotion — the
           // static + fallback tiers use a THREE.AnimationMixer-shaped
           // animator that has no role concept. Skip role-swap for

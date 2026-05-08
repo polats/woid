@@ -1120,6 +1120,12 @@ body {
   background: var(--paper);
   color: var(--ink);
 }
+.sandbox3-card-tag-starter {
+  background: var(--ink);
+  color: var(--paper);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
 /* System tab — shows the system prompt currently being passed to
    the character's brain on every turn. */
 .agent-system {
@@ -2783,6 +2789,32 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+/* Inline checkbox variant — input + label on one line, hint underneath. */
+.agent-profile-field.agent-profile-field-checkbox {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  row-gap: 0;
+  align-items: center;
+}
+.agent-profile-field-checkbox input[type="checkbox"] {
+  grid-row: 1;
+  grid-column: 1;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+.agent-profile-field-checkbox .agent-profile-field-label {
+  grid-row: 1;
+  grid-column: 2;
+  margin: 0;
+}
+.agent-profile-field-checkbox .agent-profile-field-hint {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  margin-top: 4px;
 }
 .agent-profile-field-label {
   font-family: var(--font-mono);
@@ -7693,3 +7725,488 @@ body {
   width: 100% !important;
   height: 100% !important;
 }
+
+/* ── Shelter debug panel: side-tab variant ───────────────────────── */
+/* When the panel renders the multi-tab UI it expands to fit a vertical
+   tab rail on the left + a content column on the right. Original
+   single-section layout still works for the non-`.has-tabs` variant. */
+.shelter-debug-panel.has-tabs {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 0 10px 0;
+}
+.shelter-debug-panel.has-tabs .shelter-debug-header,
+.shelter-debug-panel.has-tabs .shelter-debug-status,
+.shelter-debug-panel.has-tabs .shelter-debug-actions {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.shelter-debug-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.shelter-debug-sidetabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 4px 6px 6px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  flex: 0 0 auto;
+}
+.shelter-debug-sidetab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 6px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: rgba(232, 232, 232, 0.6);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  width: 48px;
+}
+.shelter-debug-sidetab:hover { color: #e8e8e8; }
+.shelter-debug-sidetab.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.shelter-debug-sidetab svg { display: block; }
+.shelter-debug-tabpanel {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 12px 8px 12px;
+  overflow-y: auto;
+}
+.shelter-debug-tabpanel h4 {
+  margin: 4px 0 6px 0;
+}
+
+/* Tutorial-tab step list */
+.shelter-debug-tutorial {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.shelter-debug-tutorial-step {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  margin-bottom: 6px;
+}
+.shelter-debug-tutorial-step.active {
+  border-color: rgba(230, 26, 58, 0.6);
+  background: rgba(230, 26, 58, 0.08);
+}
+.shelter-debug-tutorial-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.shelter-debug-tutorial-meta strong {
+  display: block;
+  font-size: 11px;
+}
+.shelter-debug-tutorial-meta p {
+  margin: 2px 0;
+  font-size: 10px;
+  color: rgba(232, 232, 232, 0.65);
+}
+.shelter-debug-tutorial-meta code {
+  font-size: 9px;
+  color: rgba(232, 232, 232, 0.45);
+}
+.shelter-debug-tutorial-step button {
+  flex: 0 0 auto;
+  width: 28px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  color: #e8e8e8;
+  font-size: 12px;
+  cursor: pointer;
+}
+.shelter-debug-tutorial-step button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+.shelter-debug-tutorial-step button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.shelter-debug-tutorial-reset {
+  margin-top: 6px;
+  width: 100%;
+  padding: 6px;
+  background: rgba(230, 26, 58, 0.18);
+  border: 1px solid rgba(230, 26, 58, 0.45);
+  border-radius: 4px;
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+/* ── Tutorial overlay (scrim + dialog + tap hint) ────────────────── */
+.tutorial-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+/* When the runtime is waiting on tap-to-advance, the entire layer
+   becomes the hit target so the player can tap anywhere — the chevron
+   is just a visual hint. */
+.tutorial-layer.awaiting-tap {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.tutorial-scrim {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  pointer-events: auto;
+  transition: opacity 60ms linear;
+}
+.tutorial-dialog {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 16px;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 10px;
+  background: rgba(8, 10, 14, 0.92);
+  border: 2px solid #f5f1e6;
+  border-radius: 6px;
+  color: #f5f1e6;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: auto;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 320ms ease, transform 320ms ease;
+  animation: tutorial-dialog-enter 380ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+@keyframes tutorial-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(28px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.tutorial-dialog.fading {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  /* The transition wins back from the animation when fading kicks
+     in, since the keyframe animation has already finished by then. */
+  animation: none;
+}
+/* Text content remounts on each new line (key={text}); this animation
+   gives the new text a soft slide-in so it doesn't pop. */
+.tutorial-dialog-text {
+  animation: tutorial-dialog-text-enter 320ms ease 80ms both;
+}
+@keyframes tutorial-dialog-text-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.tutorial-dialog-portrait {
+  flex: 0 0 auto;
+  width: 96px;
+  height: 96px;
+  border: 1.5px solid #f5f1e6;
+  background: #1a1d22;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 38px;
+  font-weight: 600;
+}
+.tutorial-dialog-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tutorial-dialog-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tutorial-dialog-text strong {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #d2cdb8;
+  margin-bottom: 4px;
+}
+.tutorial-dialog-text p {
+  margin: 0;
+  font-size: 13px;
+}
+/* Lower-right corner of the dialog box, inset slightly so the bobbing
+   animation doesn't clip the dialog border. */
+.tutorial-tap-hint {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.7);
+  border: 1.5px solid #f5f1e6;
+  border-radius: 999px;
+  color: #f5f1e6;
+  pointer-events: none;
+  animation: tutorial-chevron-bob 1.1s ease-in-out infinite;
+}
+@keyframes tutorial-chevron-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(6px); }
+}
+
+/* ── Tutorial agent carousel — folder-tabbed recruit deck ────────── */
+/* Slides up from the bottom-middle of the screen, sits above the stage
+   but below the dialog box. Folder tabs poke out the top of a paper
+   card, mirroring the in-game character-card aesthetic (paper + ink
+   border + hard 2px outline). */
+.tutorial-carousel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 150px;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  opacity: 0;
+  transform: translateY(80px);
+  transition: opacity 360ms ease, transform 380ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.tutorial-carousel.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Folder tabs — protrude from the top of the card. The active one
+   merges with the card body via a missing bottom border so the eye
+   reads it as one continuous shape. */
+.tutorial-carousel-tabs {
+  display: flex;
+  gap: 4px;
+  padding-left: 12px;
+  margin-bottom: -2px;
+}
+.tutorial-carousel-tab {
+  flex: 0 0 auto;
+  max-width: 33%;
+  padding: 6px 10px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(60, 56, 48, 0.92);
+  color: #d2cdb8;
+  border: 2px solid #f5f1e6;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tutorial-carousel-tab.active {
+  background: #f5f1e6;
+  color: #1a1a1a;
+  position: relative;
+  z-index: 1;
+}
+
+.tutorial-carousel-card {
+  display: flex;
+  align-items: stretch;
+  padding: 14px;
+  background: #f5f1e6;
+  border: 2px solid #f5f1e6;
+  border-radius: 0 6px 6px 6px;
+  color: #1a1a1a;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
+  min-height: 96px;
+  overflow: hidden;
+}
+/* Tab swap → the inner content remounts (keyed on pubkey) so this
+   animation runs on every tab change as well as on first reveal. */
+.tutorial-carousel-card-inner {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  animation: tutorial-carousel-swap 280ms ease both;
+}
+@keyframes tutorial-carousel-swap {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.tutorial-carousel-portrait {
+  flex: 0 0 auto;
+  width: 88px;
+  height: 88px;
+  border: 2px solid #1a1a1a;
+  background: #1a1d22;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 36px;
+  font-weight: 600;
+  color: #f5f1e6;
+}
+.tutorial-carousel-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tutorial-carousel-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 64px; /* room for the Hire button anchored bottom-right */
+}
+.tutorial-carousel-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tutorial-carousel-name-row strong {
+  font-family: var(--font-body);
+  font-size: 16px;
+}
+.tutorial-carousel-stars {
+  display: inline-flex;
+  gap: 1px;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.18);
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+.tutorial-carousel-stars .on { color: #c69a2c; }
+.tutorial-carousel-meta p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #3a3a3a;
+  /* Cap bio at ~3 lines so the card height stays predictable. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tutorial-carousel-tags {
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tutorial-carousel-tags li {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border: 1px solid #1a1a1a;
+  background: rgba(26, 26, 26, 0.04);
+  color: #1a1a1a;
+}
+.tutorial-carousel-hire {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: #1a1a1a;
+  color: #f5f1e6;
+  border: 2px solid #1a1a1a;
+  cursor: pointer;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.3);
+}
+.tutorial-carousel-hire:hover {
+  background: #2c2c2c;
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.4);
+}
+.tutorial-carousel-hire:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 rgba(0, 0, 0, 0.4);
+}
+.tutorial-carousel-empty {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #5a5a5a;
+}
+
+/* When the carousel is visible, slide the dialog up just enough to
+   clear the deck of cards rising from below. Reads as the dialog
+   floating up while the cards slide in beneath it. */
+.tutorial-dialog.with-carousel {
+  bottom: 200px;
+  transition: bottom 360ms cubic-bezier(0.2, 0.7, 0.2, 1),
+              opacity 320ms ease,
+              transform 320ms ease;
+}
+.tutorial-layer.has-carousel .tutorial-carousel {
+  bottom: 16px;
+}
+
+/* When a tutorial step asks the runtime to hide the hud, drop the
+   phone-frame chrome from layout entirely so the stage canvas expands
+   to fill the freed space (otherwise the tab-bar's paper background
+   blocks the camera underneath). The Stage3D ResizeObserver picks up
+   the new height. */
+body.tutorial-hud-hidden .game-status-bar,
+body.tutorial-hud-hidden .game-tab-bar {
+  display: none;
+}
+
