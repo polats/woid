@@ -74,6 +74,15 @@ export default function Sidebar({
             </li>
             <li>
               <a
+                href="#/rooms"
+                className={linkClass(route.view === 'rooms')}
+                title="Room types and asset pipeline"
+              >
+                Rooms
+              </a>
+            </li>
+            <li>
+              <a
                 href="#/journal"
                 className={linkClass(route.view === 'journal')}
               >
@@ -114,9 +123,33 @@ export default function Sidebar({
             </li>
           </ul>
 
-          <h2>Asset services</h2>
+          <h2>
+            Cloud services
+            <small className="sidebar-subhead-hint" title="GPU services on Cloud Run / managed NIMs — cold starts of several minutes">
+              cloud-run
+            </small>
+          </h2>
           <ul>
-            {['flux-kontext', 'trellis', 'hunyuan3d', 'unirig', 'kimodo-tools'].map((svc) => (
+            {['gemma-4-31b', 'flux-kontext', 'trellis', 'hunyuan3d'].map((svc) => (
+              <li key={svc}>
+                <ApiStatusBadge
+                  bridgeUrl={config.agentSandbox?.bridgeUrl}
+                  service={svc}
+                  route={route}
+                  view="service"
+                />
+              </li>
+            ))}
+          </ul>
+
+          <h2>
+            Local services
+            <small className="sidebar-subhead-hint" title="Sibling Docker containers on this host — always warm">
+              docker
+            </small>
+          </h2>
+          <ul>
+            {['unirig', 'kimodo-tools'].map((svc) => (
               <li key={svc}>
                 <ApiStatusBadge
                   bridgeUrl={config.agentSandbox?.bridgeUrl}
