@@ -1,13 +1,26 @@
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import ShelterStage3D from './ShelterStage3D.jsx'
 import ShelterDebug from './ShelterDebug.jsx'
 import ShelterAgentList from './ShelterAgentList.jsx'
 import ShelterCharacterCard from './ShelterCharacterCard.jsx'
+import ShelterBuildCarousel from './ShelterBuildCarousel.jsx'
 import TutorialOverlay from './TutorialOverlay.jsx'
+import ShelterFxLayer from './ShelterFxLayer.jsx'
 import { subscribe as subTutorial, getState as getTutorial } from '../lib/tutorial/runtime.js'
+import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
+import { levelForXp } from '../lib/shelterStore/index.js'
+import {
+  start as startBuildMode,
+  cancel as cancelBuildMode,
+  subscribe as subBuildMode,
+  getState as getBuildMode,
+} from '../lib/shelterBuildMode.js'
+import { getRoomType } from '../lib/shelterWorld/roomTypes.js'
+import { getState as getGeneratedState } from '../lib/generatedRoomTypes.js'
 
 const TABS = [
   { id: 'stage',  label: 'Stage',  glyph: '◆' },
+  { id: 'build',  label: 'Build',  glyph: '◳' },
   { id: 'agents', label: 'Agents', glyph: '◌' },
 ]
 
@@ -16,10 +29,81 @@ export default function Shelter() {
   const [focused, setFocused] = useState(null)
   const [focusedAgent, setFocusedAgent] = useState(null)
   const tutorial = useSyncExternalStore(subTutorial, getTutorial)
-  // The character card overlays the lower portion of the stage. While
-  // a tutorial is running it would block the cinematic framing, so we
-  // suppress it for the duration of the run.
-  const cardAgent = tutorial.active ? null : focusedAgent
+  // The character card overlays the lower portion of the stage. We
+  // suppress it during a tutorial cinematic by default — but a step
+  // can flip `cardVisible: true` (via the `showCard` action) when it
+  // explicitly wants the player to see it (e.g. step 3 directs the
+  // player at a specific tab).
+  const cardSuppressed = tutorial.active && !tutorial.cardVisible
+  const cardAgent = cardSuppressed ? null : focusedAgent
+  // Cash + player XP from the shelter store. Cash floats bottom-left
+  // over the stage (out of the status bar so the time can stand on
+  // its own), and XP fills a thin bar across the bottom of the
+  // screen body so the player always sees their progression.
+  const snap = useShelterStore()
+  const cash = snap?.cash ?? 0
+  const playerXp = snap?.playerXp ?? 0
+  const playerLevel = levelForXp(playerXp)
+  // 100xp per level (curve in shelterStore/store.js). The fill % is
+  // the fraction of the current level's XP earned so far.
+  const xpInLevel = playerXp - (playerLevel - 1) * 100
+  const xpPct = Math.max(0, Math.min(100, xpInLevel))
+
+  // Build-mode state — when active, the Build tab reads as "selected"
+  // and the carousel renders. Build is an overlay on the Stage view,
+  // not a separate tab pane.
+  const buildState = useSyncExternalStore(subBuildMode, getBuildMode)
+  const storeApi = useShelterStoreApi()
+
+  // Tutorial may pulse the Build tab — surfaces via tutorial state's
+  // pulseGameTab field (added below in the runtime).
+  const pulseGameTab = tutorial.pulseGameTab ?? null
+
+  const handleTabClick = (id) => {
+    if (id === 'build') {
+      // Toggle: tap Build while not in mode → start; tap while in
+      // mode → cancel. Doesn't change the active tab pane (build is
+      // an overlay on the stage).
+      if (buildState.active) {
+        cancelBuildMode()
+      } else {
+        startBuildMode(({ type, gridX, gridY, gridW, gridH }) => {
+          // Generated room types (id like "gen:e2e-v5-…") come from the
+          // bridge layout registry, not the static ROOM_TYPES catalogue.
+          // They route into the layout-dressing pipeline via room.kind.
+          const isGen = typeof type === 'string' && type.startsWith('gen:')
+          const rt = isGen
+            ? getGeneratedState().types.find((t) => t.id === type)
+            : getRoomType(type)
+          if (!rt) return
+          const newRoom = {
+            id: `${type}-${Date.now()}`,
+            type,
+            name: rt.name,
+            category: rt.category,
+            gridX, gridY, gridW, gridH,
+            color: rt.color ?? '#9aa3b0',
+            ...(isGen ? { kind: 'generated', layoutId: rt.layoutId } : {}),
+          }
+          storeApi.addBuiltRoom(newRoom)
+        })
+        setTab('stage')   // make sure the stage canvas is the active pane
+      }
+      return
+    }
+    // Switching to a non-build tab while in build-mode cancels the mode.
+    if (buildState.active) cancelBuildMode()
+    setTab(id)
+  }
+
+  // ESC key cancels build mode (third cancel path alongside the X
+  // on the carousel and re-tapping the Build tab).
+  useEffect(() => {
+    if (!buildState.active) return
+    const onKey = (e) => { if (e.code === 'Escape') cancelBuildMode() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [buildState.active])
   return (
     <div className="game-view shelter-view">
       <div className="game-phone-frame">
@@ -47,30 +131,62 @@ export default function Shelter() {
                     casual viewers but is reachable on prod for adding
                     NPCs / inspecting state. */}
                 <ShelterDebug />
+                {/* Bottom-left currency indicator — primary player
+                    state. Class is also queried by the FX layer to
+                    target the cash-fly animation. */}
+                <div className="shelter-currency-hud">
+                  <span className="shelter-currency-glyph">¤</span>
+                  <span className="shelter-currency-value">{cash.toLocaleString()}</span>
+                </div>
+                {/* Build Mode carousel — slides down from the top
+                    when build-mode is active. Overlays the stage. */}
+                <ShelterBuildCarousel />
                 {/* Tutorial scrim + dialog box. Sits above the stage
                     but below the dev panel so the panel can still be
                     toggled while a step is paused for input. */}
                 <TutorialOverlay />
+                {/* Coin-fly + level-up celebration overlay. Mounts
+                    transient effects sourced from the FX bus. */}
+                <ShelterFxLayer />
               </div>
             </div>
             <div className="game-tab-pane" hidden={tab !== 'agents'}>
               <ShelterAgentList />
             </div>
           </div>
+          {/* Player XP bar — sits between the screen body and the
+              tab nav so it's always visible regardless of which tab
+              is active. Caps at 100% within the current level. */}
+          <div className="shelter-xp-bar" title={`Level ${playerLevel} — ${xpInLevel}/100 xp`}>
+            <div
+              className="shelter-xp-bar-fill"
+              style={{ width: `${xpPct}%` }}
+            />
+            <span className="shelter-xp-bar-label">Lv {playerLevel}</span>
+          </div>
           <nav className="game-tab-bar" role="tablist">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.id}
-                className={`game-tab${tab === t.id ? ' active' : ''}`}
-                onClick={() => setTab(t.id)}
-              >
-                <span className="game-tab-glyph">{t.glyph}</span>
-                <span className="game-tab-label">{t.label}</span>
-              </button>
-            ))}
+            {TABS.map((t) => {
+              // Build-tab "active" state tracks build-mode, not the
+              // current tab pane (Build overlays the stage).
+              const isBuildActive = t.id === 'build' && buildState.active
+              const isStageActive = t.id === 'stage' && tab === 'stage' && !buildState.active
+              const isOtherActive = t.id !== 'build' && t.id !== 'stage' && tab === t.id
+              const active = isBuildActive || isStageActive || isOtherActive
+              const isPulsing = pulseGameTab === t.id && !active
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={`game-tab${active ? ' active' : ''}${isPulsing ? ' is-pulsing' : ''}`}
+                  onClick={() => handleTabClick(t.id)}
+                >
+                  <span className="game-tab-glyph">{t.glyph}</span>
+                  <span className="game-tab-label">{t.label}</span>
+                </button>
+              )
+            })}
           </nav>
         </div>
       </div>

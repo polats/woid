@@ -51,12 +51,12 @@ async function ensureImage(propId, prompt, roomId, { force = false } = {}) {
   return { ok: !!donePayload, error: errorMsg }
 }
 
-async function ensureModel(propId, { force = false } = {}) {
+async function ensureModel(propId, { force = false, backend = 'trellis' } = {}) {
   if (!force) {
     const state = await (await fetch(`${BRIDGE}/props/${propId}/state`)).json()
     if (state.hasModel) return { ok: true, cached: true }
   }
-  const r = await fetch(`${BRIDGE}/props/${propId}/model/generate/stream`, { method: 'POST' })
+  const r = await fetch(`${BRIDGE}/props/${propId}/model/generate/stream?backend=${backend}`, { method: 'POST' })
   const { donePayload, errorMsg } = await consumeSse(r)
   return { ok: !!donePayload, error: errorMsg }
 }
@@ -83,12 +83,14 @@ async function generateForRoom(roomId, opts = {}) {
 ;(async () => {
   const args = process.argv.slice(2)
   const force = args.includes('--force')
+  const backendArg = args.find((a) => a.startsWith('--backend='))
+  const backend = backendArg ? backendArg.split('=')[1] : 'trellis'
   let roomIds = args.filter((a) => !a.startsWith('--'))
   if (!roomIds.length) {
     const r = await (await fetch(`${BRIDGE}/room-layouts`)).json()
     roomIds = r.rooms.filter((x) => x.id.startsWith('e2e-v3-') && x.propCount > 0).map((x) => x.id)
   }
-  console.log(`[glb] generating for ${roomIds.length} rooms (force=${force})`)
-  for (const id of roomIds) await generateForRoom(id, { force })
+  console.log(`[glb] generating for ${roomIds.length} rooms (force=${force}, backend=${backend})`)
+  for (const id of roomIds) await generateForRoom(id, { force, backend })
   console.log('\n[glb] done')
 })().catch((err) => { console.error('[glb] fatal:', err); process.exit(1) })

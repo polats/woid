@@ -7,6 +7,7 @@ import { useShelterTick } from '../hooks/useShelterTick.js'
 import { WALK_DURATION_MIN, PACE_DURATION_MIN } from '../lib/shelterStore/index.js'
 import { createPanZoomControls } from '../lib/panZoomControls.js'
 import { buildDressing, ROOM_DEPTH } from '../lib/shelterDressing.js'
+import { addLayoutDressing } from '../lib/buildLayoutDressing.js'
 import {
   animationLibrary,
   createCharacterRegistry,
@@ -14,6 +15,23 @@ import {
   createPresenceProjector,
 } from '../lib/shelterWorld/index.js'
 import { registerStageHandler } from '../lib/shelterStageBus.js'
+import {
+  subscribe as subAssignmentMode,
+  getState as getAssignmentMode,
+  commit as commitAssignmentMode,
+} from '../lib/shelterAssignmentMode.js'
+import {
+  subscribe as subBuildMode,
+  getState as getBuildMode,
+  commitPlacement as commitBuildPlacement,
+} from '../lib/shelterBuildMode.js'
+import { getRoomType } from '../lib/shelterWorld/roomTypes.js'
+import { PALETTE as OFFICE_PALETTE, LIGHTING as OFFICE_LIGHTING } from '../lib/shelterWorld/officeStyle.js'
+import {
+  subscribe as subTutorialState,
+  getState as getTutorialState,
+} from '../lib/tutorial/runtime.js'
+import { emit as emitFx } from '../lib/shelterFxBus.js'
 
 /**
  * Shelter diorama renderer.
@@ -83,25 +101,41 @@ function makeLabelSprite(text) {
   return sprite
 }
 
-function buildShell(w, h, color) {
+function buildShell(w, h, color, palette) {
   const g = new THREE.Group()
   const D = ROOM_DEPTH
   const wallT = 0.05
   const floorT = 0.08
-  const base = new THREE.Color(color || '#555555')
-  const dark = base.clone().multiplyScalar(0.55)
-  const mat = (c) => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.85 })
+  const baseHex = palette?.wall || color || OFFICE_PALETTE.wallWarm
+  const floorHex = palette?.floor || OFFICE_PALETTE.carpetBeige
+  const trimHex = palette?.trim || OFFICE_PALETTE.trimWood
+  const ceilingHex = OFFICE_PALETTE.ceilingTile
+  const wall = new THREE.MeshStandardMaterial({ color: baseHex, metalness: 0, roughness: 0.95 })
+  const floor = new THREE.MeshStandardMaterial({ color: floorHex, metalness: 0, roughness: 0.9 })
+  const trim = new THREE.MeshStandardMaterial({ color: trimHex, metalness: 0.05, roughness: 0.7 })
+  const ceiling = new THREE.MeshStandardMaterial({ color: ceilingHex, metalness: 0, roughness: 0.95 })
 
   const add = (geom, material, x, y, z) => {
     const m = new THREE.Mesh(geom, material)
     m.position.set(x, y, z)
     g.add(m)
   }
-  add(new THREE.BoxGeometry(w, floorT, D), mat(dark.getHex()), 0, -h / 2 + floorT / 2, 0)
-  add(new THREE.BoxGeometry(w, wallT, D), mat(dark.getHex()), 0, h / 2 - wallT / 2, 0)
-  add(new THREE.BoxGeometry(w, h, wallT), mat(base.getHex()), 0, 0, -D / 2 + wallT / 2)
-  add(new THREE.BoxGeometry(wallT, h, D), mat(dark.getHex()), -w / 2 + wallT / 2, 0, 0)
-  add(new THREE.BoxGeometry(wallT, h, D), mat(dark.getHex()), w / 2 - wallT / 2, 0, 0)
+  // Floor (carpet/linoleum) + ceiling tile
+  add(new THREE.BoxGeometry(w, floorT, D), floor, 0, -h / 2 + floorT / 2, 0)
+  add(new THREE.BoxGeometry(w, wallT, D), ceiling, 0, h / 2 - wallT / 2, 0)
+  // Back wall + side walls
+  add(new THREE.BoxGeometry(w, h, wallT), wall, 0, 0, -D / 2 + wallT / 2)
+  add(new THREE.BoxGeometry(wallT, h, D), wall, -w / 2 + wallT / 2, 0, 0)
+  add(new THREE.BoxGeometry(wallT, h, D), wall, w / 2 - wallT / 2, 0, 0)
+  // Baseboard trim — thin strip along the floor against the back wall
+  const baseboardH = 0.06
+  add(
+    new THREE.BoxGeometry(w - wallT * 2, baseboardH, wallT * 1.5),
+    trim,
+    0,
+    -h / 2 + floorT + baseboardH / 2,
+    -D / 2 + wallT * 1.5,
+  )
   return g
 }
 
@@ -146,10 +180,28 @@ function buildRoom(room, cellW, cellH) {
   const cx = (room.gridX + room.gridW / 2) * cellW
   const cy = (room.gridY + room.gridH / 2) * cellH
   group.position.set(cx, cy, 0)
-  // Stash room metadata so click handlers can recover it from raycast hits.
-  group.userData.room = { id: room.id, name: room.name, w, h, cx, cy }
+  // Stash room metadata so click handlers can recover it from raycast
+  // hits. `type` is the room-type-catalogue key; for layout rooms it
+  // equals the id (lobby / pattern-sorting); for built rooms the id
+  // is unique (`break-room-<ts>`) but type is the catalogue key.
+  group.userData.room = {
+    id: room.id,
+    type: room.type ?? room.id,
+    name: room.name,
+    w, h, cx, cy,
+  }
 
-  group.add(buildShell(w, h, room.color))
+  const roomType = getRoomType(room.type ?? room.id)
+  const palette = roomType?.palette
+  group.add(buildShell(w, h, room.color, palette))
+
+  // Generated rooms (kind: 'generated' with a layoutId) load their
+  // prop GLBs from the bridge instead of using the static dressing
+  // catalogue. Fire-and-forget — placeholders fill the footprint
+  // until each GLB resolves.
+  if (room.kind === 'generated' && room.layoutId) {
+    addLayoutDressing(group, room.layoutId, w, h, ROOM_DEPTH)
+  }
 
   const lampColor = LAMP_COLORS[room.category] ?? 0xffd9a8
   // Furniture temporarily disabled so agents stand out clearly while
@@ -157,10 +209,19 @@ function buildRoom(room, cellW, cellH) {
   // desks, plants, and the visible pendant fixture.
   // addRoomFurniture(group, room.category, w, h, lampColor)
 
-  // Room point light — kept outside addRoomFurniture so the room
-  // stays lit even when furniture is hidden.
+  // Cool fluorescent overhead — flat, slightly diffuse. Sits just
+  // below the ceiling tile so it casts a wide pool across the floor.
+  const fluoroHex = new THREE.Color(OFFICE_LIGHTING.fluorescent.color).getHex()
+  const fluoro = new THREE.PointLight(fluoroHex, OFFICE_LIGHTING.fluorescent.intensity * 1.4, ROOM_DEPTH * 2.2, 1.2)
+  fluoro.position.set(0, h / 2 - 0.12, 0)
+  group.add(fluoro)
+  // Warm desk-lamp accent — picks up category color so MDR reads green,
+  // executive reads red. Lower-intensity, smaller falloff.
+  const accentHex = palette?.accent
+    ? new THREE.Color(palette.accent).getHex()
+    : lampColor
   const housingY = h / 2 - 0.27
-  const lamp = new THREE.PointLight(lampColor, 1.1, ROOM_DEPTH * 1.3, 1.6)
+  const lamp = new THREE.PointLight(accentHex, OFFICE_LIGHTING.deskLamp.intensity, ROOM_DEPTH * 1.1, 2.0)
   lamp.position.set(0, housingY - 0.05, 0.12)
   group.add(lamp)
 
@@ -316,6 +377,20 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     let focusedRoomMeta = null
     let homeFrame = null  // { centerX, centerY, zoom }
     let homeBounds = null
+    // Stashed once the layout finishes loading so build-mode + the
+    // builtRooms subscriber can read cell sizes / the existing rooms
+    // without re-parsing the layout JSON.
+    let layoutCellW = 2
+    let layoutCellH = 1.1
+    let baseLayoutRooms = []
+    let addRoomToSceneFn = null
+    // Resolve a roomId to its room-type catalogue entry. Built rooms
+    // have unique ids that don't match a catalogue key — we have to
+    // walk roomGroups to find the stored userData.room.type.
+    const roomTypeFor = (roomId) => {
+      const rg = roomGroups.find((g) => g.userData.room?.id === roomId)
+      return getRoomType(rg?.userData.room?.type ?? roomId)
+    }
     // Agent-focus state. Independent of room focus, but room focus
     // is also driven for the agent's current room when focusing.
     // Mirrored from refs (`focusedAgentIdRef`, `focusedAgentRestoreRef`)
@@ -787,6 +862,38 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       })
     }
 
+    // Set the agent's motion immediately and stick it as their
+    // focusRole so the per-frame motion sync keeps it. Used by the
+    // tutorial's `setMotion` action — the recruit is already focused,
+    // so storing on focusRole is the right semantic. Falls back to
+    // animationLibrary.getRole() with optimistic role marker if the
+    // motion JSON isn't cached yet (the same pattern the focus path
+    // uses).
+    const setAgentMotionByPubkey = (pubkey, motion) => {
+      const agent = Object.values(shelterStore.getSnapshot().agents ?? {})
+        .find((a) => a.pubkey === pubkey)
+      if (!agent) return
+      const handle = liveAvatarsRef.current.get(agent.id)
+      if (!handle?.object3d) return
+      handle.focusRole = motion ?? null
+      if (motion && typeof handle.animator?.setMotion === 'function') {
+        const motionId = animationLibrary.getRoleId(motion)
+        const cached = motionId ? animationLibrary.peek(motionId) : null
+        if (cached) {
+          handle.animator.setMotion(cached, { loop: true, applyRootTranslation: false })
+          handle.currentRole = motion
+        } else {
+          handle.currentRole = motion
+          animationLibrary.getRole(motion).then((m) => {
+            if (m && handle.focusRole === motion
+                && typeof handle.animator?.setMotion === 'function') {
+              handle.animator.setMotion(m, { loop: true, applyRootTranslation: false })
+            }
+          }).catch(() => {})
+        }
+      }
+    }
+
     // Drop any cinematic-only overrides on every live avatar AND
     // force-snap their wrapper position back to the snapshot's
     // projection so a tutorial restart puts Edi back in the middle
@@ -917,6 +1024,9 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         animateAgentWalkIn(cmd.pubkey, cmd.fromOffsetX, cmd.dx, cmd.ms).then(() => cmd.onComplete?.())
       } else if (cmd?.type === 'cameraTo') {
         animateCameraTo(cmd.state, cmd.ms).then(() => cmd.onComplete?.())
+      } else if (cmd?.type === 'setAgentMotion') {
+        setAgentMotionByPubkey(cmd.pubkey, cmd.motion)
+        cmd.onComplete?.()
       } else if (cmd?.type === 'clearTutorialOverrides') {
         clearTutorialOverrides()
         cmd.onComplete?.()
@@ -997,10 +1107,26 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         if (cancelled) return
         const cellW = layout.cellWidth ?? 2
         const cellH = layout.cellHeight ?? 1
-        for (const room of layout.rooms ?? []) {
+        const renderedRoomIds = new Set()
+
+        const addRoomToScene = (room) => {
+          if (renderedRoomIds.has(room.id)) return null
+          renderedRoomIds.add(room.id)
           const g = buildRoom(room, cellW, cellH)
           worldRoot.add(g)
           roomGroups.push(g)
+          // Production HUD per work room. Type-id can be either the
+          // room id (layout rooms use type-as-id) or `room.type` for
+          // built rooms (id is uuid-like).
+          const typeId = room.type ?? room.id
+          const type = getRoomType(typeId)
+          if (type?.isWork) {
+            const meta = g.userData.room
+            const hud = buildProductionHud(meta.w)
+            hud.group.position.set(0, meta.h / 2 - 0.22, 0.4)
+            g.add(hud.group)
+            productionHuds.set(room.id, hud)
+          }
           disposers.push(() => {
             g.traverse((o) => {
               if (o.geometry) o.geometry.dispose()
@@ -1010,13 +1136,112 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
               }
             })
           })
+          return g
         }
-        const b = computeBounds(layout.rooms ?? [], cellW, cellH)
-        homeBounds = { minX: b.minX, maxX: b.maxX, minY: b.minY, maxY: b.maxY }
-        controls.setBounds(homeBounds)
-        layoutBounds = b
-        refit(true)
+
+        for (const room of layout.rooms ?? []) addRoomToScene(room)
+
+        // Stash these so the dynamic builtRooms subscriber + ghost
+        // computation can read them without re-fetching the layout.
+        layoutCellW = cellW
+        layoutCellH = cellH
+        baseLayoutRooms = layout.rooms ?? []
+        addRoomToSceneFn = addRoomToScene
+
+        const recomputeBounds = () => {
+          const all = [...baseLayoutRooms, ...(shelterStore.getSnapshot().builtRooms ?? [])]
+          const bb = computeBounds(all, cellW, cellH)
+          homeBounds = { minX: bb.minX, maxX: bb.maxX, minY: bb.minY, maxY: bb.maxY }
+          controls.setBounds(homeBounds)
+          layoutBounds = bb
+          // Recompute homeFrame so cameraTo home reflects the new
+          // shelter footprint after a build.
+          refit(true)
+        }
+        recomputeBounds()
+
+        // Track the IDs of layout rooms separately so the store-
+        // subscriber's diff knows which rendered IDs are owned by
+        // the bundled layout vs the player's builtRooms.
+        const layoutRoomIds = new Set(baseLayoutRooms.map((r) => r.id))
+
+        const removeBuiltRoom = (roomId) => {
+          const idx = roomGroups.findIndex((g) => g.userData.room?.id === roomId)
+          if (idx < 0) return false
+          const g = roomGroups[idx]
+          worldRoot.remove(g)
+          g.traverse((o) => {
+            if (o.geometry) o.geometry.dispose()
+            if (o.material) {
+              if (o.material.map) o.material.map.dispose()
+              o.material.dispose()
+            }
+          })
+          roomGroups.splice(idx, 1)
+          renderedRoomIds.delete(roomId)
+          productionHuds.delete(roomId)
+          return true
+        }
+
+        // Rebuild the presence projector with the current full set
+        // of rooms (layout + built). The walker calls
+        // projectLocal(roomId, u, v) — if a room isn't in the
+        // projector's roomsById map, projection returns null and
+        // the agent never visibly moves. Rebuilding is cheap.
+        const rebuildProjector = (snap) => {
+          projectorRef.current = createPresenceProjector({
+            layout: {
+              cellWidth: cellW,
+              cellHeight: cellH,
+              rooms: [...baseLayoutRooms, ...(snap.builtRooms ?? [])],
+            },
+          })
+        }
+
+        // Diff the snapshot's builtRooms against currently-rendered
+        // ids: spawn new ones, dispose removed ones. Used both for
+        // the initial reload sync and for ongoing store changes.
+        const reconcileBuiltRooms = (snap) => {
+          let changed = false
+          const wantedBuiltIds = new Set((snap.builtRooms ?? []).map((r) => r.id))
+          for (const room of snap.builtRooms ?? []) {
+            if (renderedRoomIds.has(room.id)) continue
+            addRoomToScene(room)
+            changed = true
+          }
+          for (const id of [...renderedRoomIds]) {
+            if (layoutRoomIds.has(id)) continue
+            if (wantedBuiltIds.has(id)) continue
+            if (removeBuiltRoom(id)) changed = true
+          }
+          if (changed) {
+            recomputeBounds()
+            rebuildProjector(snap)
+            // Force a presence-sync pass so any agents whose pos.roomId
+            // is in the new room set get spawned / repositioned now.
+            setPresenceTick((n) => n + 1)
+            // Refresh assignment-mode pulse set in case a work room
+            // was added or removed mid-mode.
+            reconcilePulseRooms()
+          }
+        }
+
+        // Build the initial projector from layout-only rooms so the
+        // walker has something to project against before the
+        // builtRooms reconcile runs (which might bump it again).
         projectorRef.current = createPresenceProjector({ layout })
+
+        // ONE-SHOT initial sync — shelterStore.subscribe only fires
+        // on subsequent commits, so without this any builtRooms
+        // restored from localStorage on a fresh page load would
+        // never be added to the scene. Internally calls
+        // rebuildProjector when builtRooms changed the room set.
+        reconcileBuiltRooms(shelterStore.getSnapshot())
+
+        // Ongoing changes: Build Mode commits, tutorial reset wipes.
+        const unsubStore = shelterStore.subscribe(reconcileBuiltRooms)
+        disposers.push(unsubStore)
+
         // Trigger the presence-sync effect once the projector exists
         // so any agents already in the room state get spawned.
         setPresenceTick((n) => n + 1)
@@ -1046,6 +1271,104 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
       raycaster.setFromCamera(ndc, camera)
+
+      // ── Build-mode placement short-circuit ────────────────────────
+      // When the player has a room type selected, every tap is
+      // either a placement (ghost cell) or a no-op (anything else).
+      // The mode itself stays active until the player commits or
+      // cancels via the carousel / Build tab.
+      if (getBuildMode().active && getBuildMode().selectedType && ghostGroups.length) {
+        const ghostHits = raycaster.intersectObjects(ghostGroups, true)
+        if (ghostHits.length) {
+          let node = ghostHits[0].object
+          while (node) {
+            if (node.userData?.ghostCell) {
+              commitBuildPlacement({
+                gridX: node.userData.ghostCell.gridX,
+                gridY: node.userData.ghostCell.gridY,
+                gridW: node.userData.ghostCell.gridW,
+                gridH: node.userData.ghostCell.gridH,
+              })
+              return
+            }
+            node = node.parent
+          }
+        }
+        // Tap outside a ghost — eat the click, stay in mode.
+        return
+      }
+
+      // ── Assignment-mode short-circuit ─────────────────────────────
+      // While the card has triggered "pick a room", every tap is
+      // either a commit (work room) or a no-op (everything else —
+      // recruit body, lobby walls, canvas margin). We deliberately
+      // do NOT auto-cancel on stray taps: tapping the recruit who's
+      // standing in the lobby would otherwise silently exit the mode
+      // and the player wouldn't realise why subsequent room-taps
+      // stopped working. Cancellation, if needed later, will come
+      // from an explicit Cancel button — not stray taps.
+      if (getAssignmentMode().active) {
+        const hits = raycaster.intersectObjects(roomGroups, true)
+        if (hits.length) {
+          let node = hits[0].object
+          while (node) {
+            if (node.userData?.room) {
+              const roomId = node.userData.room.id
+              const type = roomTypeFor(roomId)
+              if (type?.isWork) {
+                commitAssignmentMode(roomId)
+              }
+              // Non-work room tap is a silent no-op — keeps the mode
+              // active so the player can try again on a valid target.
+              return
+            }
+            node = node.parent
+          }
+        }
+        // Avatar / empty space tap — eat the click, stay in mode.
+        return
+      }
+
+      // ── Tap-to-collect on a ready room ────────────────────────────
+      // Before we fall through to focus/double-tap handling, check
+      // whether the player's hit is a room that's ready to collect —
+      // single tap pays out. Wins over the double-tap-room focus
+      // gesture so a ready room is responsive on the first touch.
+      {
+        const hits = raycaster.intersectObjects(roomGroups, true)
+        if (hits.length) {
+          let node = hits[0].object
+          while (node) {
+            if (node.userData?.room) {
+              const roomId = node.userData.room.id
+              const room = shelterStore.getSnapshot()?.rooms?.[roomId]
+              if (room?.productionReady) {
+                const type = roomTypeFor(roomId)
+                const cashAmount = Number(type?.rewardCash ?? 0)
+                // Compute the room's screen position so the FX
+                // layer can launch a coin from there toward the
+                // cash counter. Captures BEFORE the collect call so
+                // the room is still ready / on screen.
+                const worldPos = new THREE.Vector3()
+                const rg = roomGroups.find((g) => g.userData.room?.id === roomId)
+                if (rg) rg.getWorldPosition(worldPos)
+                const ndc = worldPos.clone().project(camera)
+                const rect = renderer.domElement.getBoundingClientRect()
+                const fromX = ((ndc.x + 1) / 2) * rect.width + rect.left
+                const fromY = ((-ndc.y + 1) / 2) * rect.height + rect.top
+                shelterStore.collectRoom(roomId, {
+                  rewardCash: cashAmount,
+                  rewardXp: Number(type?.rewardXp ?? 0),
+                })
+                emitFx('flyCash', { amount: cashAmount, fromX, fromY })
+                return
+              }
+              break
+            }
+            node = node.parent
+          }
+        }
+      }
 
       // Prefer avatar hits — the user's intent when tapping a character
       // standing in a room is "select this character", not "double-tap
@@ -1126,6 +1449,247 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
     renderer.domElement.addEventListener('click', onClick)
 
+    // ── Per-room production HUD (bar + ready coin) ───────────────
+    // Built once per work room and parented to the room group so it
+    // tracks the room's transform. Visibility + bar fill + ready
+    // icon updates run in the per-frame tick. Roomside HUD = always
+    // visible, even when the room/character isn't focused.
+    const productionHuds = new Map()  // roomId → { group, fillMesh, readyMesh, barWidth }
+    const PRODUCTION_FILL_GOLD = new THREE.Color(0xc69a2c)
+    const PRODUCTION_FILL_READY = new THREE.Color(0xc41a3a)
+    const READY_COIN_BASE = new THREE.Color(0xffd84a)
+    const READY_COIN_PEAK = new THREE.Color(0xffe480)
+    const _huiTmpColor = new THREE.Color()
+    function buildProductionHud(roomW) {
+      const g = new THREE.Group()
+      g.name = 'productionHud'
+      // Bar background — dark plate so the gold fill reads against
+      // light-coloured rooms too. fog:false so distance fade doesn't
+      // dim it. depthTest:false keeps it on top of dressing meshes.
+      const barWidth = Math.max(0.4, roomW * 0.5)
+      const barHeight = 0.08
+      const bg = new THREE.Mesh(
+        new THREE.PlaneGeometry(barWidth, barHeight),
+        new THREE.MeshBasicMaterial({ color: 0x101418, fog: false, depthTest: false }),
+      )
+      bg.renderOrder = 100
+      g.add(bg)
+      // Outer border via a slightly larger plane behind.
+      const border = new THREE.Mesh(
+        new THREE.PlaneGeometry(barWidth + 0.04, barHeight + 0.04),
+        new THREE.MeshBasicMaterial({ color: 0xf5f1e6, fog: false, depthTest: false }),
+      )
+      border.position.z = -0.005
+      border.renderOrder = 99
+      g.add(border)
+      // Fill — scaled along X each frame. Origin at left edge so the
+      // bar grows left-to-right. We achieve "left-anchored scale" by
+      // shifting the geometry so its local origin sits at the left.
+      const fillGeom = new THREE.PlaneGeometry(barWidth, barHeight - 0.02)
+      fillGeom.translate(barWidth / 2, 0, 0)  // pivot at left edge
+      const fillMat = new THREE.MeshBasicMaterial({ color: PRODUCTION_FILL_GOLD.getHex(), fog: false, depthTest: false })
+      const fill = new THREE.Mesh(fillGeom, fillMat)
+      fill.position.set(-barWidth / 2, 0, 0.001)
+      fill.scale.x = 0.0001  // start empty (zero would prune the draw)
+      fill.renderOrder = 101
+      g.add(fill)
+      // Ready coin — gold disc that bobs + pulses + brightens once
+      // the room flips productionReady. Placed above the bar.
+      const coin = new THREE.Mesh(
+        new THREE.CircleGeometry(0.12, 24),
+        new THREE.MeshBasicMaterial({ color: READY_COIN_BASE.getHex(), fog: false, depthTest: false }),
+      )
+      // Coin floats above the room's top edge — the bar itself is now
+      // inside the room (header position), so the coin needs to clear
+      // the wall to be readable.
+      coin.position.y = 0.32
+      coin.renderOrder = 102
+      coin.visible = false
+      g.add(coin)
+      return { group: g, fillMesh: fill, readyMesh: coin, barWidth }
+    }
+
+    // ── Bright-yellow room pulse ─────────────────────────────────
+    // Two sources can flag a room as "draw the player's eye here":
+    //   1. Tutorial runtime's `pulseRoom` (single specific room — used
+    //      by the tutorial to point at Pattern Sorting).
+    //   2. Assignment mode (all work-category rooms — so the player
+    //      sees every valid target while picking one).
+    // Both feed into a single Map<roomId, captured-materials[]> and a
+    // single per-frame loop modulates emissive. Reconcile-on-change
+    // captures new rooms / restores rooms that drop out.
+    const PULSE_YELLOW = new THREE.Color(0xffd84a)
+    const PULSE_PERIOD_ROOM_SEC = 1.4
+    const pulseRoomData = new Map()  // roomId → [{ mat, originalHex, originalIntensity }]
+    let tutorialPulseRoomId = null
+    let assignmentModeOn = false
+
+    const reconcilePulseRooms = () => {
+      const wanted = new Set()
+      if (tutorialPulseRoomId) wanted.add(tutorialPulseRoomId)
+      if (assignmentModeOn) {
+        for (const rg of roomGroups) {
+          const meta = rg.userData.room
+          if (!meta?.id) continue
+          // Built rooms have a type field different from their id;
+          // layout rooms have type === id. Either way, the catalogue
+          // lookup keys off `type`.
+          const type = getRoomType(meta.type ?? meta.id)
+          if (type?.isWork) wanted.add(meta.id)
+        }
+      }
+      // Restore any room that's no longer wanted.
+      for (const id of [...pulseRoomData.keys()]) {
+        if (wanted.has(id)) continue
+        const list = pulseRoomData.get(id)
+        for (const c of list) {
+          c.mat.emissive.setHex(c.originalHex)
+          c.mat.emissiveIntensity = c.originalIntensity
+        }
+        pulseRoomData.delete(id)
+      }
+      // Capture any room newly entering the set.
+      for (const id of wanted) {
+        if (pulseRoomData.has(id)) continue
+        const rg = roomGroups.find((g) => g.userData.room?.id === id)
+        if (!rg) continue
+        const list = []
+        rg.traverse((o) => {
+          const m = o.material
+          if (m && m.emissive) {
+            list.push({
+              mat: m,
+              originalHex: m.emissive.getHex(),
+              originalIntensity: m.emissiveIntensity ?? 1,
+            })
+            // Bump intensity so the yellow lerp shows up under the
+            // existing scene lighting (StandardMaterial emissive is
+            // multiplied by emissiveIntensity).
+            m.emissiveIntensity = 1.2
+          }
+        })
+        pulseRoomData.set(id, list)
+      }
+    }
+
+    // Assignment-mode subscription — when the player taps "Assign"
+    // (or Reassign) on a card, zoom out to the whole shelter and
+    // pulse every work room as a tappable target. The actual commit
+    // happens in onClick (which checks getAssignmentMode().active
+    // before normal handling).
+    const unsubAssignmentMode = subAssignmentMode((s) => {
+      assignmentModeOn = !!s.active
+      reconcilePulseRooms()
+      if (s.active) animateCameraTo(CAMERA_STATE.HOME, 600)
+    })
+
+    // Tutorial-driven single-room pulse.
+    const unsubTutorialPulseRoom = subTutorialState((t) => {
+      tutorialPulseRoomId = t.pulseRoom ?? null
+      reconcilePulseRooms()
+    })
+
+    // ── Build mode — ghost cells for placement ──────────────────
+    // When build-mode `selectedType` is set, we render a flat yellow
+    // outline at every valid placement position. Tapping one commits
+    // the placement via shelterBuildMode.commitPlacement(coords).
+    const ghostGroups = []
+    const ghostMaterials = []   // for per-frame opacity pulse
+    const buildGhostCell = (cell) => {
+      const w = cell.gridW * layoutCellW
+      const h = cell.gridH * layoutCellH
+      const cx = (cell.gridX + cell.gridW / 2) * layoutCellW
+      const cy = (cell.gridY + cell.gridH / 2) * layoutCellH
+      const g = new THREE.Group()
+      g.position.set(cx, cy, 0.05)
+      const fillMat = new THREE.MeshBasicMaterial({
+        color: 0xffd84a,
+        transparent: true,
+        opacity: 0.18,
+        fog: false,
+        depthTest: false,
+      })
+      const fill = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.92, h * 0.85), fillMat)
+      fill.renderOrder = 90
+      g.add(fill)
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.PlaneGeometry(w * 0.92, h * 0.85)),
+        new THREE.LineBasicMaterial({ color: 0xffd84a, fog: false }),
+      )
+      edges.renderOrder = 91
+      g.add(edges)
+      g.userData.ghostCell = cell
+      ghostMaterials.push(fillMat)
+      return g
+    }
+    const clearGhosts = () => {
+      for (const g of ghostGroups) {
+        worldRoot.remove(g)
+        g.traverse((o) => {
+          if (o.geometry) o.geometry.dispose()
+          if (o.material) o.material.dispose()
+        })
+      }
+      ghostGroups.length = 0
+      ghostMaterials.length = 0
+    }
+    const computeValidPlacements = (footprint) => {
+      const allRooms = [
+        ...baseLayoutRooms,
+        ...(shelterStore.getSnapshot().builtRooms ?? []),
+      ]
+      const occupied = new Set()
+      for (const r of allRooms) {
+        for (let dx = 0; dx < r.gridW; dx++) {
+          for (let dy = 0; dy < r.gridH; dy++) {
+            occupied.add(`${r.gridX + dx},${r.gridY + dy}`)
+          }
+        }
+      }
+      const seen = new Set()
+      const out = []
+      for (const r of allRooms) {
+        const candidates = [
+          { gx: r.gridX + r.gridW, gy: r.gridY },          // right
+          { gx: r.gridX - footprint.w, gy: r.gridY },      // left
+          { gx: r.gridX, gy: r.gridY + r.gridH },          // above
+          { gx: r.gridX, gy: r.gridY - footprint.h },      // below
+        ]
+        for (const c of candidates) {
+          // Footprint fits without overlapping any existing room.
+          let fits = true
+          for (let dx = 0; dx < footprint.w && fits; dx++) {
+            for (let dy = 0; dy < footprint.h && fits; dy++) {
+              if (occupied.has(`${c.gx + dx},${c.gy + dy}`)) fits = false
+            }
+          }
+          if (!fits) continue
+          const k = `${c.gx},${c.gy}`
+          if (seen.has(k)) continue
+          seen.add(k)
+          out.push({ gridX: c.gx, gridY: c.gy, gridW: footprint.w, gridH: footprint.h })
+        }
+      }
+      return out
+    }
+    const unsubBuildMode = subBuildMode((s) => {
+      if (s.active && s.selectedType) {
+        clearGhosts()
+        const type = getRoomType(s.selectedType)
+        const fp = type?.defaultGrid ?? { w: 2, h: 1 }
+        const cells = computeValidPlacements(fp)
+        for (const cell of cells) {
+          const g = buildGhostCell(cell)
+          worldRoot.add(g)
+          ghostGroups.push(g)
+        }
+        // Zoom out so all ghost cells are visible.
+        animateCameraTo(CAMERA_STATE.HOME, 600)
+      } else {
+        clearGhosts()
+      }
+    })
+
     let raf = 0
     const tick = () => {
       raf = requestAnimationFrame(tick)
@@ -1163,9 +1727,22 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         for (const a of Object.values(snapshot.agents ?? {})) {
           const handle = live.get(a.id)
           if (!handle || handle.pending) continue
-          // Focused agents freeze — face-camera below still rotates
-          // them, but no position writes here.
-          if (focusedAgentIdRef.current === a.id) continue
+          // When the resolver flips an agent to `walking` — e.g. the
+          // player just reassigned them to a new room — release any
+          // residual cinematic lock. The walk-in animation from
+          // step 2 leaves `tutorialPosition` set so the recruit
+          // stays parked through the dialogues; once the player
+          // assigns them, the resolver wants to drive their position
+          // and we hand control back here.
+          if (a.state === 'walking') {
+            if (handle.tutorialPosition) handle.tutorialPosition = null
+            if (handle.tutorialRole) handle.tutorialRole = null
+          }
+          // Focused agents freeze — but ONLY in steady states. When
+          // the resolver puts a focused agent into `walking`, the
+          // walker still needs to lerp them along the path or they'd
+          // sit motionless at their old position.
+          if (focusedAgentIdRef.current === a.id && a.state !== 'walking') continue
           // Cinematic-controlled agents own their position + heading
           // for the duration. Skip the walker/pacer lerp so the 4Hz
           // resolver tick (which sets paceFrom/paceTo on idle
@@ -1265,8 +1842,69 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         }
       }
 
+      // Build-mode ghost cell pulse — soft yellow opacity wave so
+      // the ghosts read as "tap me" rather than static placeholders.
+      if (ghostMaterials.length) {
+        const tt = (performance.now() / 1000) * (Math.PI * 2 / 1.6)
+        const kk = (Math.sin(tt) + 1) / 2
+        const alpha = 0.15 + kk * 0.25
+        for (const m of ghostMaterials) m.opacity = alpha
+      }
+
+      // Bright-yellow emissive pulse on tutorial-targeted +
+      // assignment-mode rooms. Runs independently of focus state.
+      if (pulseRoomData.size) {
+        const tt = (performance.now() / 1000) * (Math.PI * 2 / PULSE_PERIOD_ROOM_SEC)
+        const kk = (Math.sin(tt) + 1) / 2
+        for (const list of pulseRoomData.values()) {
+          for (const c of list) {
+            c.mat.emissive.setHex(c.originalHex).lerp(PULSE_YELLOW, kk * 0.85)
+          }
+        }
+      }
+
       // Tick avatar animators (kimodo) before rendering.
       factory.tick()
+
+      // ── Production HUDs (bar + ready coin per work room) ────────
+      // Always-visible: shows whenever a room has at least one
+      // assigned worker. Bar fill width = productionTimer / duration.
+      // Ready coin appears + bobs + pulses when productionReady.
+      if (productionHuds.size) {
+        const snapNow = shelterStore.getSnapshot()
+        const now = performance.now() / 1000
+        for (const [roomId, hud] of productionHuds) {
+          const room = snapNow.rooms?.[roomId]
+          const type = roomTypeFor(roomId)
+          const dur = Number(type?.productionDuration ?? 0)
+          const timer = Number(room?.productionTimer ?? 0)
+          const ready = !!room?.productionReady
+          // Visible iff a manually-assigned worker exists for this room.
+          const hasWorker = Object.values(snapNow.agents ?? {})
+            .some((a) => a.manualAssignment?.roomId === roomId)
+          hud.group.visible = hasWorker
+          if (!hasWorker) continue
+          const pct = dur > 0 ? Math.max(0, Math.min(1, timer / dur)) : 0
+          hud.fillMesh.scale.x = Math.max(0.0001, pct)
+          hud.fillMesh.material.color.setHex(
+            ready ? PRODUCTION_FILL_READY.getHex() : PRODUCTION_FILL_GOLD.getHex(),
+          )
+          // Ready coin — bob (sine on Y) + pulse (sine on scale +
+          // colour). 1.1s period so it reads as a friendly "tap me"
+          // beat rather than a frantic alarm.
+          hud.readyMesh.visible = ready
+          if (ready) {
+            const phase = now * (Math.PI * 2 / 1.1)
+            const k1 = (Math.sin(phase) + 1) / 2          // 0..1
+            const k2 = (Math.sin(phase * 2) + 1) / 2      // double-time for bob
+            hud.readyMesh.position.y = 0.32 + 0.05 * k2
+            const s = 0.85 + 0.3 * k1
+            hud.readyMesh.scale.setScalar(s)
+            _huiTmpColor.copy(READY_COIN_BASE).lerp(READY_COIN_PEAK, k1)
+            hud.readyMesh.material.color.copy(_huiTmpColor)
+          }
+        }
+      }
 
       // Tilt-on-zoom — flatten the world toward TILT_MIN as zoom rises.
       // Map zoom 1.0 → TILT_MAX, zoom 3.0+ → TILT_MIN. Debug offsets
@@ -1288,6 +1926,18 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('click', onClick)
       try { unregisterStageHandler() } catch {}
+      try { unsubAssignmentMode() } catch {}
+      try { unsubTutorialPulseRoom() } catch {}
+      try { unsubBuildMode() } catch {}
+      clearGhosts()
+      // Restore every captured material on tear-down.
+      for (const list of pulseRoomData.values()) {
+        for (const c of list) {
+          c.mat.emissive.setHex(c.originalHex)
+          c.mat.emissiveIntensity = c.originalIntensity
+        }
+      }
+      pulseRoomData.clear()
       try { unsubRegistry() } catch {}
       try { unsubRoles() } catch {}
       try { registry.dispose() } catch {}
@@ -1370,15 +2020,28 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         if (existing.animator) {
           const isFocused = focusedAgentIdRef.current === a.id
           // tutorialRole wins over everything — the cinematic owns
-          // motion while it's animating. Otherwise, focused agents
-          // use focusRole, then fall through to lerp/rest/idle.
+          // motion while it's animating. Then `walk` wins for the
+          // explicit walking-to-a-room state (focused or not).
+          // Then `work` wins when the agent is at their manually-
+          // assigned room AND in state='work' — they're on the job,
+          // and the work motion should play even when the player has
+          // them focused (otherwise the focusRole 'wave' would mask
+          // the actual work pose). Otherwise focusRole, otherwise
+          // pace/rest/idle.
+          const atAssignedRoom = !!a.manualAssignment?.roomId
+            && a.assignment?.roomId === a.manualAssignment.roomId
+            && a.state === 'work'
           const wantedRole = existing.tutorialRole
             ? existing.tutorialRole
-            : isFocused
-              ? (existing.focusRole ?? 'wave')
-              : isLerping
-                ? 'walk'
-                : isResting
+            : isWalking
+              ? 'walk'
+              : atAssignedRoom
+                ? 'work'
+                : isFocused
+                  ? (existing.focusRole ?? 'wave')
+                  : isLerping
+                    ? 'walk'
+                    : isResting
                   ? (a.paceRestRole ?? 'idle')
                   : 'idle'
           // Only the kimodo-rigged avatar tier exposes setMotion — the

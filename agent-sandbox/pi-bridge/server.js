@@ -8521,9 +8521,12 @@ app.post(
   },
 );
 
-// Stage 2 — image → 3D mesh. Reuses callTrellisMesh.
+// Stage 2 — image → 3D mesh. Backend selectable via ?backend= query
+// param or { backend } body field. Defaults to trellis. hunyuan3d
+// usually preserves source-image colour better, at higher latency.
 app.post(
   "/props/:propId/model/generate/stream",
+  express.json({ limit: "1kb" }),
   apiQuota.middleware,
   async (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
@@ -8534,19 +8537,22 @@ app.post(
     const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
     const propId = req.params.propId;
+    const backend = (req.query.backend || req.body?.backend || "trellis").toString().toLowerCase();
+    const backendFn = MESH_BACKENDS[backend];
     let endInflight = null;
     let heartbeat = null;
     try {
+      if (!backendFn) throw new Error(`unknown backend '${backend}' (want: ${Object.keys(MESH_BACKENDS).join(", ")})`);
       const dir = getPropDir(propId);
       const imagePath = join(dir, "image.png");
       if (!existsSync(imagePath)) throw new Error("no image — run image generation first");
       const imageBuf = readFileSync(imagePath);
-      send("stage", { stage: "loaded", message: `using image.png (${imageBuf.length}B)` });
+      send("stage", { stage: "loaded", message: `using image.png (${imageBuf.length}B), backend=${backend}` });
 
-      const call = services.startCall("trellis", { propId, kind: "prop-mesh" });
+      const call = services.startCall(backend, { propId, kind: "prop-mesh" });
       endInflight = (info = {}) => call.end(info);
 
-      const { buffer, startedAt } = await callTrellisMesh({
+      const { buffer, startedAt } = await backendFn({
         tpose: { buffer: imageBuf, mime: "image/png" },
         send,
       });
