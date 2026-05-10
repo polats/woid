@@ -47,11 +47,20 @@ function fetchLayoutOnce(layoutId) {
 
 function applyShellPalette(group, palette) {
   const mats = group.userData?.shellMaterials
-  if (!mats || !palette) return
-  if (palette.wall && mats.wall?.color) mats.wall.color.set(palette.wall)
-  if (palette.floor && mats.floor?.color) mats.floor.color.set(palette.floor)
-  if (palette.trim && mats.trim?.color) mats.trim.color.set(palette.trim)
-  if (palette.ceiling && mats.ceiling?.color) mats.ceiling.color.set(palette.ceiling)
+  if (palette && mats) {
+    if (palette.wall && mats.wall?.color) mats.wall.color.set(palette.wall)
+    if (palette.floor && mats.floor?.color) mats.floor.color.set(palette.floor)
+    if (palette.trim && mats.trim?.color) mats.trim.color.set(palette.trim)
+    if (palette.ceiling && mats.ceiling?.color) mats.ceiling.color.set(palette.ceiling)
+  }
+  // Architectural floor texture is canvas-baked from the palette, so a
+  // colour change requires redrawing it. Lazy-imported to keep this
+  // module independent of the visual layer in tests.
+  if (palette && group.userData?.architecturalFloor) {
+    import('./architecturalDetails.js')
+      .then((m) => m.repaintArchitecturalFloor?.(group, palette))
+      .catch(() => { /* optional */ })
+  }
 }
 
 /**
@@ -76,6 +85,19 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
   fetchLayoutOnce(layoutId).then((layout) => {
     if (!layout) return
     applyShellPalette(group, layout.palette)
+    // Re-run the architectural pass with the bridge layout's overrides
+    // (architecture.trim / ceiling / floor + final palette). Rebuilds
+    // trim meshes + canvas floor + ceiling grid in place.
+    if (layout.architecture && group.userData?.rebuildArchitecture) {
+      try {
+        group.userData.rebuildArchitecture({
+          architecture: layout.architecture,
+          palette: layout.palette,
+        })
+      } catch (err) {
+        console.warn('[layout-dressing] rebuildArchitecture failed:', err)
+      }
+    }
     if (!layout.props?.length) return
     // Iso-scale x and z together (preserves the floor-plan proportions
     // a desk's w/d ratio is real) by the smaller of the two fits, so
@@ -173,6 +195,21 @@ export function refreshLayoutDressing(layoutId) {
   if (!set || set.size === 0) return
   fetchLayoutOnce(layoutId).then((layout) => {
     if (!layout) return
-    for (const { group } of set) applyShellPalette(group, layout.palette)
+    for (const { group } of set) {
+      applyShellPalette(group, layout.palette)
+      // Re-run the architectural pass on the saved layout so trim /
+      // ceiling / floor overrides surface in shelter immediately
+      // after saveLayout — not only on the next page load.
+      if (group.userData?.rebuildArchitecture) {
+        try {
+          group.userData.rebuildArchitecture({
+            architecture: layout.architecture || {},
+            palette: layout.palette,
+          })
+        } catch (err) {
+          console.warn('[layout-dressing] rebuildArchitecture failed:', err)
+        }
+      }
+    }
   })
 }

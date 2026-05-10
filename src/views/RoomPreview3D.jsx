@@ -65,7 +65,9 @@ export default function RoomPreview3D({
       const layout = getLayout(id)?.layout
       if (!layout) return
       const dims = layout.dimensions || {}
+      const arch = layout.architecture || {}
       const sig = `${dims.width}|${dims.depth}|${dims.height}|`
+        + `${layout.category || ''}|${arch.trim || ''}|${arch.ceiling || ''}|${arch.floor || ''}|`
         + (layout.props || [])
           .map((p) => `${p.id}:${p.size?.w},${p.size?.h},${p.size?.d}@${p.position?.x},${p.position?.y},${p.position?.z}r${p.rotation_y || 0}`)
           .join(';')
@@ -191,6 +193,31 @@ export default function RoomPreview3D({
       const dy = Math.abs(e.clientY - downY)
       const dt = Date.now() - downAt
       if (dx > 5 || dy > 5 || dt > 400) return  // dragged or held — orbit gesture
+      // Ctrl/Cmd-click: snap the camera to a shelter-style head-on
+      // dollhouse frame so the user can compare against the shelter
+      // game view without leaving the editor. No raycast; just camera.
+      if (e.ctrlKey || e.metaKey) {
+        const dims = layout.dimensions || {}
+        const w = dims.width || 4
+        const h = dims.height || 1.1
+        const d = dims.depth || 3
+        // Shelter renders rooms in a front-facing dollhouse cross-
+        // section. Pull the camera back along +z far enough to fit
+        // the cell horizontally + vertically, looking at room centre.
+        const aspect = renderer.domElement.clientWidth / Math.max(renderer.domElement.clientHeight, 1)
+        const fov = camera.fov * Math.PI / 180
+        const distH = (h / 2) / Math.tan(fov / 2)
+        const distW = (w / 2) / (Math.tan(fov / 2) * aspect)
+        const distance = Math.max(distH, distW) * 1.15 + d / 2
+        camera.position.set(0, h / 2, distance)
+        if (controls) {
+          controls.target.set(0, h / 2, 0)
+          controls.update()
+        } else {
+          camera.lookAt(0, h / 2, 0)
+        }
+        return
+      }
       const rect = renderer.domElement.getBoundingClientRect()
       ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1

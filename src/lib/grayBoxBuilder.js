@@ -18,6 +18,7 @@
  */
 
 import * as THREE from 'three'
+import { applyArchitecturalStyle } from './architecturalDetails.js'
 
 const T = 0.04          // shell thickness (floor/wall/ceiling slabs)
 const BASEBOARD_H = 0.06 // height of trim strip along back wall
@@ -164,14 +165,17 @@ function buildShell(layout) {
   rightWall.position.x = W / 2 + T / 2
   g.add(rightWall)
 
-  // Baseboard trim along the back wall — small but reads the room as
-  // a *built* space rather than a CAD sketch.
-  const bb = new THREE.Mesh(
-    new THREE.BoxGeometry(W - T * 2, BASEBOARD_H, T * 1.5), trim,
-  )
-  bb.name = 'baseboard'
-  bb.position.set(0, BASEBOARD_H / 2, -D / 2 + T)
-  g.add(bb)
+  // Architectural details (baseboards on all walls, crown molding,
+  // wainscoting, ceiling grid, floor pattern) — auto-driven from
+  // layout.category. No-op for categories that don't add fine detail.
+  applyArchitecturalStyle(g, {
+    category: layout.category,
+    architecture: layout.architecture,
+    palette: layout.palette,
+    w: W, h: H, depth: D,
+    floorY: 0,
+    ceilingY: H,
+  })
 
   return g
 }

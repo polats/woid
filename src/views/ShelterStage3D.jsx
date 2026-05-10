@@ -8,6 +8,7 @@ import { WALK_DURATION_MIN, PACE_DURATION_MIN } from '../lib/shelterStore/index.
 import { createPanZoomControls } from '../lib/panZoomControls.js'
 import { buildDressing, ROOM_DEPTH } from '../lib/shelterDressing.js'
 import { addLayoutDressing } from '../lib/buildLayoutDressing.js'
+import { applyArchitecturalStyle, presetForCategory } from '../lib/architecturalDetails.js'
 import {
   animationLibrary,
   createCharacterRegistry,
@@ -101,7 +102,7 @@ function makeLabelSprite(text) {
   return sprite
 }
 
-function buildShell(w, h, color, palette) {
+function buildShell(w, h, color, palette, category) {
   const g = new THREE.Group()
   const D = ROOM_DEPTH
   const wallT = 0.05
@@ -131,15 +132,25 @@ function buildShell(w, h, color, palette) {
   add(new THREE.BoxGeometry(w, h, wallT), wall, 0, 0, -D / 2 + wallT / 2)
   add(new THREE.BoxGeometry(wallT, h, D), wall, -w / 2 + wallT / 2, 0, 0)
   add(new THREE.BoxGeometry(wallT, h, D), wall, w / 2 - wallT / 2, 0, 0)
-  // Baseboard trim — thin strip along the floor against the back wall
-  const baseboardH = 0.06
-  add(
-    new THREE.BoxGeometry(w - wallT * 2, baseboardH, wallT * 1.5),
-    trim,
-    0,
-    -h / 2 + floorT + baseboardH / 2,
-    -D / 2 + wallT * 1.5,
-  )
+  // Architectural details — auto from category. The shelter cell is
+  // dollhouse-scale (~4 × 1.1 × 3), so finer trim is suppressed via
+  // skipFine when the cell is below the minDetailScale threshold.
+  applyArchitecturalStyle(g, {
+    category,
+    palette: { ...palette, wall: baseHex, floor: floorHex, trim: trimHex, ceiling: ceilingHex },
+    w, h, depth: D,
+    floorY: -h / 2 + floorT,
+    ceilingY: h / 2 - wallT,
+    // Shelter walls live INSIDE the room volume (wallT thickness), so
+    // tell the trim helper to offset away from the geometric edge or
+    // baseboards z-fight with / hide behind the wall mesh.
+    wallT,
+    minDetailScale: 0.8,
+    // Shelter cells are dollhouse-scale and the ceiling reads barely
+    // at all from the home-frame camera. Skip the ceiling grid here;
+    // the rooms editor / shelter-room preview keep it.
+    skipCeiling: true,
+  })
   return g
 }
 
@@ -199,12 +210,15 @@ function buildRoom(room, cellW, cellH) {
   // Generated rooms carry their palette on the placed-room entry —
   // prefer it over the static-catalogue lookup, which won't find them.
   const palette = room.palette ?? roomType?.palette
-  const shell = buildShell(w, h, room.color, palette)
-  // Lift the shell's stashed materials onto the parent room group so
-  // addLayoutDressing's async palette repaint (driven by the bridge
-  // layout's palette) can find them — buildShell only stashes on its
-  // own sub-group.
+  const shell = buildShell(w, h, room.color, palette, room.category)
+  // Lift shell-side state (materials + the canvas-baked floor texture
+  // info + the rebuild closure) onto the parent room group so
+  // addLayoutDressing's async layout fetch can repaint and reapply
+  // per-room architecture overrides — buildShell only stashes on the
+  // shell sub-group.
   group.userData.shellMaterials = shell.userData.shellMaterials
+  group.userData.architecturalFloor = shell.userData.architecturalFloor
+  group.userData.rebuildArchitecture = shell.userData.rebuildArchitecture
   group.add(shell)
 
   // All rooms — generated and tutorial-bundled — load their dressing
@@ -224,8 +238,17 @@ function buildRoom(room, cellW, cellH) {
 
   // Cool fluorescent overhead — flat, slightly diffuse. Sits just
   // below the ceiling tile so it casts a wide pool across the floor.
-  const fluoroHex = new THREE.Color(OFFICE_LIGHTING.fluorescent.color).getHex()
-  const fluoro = new THREE.PointLight(fluoroHex, OFFICE_LIGHTING.fluorescent.intensity * 1.4, ROOM_DEPTH * 2.2, 1.2)
+  // Per-category mood: work rooms get cold + bright fluorescents,
+  // lobby/break room get dimmer + warmer + a stronger accent.
+  const preset = presetForCategory(room.category)
+  const coldFluoro = new THREE.Color(OFFICE_LIGHTING.fluorescent.color).getHex()
+  const warmFluoro = new THREE.Color('#fff1d8').getHex()
+  const fluoroHex = preset.lighting.tone === 'warm' ? warmFluoro : coldFluoro
+  const fluoro = new THREE.PointLight(
+    fluoroHex,
+    OFFICE_LIGHTING.fluorescent.intensity * 1.4 * preset.lighting.fluorescentMul,
+    ROOM_DEPTH * 2.2, 1.2,
+  )
   fluoro.position.set(0, h / 2 - 0.12, 0)
   group.add(fluoro)
   // Warm desk-lamp accent — picks up category color so MDR reads green,
@@ -234,7 +257,11 @@ function buildRoom(room, cellW, cellH) {
     ? new THREE.Color(palette.accent).getHex()
     : lampColor
   const housingY = h / 2 - 0.27
-  const lamp = new THREE.PointLight(accentHex, OFFICE_LIGHTING.deskLamp.intensity, ROOM_DEPTH * 1.1, 2.0)
+  const lamp = new THREE.PointLight(
+    accentHex,
+    OFFICE_LIGHTING.deskLamp.intensity * preset.lighting.accentMul,
+    ROOM_DEPTH * 1.1, 2.0,
+  )
   lamp.position.set(0, housingY - 0.05, 0.12)
   group.add(lamp)
 

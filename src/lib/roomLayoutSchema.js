@@ -77,6 +77,16 @@ export function validateLayout(input) {
     // 'added' across saves so editing an added room doesn't bounce
     // it back to drafts.
     status: input.status === 'added' ? 'added' : 'draft',
+    // Architectural overrides — { trim, ceiling, floor }. Empty means
+    // "use the category preset". Passed straight through; the renderer
+    // validates against TRIM_STYLES / CEILING_STYLES / FLOOR_STYLES.
+    architecture: (input.architecture && typeof input.architecture === 'object')
+      ? {
+          ...(typeof input.architecture.trim === 'string' ? { trim: input.architecture.trim } : {}),
+          ...(typeof input.architecture.ceiling === 'string' ? { ceiling: input.architecture.ceiling } : {}),
+          ...(typeof input.architecture.floor === 'string' ? { floor: input.architecture.floor } : {}),
+        }
+      : {},
     // Canonical prop list emitted by the initial-room flow. zone,
     // orientation, sizeHint are passed through so the deterministic
     // placeFromZones path keeps working after a save.

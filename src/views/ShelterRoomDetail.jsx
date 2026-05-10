@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  TRIM_STYLES, CEILING_STYLES, FLOOR_STYLES,
+} from '../lib/architecturalDetails.js'
 import RoomPreview3D from './RoomPreview3D.jsx'
 import Lightbox from '../components/Lightbox.jsx'
 import {
@@ -475,6 +478,37 @@ function PropStatusPill({ status, error }) {
 
 // ─── palette ─────────────────────────────────────────────────────
 
+// ─── architecture picker ──────────────────────────────────────────
+
+function ArchitectureRow({ architecture, onChange }) {
+  // Three small dropdowns — trim / ceiling / floor — under the palette.
+  // Empty value === 'auto' (the category preset's choice). Persists
+  // through saveLayout into layout.architecture.
+  const rows = [
+    { key: 'trim', label: 'Trim', options: TRIM_STYLES },
+    { key: 'ceiling', label: 'Ceiling', options: CEILING_STYLES },
+    { key: 'floor', label: 'Floor', options: FLOOR_STYLES },
+  ]
+  return (
+    <div className="room-mockup-architecture-row">
+      {rows.map((r) => (
+        <label key={r.key} className="room-architecture-control">
+          <small>{r.label}</small>
+          <select
+            value={architecture[r.key] || ''}
+            onChange={(e) => onChange(r.key, e.target.value)}
+          >
+            <option value="">auto (category)</option>
+            {r.options.map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        </label>
+      ))}
+    </div>
+  )
+}
+
 function paletteEntries(palette) {
   // Five named swatches: wall, floor, accent, ceiling, trim. Each one
   // prefers the room's override (so colour-picker edits stick) and
@@ -717,6 +751,10 @@ function LayoutBadge({ entry }) {
 // ─── Concept image section ───────────────────────────────────────
 
 function ConceptSection({ roomId, layoutEntry, palette, onPaletteChange, onApplyPalette, layoutProviders, layoutProviderId, onLayoutProviderChange }) {
+  // Mirror the parent's fallback so saveLayout-driven edits (palette,
+  // architecture) read the validated layout when present, the raw one
+  // when validation failed.
+  const layoutForRender = layoutEntry?.layout || layoutEntry?.rawLayout || null
   // Eyedropper: which palette slot is awaiting a pick. While set, the
   // mockup img's click handler samples the clicked pixel from a hidden
   // canvas (img drawn at naturalWidth/Height) and commits it.
@@ -866,6 +904,26 @@ function ConceptSection({ roomId, layoutEntry, palette, onPaletteChange, onApply
               aria-label="FLUX prompt — click to edit"
             />
           </div>
+          {palette && (
+            <div className="room-mockup-architecture">
+              <div className="room-mockup-palette-head">
+                <span className="room-json-summary">Architecture</span>
+              </div>
+              <ArchitectureRow
+                architecture={layoutForRender?.architecture || {}}
+                onChange={async (field, value) => {
+                  const cur = layoutForRender
+                  if (!cur) return
+                  const next = { ...(cur.architecture || {}) }
+                  if (value) next[field] = value
+                  else delete next[field]
+                  try {
+                    await saveLayout({ ...cur, architecture: next })
+                  } catch (err) { console.error('[saveLayout arch]', err) }
+                }}
+              />
+            </div>
+          )}
           {palette && (
             <div className="room-mockup-palette">
               <div className="room-mockup-palette-head">
