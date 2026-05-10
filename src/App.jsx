@@ -19,6 +19,8 @@ import Shelter from './views/Shelter.jsx'
 import SpellsSandbox from './SpellsSandbox.jsx'
 import AnimationsSandbox from './AnimationsSandbox.jsx'
 import NPCs from './views/NPCs.jsx'
+import Rooms from './views/Rooms.jsx'
+import RoomShelterPreview from './views/RoomShelterPreview.jsx'
 
 // Top-level docs (Docs section).
 const modules = import.meta.glob('../docs/*.md', { query: '?raw', import: 'default', eager: true })
@@ -59,6 +61,8 @@ function parseHash() {
   if (h === 'spells') return { view: 'spells' }
   if (h === 'animations') return { view: 'animations' }
   if (h === 'npcs') return { view: 'npcs' }
+  if (h === 'rooms') return { view: 'rooms' }
+  if (h.startsWith('shelter-room/')) return { view: 'shelter-room', id: decodeURIComponent(h.slice(13)) }
   if (h === 'testing') return { view: 'testing' }
   if (h.startsWith('testing/')) return { view: 'testing', sessionName: decodeURIComponent(h.slice(8)) }
   if (h.startsWith('diagrams/')) return { view: 'diagram', id: decodeURIComponent(h.slice(9)) }
@@ -197,6 +201,19 @@ export default function App() {
         {route.view === 'spells' && config.features?.agentSandbox && <SpellsSandbox />}
         {route.view === 'animations' && config.features?.agentSandbox && <AnimationsSandbox />}
         {route.view === 'npcs' && config.features?.agentSandbox && <NPCs />}
+        {route.view === 'rooms' && config.features?.agentSandbox && <Rooms />}
+        {route.view === 'shelter-room' && config.features?.agentSandbox && (
+          <div style={{ padding: 16, height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <a href="#/shelter" style={{ textDecoration: 'none', color: '#aab' }}>← Shelter</a>
+              <a href={`#/rooms`} style={{ textDecoration: 'none', color: '#aab' }}>· Rooms</a>
+              <span style={{ color: '#667' }}>preview: {route.id}</span>
+            </div>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <RoomShelterPreview roomId={route.id} height="100%" />
+            </div>
+          </div>
+        )}
         {/* Both Game and Shelter are conditionally mounted. Each has
             its own WebGLRenderer; keeping them both mounted blew past
             the browser's WebGL context cap and caused the visible

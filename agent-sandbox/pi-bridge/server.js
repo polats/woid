@@ -1103,6 +1103,159 @@ async function generatePersona({ seed, kind = "player", role = null } = {}) {
 
 const NIM_IMAGE_URL = process.env.NIM_IMAGE_URL
   ?? "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell";
+const NIM_IMAGE_BASE = "https://ai.api.nvidia.com/v1/genai";
+
+/**
+ * Built-in image provider presets. Schnell is the fast, low-step default
+ * used everywhere historically (avatars, concept moodboards). Dev is
+ * higher-quality but ~5-10× slower. Both share the same response shape
+ * (data.image | data.artifacts[0].base64) so they slot into fluxOnce
+ * cleanly.
+ *
+ * Add new entries here — the frontend's split-button menu auto-renders
+ * them via /v1/image/providers.
+ */
+const IMAGE_PROVIDERS = [
+  {
+    id: "flux.1-schnell",
+    label: "FLUX.1 schnell (NIM, fast)",
+    model: "black-forest-labs/flux.1-schnell",
+    steps: 4,
+    cfg_scale: 0,
+  },
+  {
+    id: "flux.1-dev",
+    label: "FLUX.1 dev (NIM, higher quality)",
+    model: "black-forest-labs/flux.1-dev",
+    steps: 28,
+    cfg_scale: 3.5,
+  },
+  // Qwen NIMs (qwen-image, qwen-image-edit) are removed — no hosted
+  // endpoint exists per NVIDIA's docs, only self-host via
+  // nvcr.io/nim/qwen/qwen-image:latest. Add back if you deploy a
+  // container the same way TRELLIS lives on Cloud Run.
+];
+
+/**
+ * Prepend palette context to a FLUX prompt so the rendered image honours
+ * the room's chosen colours. FLUX weights early tokens heavily; tucking
+ * palette at the end was largely ignored, so we lead with it. Each hex
+ * is also given a short natural-language hint via hueDescriptor() to
+ * help models that don't reliably parse hex codes.
+ *
+ * Idempotent: skips when no usable palette.
+ */
+/**
+ * Wrap a per-prop prompt in product-shot framing optimised for TRELLIS.
+ * TRELLIS converts a single foreground object into a clean 3D mesh;
+ * cluttered scenes (multiple objects, walls, windows) get baked into
+ * the geometry as dark blobs. We push FLUX hard towards isolated
+ * single-object centred shots on plain neutral backgrounds.
+ *
+ * Palette is acknowledged as a *style hint* (so a "leather chair" in a
+ * cognac-accented room comes out cognac, not random brown) but NOT as
+ * a 5-colour environment directive — that's only for room concept
+ * images.
+ */
+function framePropForTrellis(prompt, palette) {
+  if (!prompt) return prompt;
+  const accentHint = palette?.accent
+    ? `Accent colour cue (use sparingly only where natural): ${palette.accent} (${hueDescriptor(palette.accent)}).`
+    : "";
+  return [
+    `Single isolated ${prompt}.`,
+    "Studio product photo: object centred, full view, even soft lighting from upper-left, plain neutral light grey background, no walls, no floor pattern, no other objects, no people, no text, no labels, photorealistic.",
+    "Tight crop with ~10% margin around the object.",
+    accentHint,
+  ].filter(Boolean).join(" ");
+}
+
+function enrichPromptWithPalette(prompt, palette) {
+  if (!prompt) return prompt;
+  if (!palette || typeof palette !== "object") return prompt;
+  const lines = [];
+  const add = (role, hex) => { if (hex) lines.push(`${role}: ${hex} (${hueDescriptor(hex)})`); };
+  add("walls", palette.wall);
+  add("floor", palette.floor);
+  add("ceiling", palette.ceiling);
+  add("accent", palette.accent);
+  add("trim", palette.trim);
+  if (!lines.length) return prompt;
+  return [
+    "Use this strict 5-color palette as the only colours in the image:",
+    ...lines.map((l) => `  - ${l}`),
+    "",
+    prompt,
+  ].join("\n");
+}
+
+/**
+ * Convert a hex colour to a short natural-language descriptor like
+ * "warm beige" or "muted teal". Naive HSL banding — accurate enough
+ * to ground FLUX's interpretation of the hex.
+ */
+function hueDescriptor(hex) {
+  const m = String(hex).match(/^#?([0-9a-f]{6})$/i);
+  if (!m) return "neutral";
+  const n = parseInt(m[1], 16);
+  const r = ((n >> 16) & 0xff) / 255;
+  const g = ((n >> 8) & 0xff) / 255;
+  const b = (n & 0xff) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  let s = 0; let h = 0;
+  if (d) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+  }
+  // Lightness words
+  const light = l > 0.78 ? "very pale" : l > 0.6 ? "pale" : l > 0.4 ? "mid" : l > 0.22 ? "deep" : "very dark";
+  if (s < 0.1) return `${light} grey`;
+  // Saturation words
+  const sat = s < 0.25 ? "muted" : s < 0.55 ? "soft" : "saturated";
+  // Hue family
+  let hue;
+  if (h < 18 || h >= 345) hue = "red";
+  else if (h < 38) hue = "orange";
+  else if (h < 60) hue = "warm yellow";
+  else if (h < 80) hue = "yellow-green";
+  else if (h < 145) hue = "green";
+  else if (h < 175) hue = "teal";
+  else if (h < 210) hue = "cyan-blue";
+  else if (h < 250) hue = "blue";
+  else if (h < 285) hue = "indigo";
+  else if (h < 320) hue = "magenta";
+  else hue = "pink";
+  // For low-sat warm hues, "beige/tan/brown" tracks better than "yellow/orange".
+  if (sat === "muted" && (hue === "warm yellow" || hue === "orange") && l > 0.55) return `${light} beige`;
+  if (sat === "muted" && (hue === "warm yellow" || hue === "orange") && l <= 0.4) return `${light} brown`;
+  if (sat === "muted" && hue === "red" && l <= 0.4) return `${light} maroon`;
+  return `${sat} ${light} ${hue}`;
+}
+
+function resolveImageProvider(id) {
+  const preset = IMAGE_PROVIDERS.find((p) => p.id === id);
+  if (preset) {
+    return {
+      url: `${NIM_IMAGE_BASE}/${preset.model}`,
+      steps: preset.steps,
+      cfg_scale: preset.cfg_scale,
+      label: preset.label,
+      id: preset.id,
+    };
+  }
+  return {
+    url: NIM_IMAGE_URL,
+    steps: 4,
+    cfg_scale: 0,
+    label: "FLUX.1 schnell (env default)",
+    id: "default",
+  };
+}
 
 function sniffMime(b64) {
   const head = b64.slice(0, 16);
@@ -1118,8 +1271,11 @@ function sniffMime(b64) {
 // come back at 30KB+. We retry with a fresh seed under this threshold.
 const MIN_AVATAR_BYTES = 15_000;
 
-async function fluxOnce(prompt) {
-  const res = await fetch(NIM_IMAGE_URL, {
+async function fluxOnce(prompt, provider) {
+  // Wide landscape aspect (~3:2) matches the shelter game's side-scroller
+  // room shape — keeps the FLUX render proportionate to a 6×3 m floor
+  // plan rather than a square dollhouse cell.
+  const res = await fetch(provider.url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${NVIDIA_NIM_API_KEY}`,
@@ -1128,16 +1284,16 @@ async function fluxOnce(prompt) {
     },
     body: JSON.stringify({
       prompt,
-      cfg_scale: 0,
-      width: 1024,
-      height: 1024,
+      cfg_scale: provider.cfg_scale,
+      width: 1216,
+      height: 832,
       seed: Math.floor(Math.random() * 2_147_483_647),
-      steps: 4,
+      steps: provider.steps,
     }),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`NIM image ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`NIM image ${res.status} (${provider.id}): ${body.slice(0, 200)}`);
   }
   const data = await res.json();
   const b64 = data.image ?? data.artifacts?.[0]?.base64;
@@ -1148,15 +1304,19 @@ async function fluxOnce(prompt) {
 // Generate FLUX bytes for an arbitrary prompt without persisting
 // anywhere. Used by avatar generation (with portrait framing applied
 // upstream) and post-image generation (raw-prompt pass-through).
-async function generateImageBytes({ prompt }) {
+//
+// `imageProviderId` lets callers route to a different NIM model
+// (e.g. flux.1-dev for higher quality). Default = schnell (env URL).
+async function generateImageBytes({ prompt, imageProviderId }) {
   if (!NVIDIA_NIM_API_KEY) throw new Error("NVIDIA_NIM_API_KEY not configured");
   if (!prompt || !prompt.trim()) throw new Error("generateImageBytes: prompt required");
+  const provider = resolveImageProvider(imageProviderId);
   // Retry under the MIN_AVATAR_BYTES threshold — that's the signature of a
   // safety-blocked / black-frame response from FLUX.
   let b64;
   let bytes = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
-    b64 = await fluxOnce(prompt);
+    b64 = await fluxOnce(prompt, provider);
     bytes = Math.floor((b64.length * 3) / 4);
     if (bytes >= MIN_AVATAR_BYTES) break;
     console.warn(`[image] attempt ${attempt + 1}: ${bytes}B — likely blank/safety-blocked, retrying`);
@@ -1167,7 +1327,7 @@ async function generateImageBytes({ prompt }) {
   const mime = sniffMime(b64);
   const ext = mime.split("/")[1] || "jpg";
   const buffer = Buffer.from(b64, "base64");
-  return { buffer, mime, ext };
+  return { buffer, mime, ext, providerId: provider.id, providerLabel: provider.label };
 }
 
 // Avatar prompt is portrait-framed; everything else is raw-prompt.
@@ -6021,6 +6181,2176 @@ app.post("/internal/post", async (req, res) => {
   } catch (err) {
     console.error("[internal:post]", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Room mocks: FLUX-Kontext from multi-angle 3D references ────
+//
+// Frontend captures the room's 3D preview from four angles, ships them
+// as base64 dataURIs along with the prop list, and we composite them
+// into a 2×2 grid for flux-kontext to use as a reference. The model
+// returns a polished 2D mockup of the finished room. Output saved to
+// WORKSPACE/rooms/<roomId>/mock-<ts>.png and served via GET.
+const ROOMS_DIR = join(WORKSPACE, "rooms");
+mkdirSync(ROOMS_DIR, { recursive: true });
+
+function getRoomDir(roomId) {
+  // roomId is a fixed slug from roomTypes.js (e.g. "pattern-sorting").
+  // Sanitise defensively even though the source is trusted.
+  const safe = String(roomId).replace(/[^a-z0-9_-]/gi, "");
+  if (!safe) throw new Error("invalid roomId");
+  return join(ROOMS_DIR, safe);
+}
+
+// Build a 2×2 composite from up to 4 reference dataURIs. Each cell is
+// 512×512; output is 1024×1024 — within flux-kontext's expected input
+// size and big enough that prop placeholder shapes survive resampling.
+async function buildRoomReferenceComposite(refs) {
+  const CELL = 512;
+  const CANVAS = CELL * 2;
+  const cells = [];
+  for (let i = 0; i < 4; i++) {
+    const ref = refs[i];
+    if (ref?.dataUri) {
+      const m = ref.dataUri.match(/^data:image\/[a-z+]+;base64,(.+)$/i);
+      if (m) {
+        const buf = Buffer.from(m[1], "base64");
+        const resized = await sharp(buf)
+          .resize(CELL, CELL, { fit: "contain", background: { r: 245, g: 240, b: 230 } })
+          .png()
+          .toBuffer();
+        cells.push(resized);
+        continue;
+      }
+    }
+    // Empty cell → off-white blank
+    const blank = await sharp({
+      create: { width: CELL, height: CELL, channels: 3, background: { r: 245, g: 240, b: 230 } },
+    }).png().toBuffer();
+    cells.push(blank);
+  }
+  const composite = await sharp({
+    create: { width: CANVAS, height: CANVAS, channels: 3, background: { r: 245, g: 240, b: 230 } },
+  })
+    .composite([
+      { input: cells[0], top: 0,    left: 0    },
+      { input: cells[1], top: 0,    left: CELL },
+      { input: cells[2], top: CELL, left: 0    },
+      { input: cells[3], top: CELL, left: CELL },
+    ])
+    .png()
+    .toBuffer();
+  return { buffer: composite, mime: "image/png" };
+}
+
+const ROOM_MOCK_BODY_LIMIT = "12mb";
+
+app.post(
+  "/rooms/:roomId/mocks/generate/stream",
+  express.json({ limit: ROOM_MOCK_BODY_LIMIT }),
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    const send = (event, data) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const roomId = req.params.roomId;
+    const { references = [], prompt = "" } = req.body || {};
+
+    let heartbeat = null;
+    let endInflight = null;
+    try {
+      if (!FLUX_KONTEXT_URL) throw new Error("FLUX_KONTEXT_URL not configured");
+      if (!Array.isArray(references) || references.length === 0) {
+        throw new Error("references must be a non-empty array");
+      }
+      if (!prompt || prompt.length < 10) throw new Error("prompt is required");
+
+      const base = FLUX_KONTEXT_URL.replace(/\/$/, "");
+      send("stage", { stage: "probing", message: "checking flux-kontext service" });
+      await services.ensureWarm("flux-kontext", {
+        onStage: (s) => send("stage", s),
+        onHeartbeat: (hb) => send("heartbeat", hb),
+      });
+      const call = services.startCall("flux-kontext", {
+        roomId,
+        kind: "room-mock",
+        prompt: prompt.slice(0, 200),
+      });
+      endInflight = (info = {}) => call.end(info);
+
+      send("stage", { stage: "compositing", message: "building 2×2 reference grid" });
+      const composite = await buildRoomReferenceComposite(references);
+      const dataUri = `data:${composite.mime};base64,${composite.buffer.toString("base64")}`;
+
+      const startedAt = Date.now();
+      send("stage", { stage: "generating", message: "flux-kontext is composing", startedAt });
+      heartbeat = setInterval(() => {
+        send("heartbeat", { elapsedMs: Date.now() - startedAt });
+      }, 5000);
+
+      // Single attempt with retry on safety blocks (mirrors tpose).
+      let buffer = null;
+      let lastBytes = 0;
+      await services.withSerializedCall("flux-kontext", async () => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const r = await fetch(`${base}/v1/infer`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({
+              prompt,
+              image: dataUri,
+              seed: Math.floor(Math.random() * 2_147_483_647),
+              steps: 30,
+              aspect_ratio: "1:1",
+              resize_response_image: false,
+              cfg_scale: 3.5,
+            }),
+          });
+          if (!r.ok) {
+            const body = await r.text().catch(() => "");
+            throw new Error(`flux-kontext ${r.status}: ${body.slice(0, 200)}`);
+          }
+          const data = await r.json();
+          const b64 = data.artifacts?.[0]?.base64;
+          if (!b64) throw new Error("flux-kontext returned no image");
+          const buf = Buffer.from(b64, "base64");
+          lastBytes = buf.length;
+          if (buf.length >= 15_000) {
+            buffer = buf;
+            return;
+          }
+          console.warn(`[room:mock] attempt ${attempt + 1}: ${buf.length}B — safety-blocked, retrying`);
+        }
+      }, {
+        onQueued: () => send("stage", { stage: "queued", message: "another flux-kontext call in progress" }),
+        onAcquired: ({ waitMs }) => {
+          if (waitMs > 0) send("stage", {
+            stage: "acquired", message: `acquired flux-kontext after ${Math.round(waitMs / 1000)}s wait`,
+          });
+        },
+      });
+      if (!buffer) {
+        throw new Error(`flux-kontext kept returning safety-blocked images (last: ${lastBytes}B)`);
+      }
+
+      const dir = getRoomDir(roomId);
+      mkdirSync(dir, { recursive: true });
+      const filename = `mock-${Date.now()}.png`;
+      writeFileSync(join(dir, filename), buffer);
+      const url = `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/mocks/${filename}`;
+
+      apiQuota.recordSuccess();
+      endInflight?.({ ok: true });
+      endInflight = null;
+      send("done", { url, filename, bytes: buffer.length });
+      res.end();
+    } catch (err) {
+      console.error("[room:mock]", err);
+      apiQuota.refund();
+      endInflight?.({ ok: false, error: err.message });
+      send("error", { error: err.message || String(err) });
+      res.end();
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
+  },
+);
+
+// List existing mock files for a room (used by frontend on reload to
+// recover state from disk without re-running FLUX).
+app.get("/rooms/:roomId/mocks", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const dir = getRoomDir(req.params.roomId);
+    if (!existsSync(dir)) return res.json({ mocks: [] });
+    const files = readdirSync(dir)
+      .filter((n) => /^mock-\d+\.png$/.test(n))
+      .sort()
+      .reverse(); // newest first
+    const mocks = files.map((filename) => ({
+      filename,
+      url: `${PUBLIC_BRIDGE_URL}/rooms/${req.params.roomId}/mocks/${filename}`,
+      ts: Number(filename.match(/^mock-(\d+)\.png$/)[1]),
+    }));
+    res.json({ mocks });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Serve a saved mock image.
+app.get("/rooms/:roomId/mocks/:filename", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const dir = getRoomDir(req.params.roomId);
+    const filename = req.params.filename;
+    if (!/^mock-\d+\.png$/.test(filename)) return res.status(400).json({ error: "bad filename" });
+    const path = join(dir, filename);
+    if (!existsSync(path)) return res.status(404).json({ error: "not found" });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    return createReadStream(path).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Run TRELLIS over the latest mock PNG for a room to produce a single
+// GLB that captures the room as a 3D scene. Mirrors the character
+// /generate-model/stream flow but reads the source image from disk
+// (the saved mock) instead of the t-pose composite.
+app.post(
+  "/rooms/:roomId/scene/generate/stream",
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    const send = (event, data) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const roomId = req.params.roomId;
+    let endInflight = null;
+    let heartbeat = null;
+    try {
+      const dir = getRoomDir(roomId);
+      if (!existsSync(dir)) throw new Error("no mocks for this room — generate one first");
+      // Find the most recent mock file.
+      const mocks = readdirSync(dir)
+        .filter((n) => /^mock-\d+\.png$/.test(n))
+        .sort()
+        .reverse();
+      if (!mocks.length) throw new Error("no mocks for this room — generate one first");
+      const latestMockPath = join(dir, mocks[0]);
+      const mockBuf = readFileSync(latestMockPath);
+      send("stage", { stage: "loaded", message: `using ${mocks[0]} (${mockBuf.length}B)` });
+
+      const call = services.startCall("trellis", { roomId, kind: "room-scene", source: mocks[0] });
+      endInflight = (info = {}) => call.end(info);
+
+      const { buffer, startedAt } = await callTrellisMesh({
+        tpose: { buffer: mockBuf, mime: "image/png" },
+        send,
+      });
+      heartbeat = setInterval(() => {
+        send("heartbeat", { elapsedMs: Date.now() - startedAt });
+      }, 5000);
+
+      const filename = `scene-${Date.now()}.glb`;
+      writeFileSync(join(dir, filename), buffer);
+      const url = `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/scene/${filename}`;
+
+      apiQuota.recordSuccess();
+      endInflight?.({ ok: true });
+      endInflight = null;
+      send("done", { url, filename, bytes: buffer.length, modelUrl: url });
+      res.end();
+    } catch (err) {
+      console.error("[room:scene]", err);
+      apiQuota.refund();
+      endInflight?.({ ok: false, error: err.message });
+      send("error", { error: err.message || String(err) });
+      res.end();
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
+  },
+);
+
+// List scene GLBs for a room (newest first).
+app.get("/rooms/:roomId/scenes", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const dir = getRoomDir(req.params.roomId);
+    if (!existsSync(dir)) return res.json({ scenes: [] });
+    const files = readdirSync(dir)
+      .filter((n) => /^scene-\d+\.glb$/.test(n))
+      .sort()
+      .reverse();
+    const scenes = files.map((filename) => ({
+      filename,
+      url: `${PUBLIC_BRIDGE_URL}/rooms/${req.params.roomId}/scene/${filename}`,
+      ts: Number(filename.match(/^scene-(\d+)\.glb$/)[1]),
+    }));
+    res.json({ scenes });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Convenience: GET /rooms/:id/scene → latest scene GLB (for direct
+// embedding in <model-viewer> etc).
+app.get("/rooms/:roomId/scene", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const dir = getRoomDir(req.params.roomId);
+    if (!existsSync(dir)) return res.status(404).json({ error: "not found" });
+    const files = readdirSync(dir)
+      .filter((n) => /^scene-\d+\.glb$/.test(n))
+      .sort()
+      .reverse();
+    if (!files.length) return res.status(404).json({ error: "no scenes" });
+    const path = join(dir, files[0]);
+    res.setHeader("Content-Type", "model/gltf-binary");
+    res.setHeader("Cache-Control", "no-cache");
+    return createReadStream(path).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Serve a specific scene GLB by filename.
+app.get("/rooms/:roomId/scene/:filename", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const dir = getRoomDir(req.params.roomId);
+    const filename = req.params.filename;
+    if (!/^scene-\d+\.glb$/.test(filename)) return res.status(400).json({ error: "bad filename" });
+    const path = join(dir, filename);
+    if (!existsSync(path)) return res.status(404).json({ error: "not found" });
+    res.setHeader("Content-Type", "model/gltf-binary");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    return createReadStream(path).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ─── LLM config (room-layout generator) ────────────────────────────
+//
+// Effective config is env defaults merged with /workspace/llm-config.json
+// overrides written by the frontend's settings UI. The API key is held
+// server-side and *redacted* in the GET response (we expose only a
+// fingerprint so the UI can tell whether the key is set).
+const LLM_CONFIG_PATH = join(WORKSPACE, "llm-config.json");
+
+function readLlmOverrides() {
+  if (!existsSync(LLM_CONFIG_PATH)) return {};
+  try { return JSON.parse(readFileSync(LLM_CONFIG_PATH, "utf8")); }
+  catch { return {}; }
+}
+
+function getLlmConfig() {
+  const o = readLlmOverrides();
+  return {
+    baseUrl: o.baseUrl || process.env.LLM_BASE_URL || "",
+    apiKey: o.apiKey || process.env.LLM_API_KEY || "",
+    model: o.model || process.env.LLM_MODEL || "",
+    source: {
+      baseUrl: o.baseUrl ? "override" : (process.env.LLM_BASE_URL ? "env" : "unset"),
+      model: o.model ? "override" : (process.env.LLM_MODEL ? "env" : "unset"),
+      apiKey: o.apiKey ? "override" : (process.env.LLM_API_KEY ? "env" : "unset"),
+    },
+  };
+}
+
+function redactKey(k) {
+  if (!k) return null;
+  if (k.length < 8) return "***";
+  return `${k.slice(0, 4)}…${k.slice(-4)}`;
+}
+
+/**
+ * Built-in LLM provider presets the frontend can swap between when
+ * regenerating a layout. The default ("default") falls back to the
+ * configured gemma-4 deployment / overrides; everything else uses
+ * NVIDIA NIM's hosted chat-completions with NVIDIA_NIM_API_KEY.
+ *
+ * Add new presets here — they automatically surface in the model
+ * dropdown via /v1/llm/providers.
+ */
+const NIM_CHAT_BASE = "https://integrate.api.nvidia.com/v1";
+// NIM models exposed in the layout-regen split-button.
+// Order: default Gemma → 2026 frontier models (the "try first" pool) →
+// persona-pool small-to-mid (proven JSON-friendly) → legacy backbones.
+const LLM_PROVIDERS = [
+  {
+    id: "default",
+    label: "Gemma 4 31B (self-hosted)",
+    provider: "self-hosted-gemma",
+  },
+  // ── 2026 frontier / verified live on NIM ──
+  {
+    id: "nim-deepseek-v4-pro",
+    label: "DeepSeek V4 Pro (NIM, 1.6T MoE, 1M ctx)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "deepseek-ai/deepseek-v4-pro",
+  },
+  {
+    id: "nim-deepseek-v4-flash",
+    label: "DeepSeek V4 Flash (NIM, fast)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "deepseek-ai/deepseek-v4-flash",
+  },
+  {
+    id: "nim-kimi-k2.6",
+    label: "Kimi K2.6 (NIM, agentic, no-thinking recommended)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "moonshotai/kimi-k2.6",
+  },
+  {
+    id: "nim-kimi-k2-instruct",
+    label: "Kimi K2 Instruct (NIM, stable, JSON-reliable)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "moonshotai/kimi-k2-instruct",
+  },
+  {
+    id: "nim-minimax-m2.7",
+    label: "MiniMax M2.7 (NIM, 230B MoE)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "minimaxai/minimax-m2.7",
+  },
+  {
+    id: "nim-minimax-m2",
+    label: "MiniMax M2 (NIM, stable)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "minimaxai/minimax-m2",
+  },
+  {
+    id: "nim-glm-5.1",
+    label: "GLM 5.1 (NIM, 754B, coding/agent-tuned)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "z-ai/glm-5.1",
+  },
+  {
+    id: "nim-nemotron-3-super",
+    label: "Nemotron 3 Super 120B A12B (NIM, NVIDIA tool-tuned)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "nvidia/nemotron-3-super-120b-a12b",
+  },
+  {
+    id: "nim-qwen3.5-397b",
+    label: "Qwen3.5 397B A17B (NIM, flagship)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "qwen/qwen3.5-397b-a17b",
+  },
+  {
+    id: "nim-gpt-oss-120b",
+    label: "GPT-OSS 120B (NIM, open baseline)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "openai/gpt-oss-120b",
+  },
+  // ── Persona pool (proven JSON-good, smaller) ──
+  {
+    id: "nim-llama-3.1-8b",
+    label: "Llama 3.1 8B Instruct (NIM)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "meta/llama-3.1-8b-instruct",
+  },
+  {
+    id: "nim-qwen3-next-80b",
+    label: "Qwen3-Next 80B A3B Instruct (NIM)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "qwen/qwen3-next-80b-a3b-instruct",
+  },
+  {
+    id: "nim-ministral-14b",
+    label: "Ministral 14B Instruct 2512 (NIM)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "mistralai/ministral-14b-instruct-2512",
+  },
+  {
+    id: "nim-gpt-oss-20b",
+    label: "GPT-OSS 20B (NIM)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "openai/gpt-oss-20b",
+  },
+  // ── Legacy backbones (kept for back-compat) ──
+  {
+    id: "nim-llama-3.1-70b",
+    label: "Llama 3.1 70B Instruct (NIM)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "meta/llama-3.1-70b-instruct",
+  },
+  {
+    id: "nim-llama-3.1-405b",
+    label: "Llama 3.1 405B Instruct (NIM)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "meta/llama-3.1-405b-instruct",
+  },
+  {
+    id: "nim-nemotron-70b",
+    label: "Nemotron 70B Instruct (NIM, legacy)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "nvidia/llama-3.1-nemotron-70b-instruct",
+  },
+  {
+    id: "nim-mixtral-8x22b",
+    label: "Mixtral 8x22B Instruct (NIM, legacy)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "mistralai/mixtral-8x22b-instruct-v0.1",
+  },
+  {
+    id: "nim-deepseek-r1",
+    label: "DeepSeek R1 (NIM, legacy)",
+    provider: "nim",
+    baseUrl: NIM_CHAT_BASE,
+    model: "deepseek-ai/deepseek-r1",
+  },
+];
+
+/** Resolve a provider id (e.g. "default" or "nim-llama-3.1-405b") into
+ *  the {baseUrl, apiKey, model} the LLM call needs. */
+/**
+ * Build a chat-completions URL that works whether baseUrl has /v1
+ * baked in (NIM: "https://integrate.api.nvidia.com/v1") or not
+ * (Gemma vLLM: "https://gemma-4-31b-h5hjqgw4rq-ez.a.run.app").
+ * Without this normalisation NIM URLs get a double "/v1/v1/" → 404.
+ */
+function chatCompletionsUrl(baseUrl) {
+  const clean = String(baseUrl || "").replace(/\/$/, "");
+  if (/\/v\d+$/.test(clean)) return `${clean}/chat/completions`;
+  return `${clean}/v1/chat/completions`;
+}
+
+function resolveLlmProvider(id) {
+  const preset = LLM_PROVIDERS.find((p) => p.id === id);
+  if (!preset || preset.id === "default") {
+    const c = getLlmConfig();
+    return { baseUrl: c.baseUrl, apiKey: c.apiKey, model: c.model, presetId: "default", label: preset?.label || "Gemma 4 31B" };
+  }
+  if (preset.provider === "nim") {
+    const apiKey = process.env.NVIDIA_NIM_API_KEY || "";
+    return { baseUrl: preset.baseUrl, apiKey, model: preset.model, presetId: preset.id, label: preset.label };
+  }
+  // Custom preset that includes its own baseUrl/apiKey/model.
+  return {
+    baseUrl: preset.baseUrl || "",
+    apiKey: preset.apiKey || "",
+    model: preset.model || "",
+    presetId: preset.id,
+    label: preset.label,
+  };
+}
+
+app.get("/v1/image/providers", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  const out = IMAGE_PROVIDERS.map((p) => ({
+    id: p.id,
+    label: p.label,
+    model: p.model,
+    steps: p.steps,
+    configured: !!process.env.NVIDIA_NIM_API_KEY,
+  }));
+  res.json({ providers: out });
+});
+
+app.get("/v1/llm/providers", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  // Don't leak api keys; return only ids/labels/models. The default
+  // entry's resolved baseUrl + model come from getLlmConfig.
+  const c = getLlmConfig();
+  const out = LLM_PROVIDERS.map((p) => {
+    if (p.id === "default") {
+      return {
+        id: p.id,
+        label: p.label,
+        provider: p.provider,
+        baseUrl: c.baseUrl,
+        model: c.model,
+        configured: !!(c.baseUrl && c.apiKey && c.model),
+      };
+    }
+    const apiKey = p.provider === "nim" ? process.env.NVIDIA_NIM_API_KEY : p.apiKey;
+    return {
+      id: p.id,
+      label: p.label,
+      provider: p.provider,
+      baseUrl: p.baseUrl,
+      model: p.model,
+      configured: !!apiKey,
+    };
+  });
+  res.json({ providers: out });
+});
+
+app.get("/v1/llm/config", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  const c = getLlmConfig();
+  res.json({
+    baseUrl: c.baseUrl,
+    model: c.model,
+    apiKeyHint: redactKey(c.apiKey),
+    apiKeySet: !!c.apiKey,
+    source: c.source,
+  });
+});
+
+app.post(
+  "/v1/llm/config",
+  express.json({ limit: "16kb" }),
+  (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    try {
+      const cur = readLlmOverrides();
+      const next = { ...cur };
+      // Only update keys the caller explicitly sent. `null` clears an
+      // override (falls back to env). Empty string is treated as "leave
+      // unchanged" so the UI can omit untouched fields.
+      for (const k of ["baseUrl", "model", "apiKey"]) {
+        if (k in req.body) {
+          if (req.body[k] === null) delete next[k];
+          else if (typeof req.body[k] === "string" && req.body[k].length > 0) next[k] = req.body[k];
+        }
+      }
+      writeFileSync(LLM_CONFIG_PATH, JSON.stringify(next, null, 2));
+      const c = getLlmConfig();
+      res.json({
+        ok: true,
+        baseUrl: c.baseUrl,
+        model: c.model,
+        apiKeyHint: redactKey(c.apiKey),
+        apiKeySet: !!c.apiKey,
+        source: c.source,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  },
+);
+
+// ─── Room layouts: structured JSON describing geometry + props ─────
+//
+// Layouts are the source of truth for the data-driven room pipeline:
+// gray-box renderer, mockup pipeline, and per-prop generator all read
+// from the same `layout.json`. Stored at WORKSPACE/rooms/<id>/layout.json
+// alongside the mocks/ and scene-*.glb already produced by FLUX/TRELLIS.
+//
+// Frontend validates with the full schema in src/lib/roomLayoutSchema.js;
+// the bridge does a minimal sanity check before persisting (object,
+// matching id, dimensions present) and trusts the client otherwise.
+
+/**
+ * Normalise LLM-produced layout output before persisting. Gemma /
+ * Llama / Qwen wander outside the schema in predictable ways:
+ *   - prop ids with capitals, spaces, or punctuation
+ *   - duplicate prop ids
+ *   - missing size/position fields
+ *   - sizes/dimensions out of plausible range
+ *   - kind values outside the known list
+ *
+ * This forgives all of the above so the frontend's stricter
+ * validateLayout sees a clean object and the room stays accessible.
+ */
+const KNOWN_PROP_KINDS_SERVER = new Set([
+  "desk", "chair", "table", "cabinet", "shelf",
+  "monitor", "lamp", "plant", "art",
+  "door", "window", "partition",
+  "machine", "fixture", "sign", "rug",
+  "misc",
+]);
+
+function clampNum(v, lo, hi, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function slugifyPropId(s) {
+  const out = String(s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+  return out && /^[a-z0-9]/.test(out) ? out : "";
+}
+
+/** Slugify + dedupe + clean an LLM-emitted proposed_props array. */
+function normalizeProposedProps(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const p = raw[i];
+    if (!p || typeof p !== "object") continue;
+    let id = slugifyPropId(p.id);
+    if (!id) id = `prop-${i + 1}`;
+    while (seen.has(id)) id = `${id}-${seen.size + 1}`;
+    seen.add(id);
+    const rawKind = typeof p.kind === "string" ? p.kind.toLowerCase().trim() : "misc";
+    const kind = KNOWN_PROP_KINDS_SERVER.has(rawKind) ? rawKind : "misc";
+    const prompt = (typeof p.prompt === "string" && p.prompt.trim())
+      ? p.prompt.trim().slice(0, 300)
+      : id.replace(/-/g, " ");
+    out.push({ id, kind, prompt });
+  }
+  return out;
+}
+
+/**
+ * Reconcile the LLM-emitted positioned props against the canonical
+ * proposedProps list. For each proposed entry:
+ *   - If the LLM emitted a prop with the same (slugified) id, keep its
+ *     position/size/rotation but force kind+prompt to the proposed.
+ *   - If the LLM omitted it, synthesise a default-positioned prop so
+ *     no canonical prop disappears.
+ * Extras emitted by the LLM that aren't in proposed_props are dropped.
+ *
+ * When proposedProps is empty (legacy layouts), returns the cleaned
+ * props as-is.
+ */
+function reconcileWithProposedProps(cleanedProps, proposedProps, dims) {
+  if (!Array.isArray(proposedProps) || proposedProps.length === 0) return cleanedProps;
+  const byId = new Map(cleanedProps.map((p) => [p.id, p]));
+  const out = [];
+  // Lay synthesised fallbacks along a row across the room so they
+  // don't all stack at origin.
+  let fallbackIndex = 0;
+  const fallbackCount = proposedProps.filter((pp) => !byId.has(slugifyPropId(pp.id) || pp.id)).length;
+  const fallbackStep = fallbackCount > 1
+    ? (dims.width - 1) / (fallbackCount - 1)
+    : 0;
+  const fallbackStart = fallbackCount > 1 ? -(dims.width - 1) / 2 : 0;
+  for (const pp of proposedProps) {
+    const id = slugifyPropId(pp.id) || pp.id;
+    const match = byId.get(id);
+    if (match) {
+      out.push({
+        ...match,
+        id,
+        kind: pp.kind || match.kind || "misc",
+        prompt: pp.prompt || match.prompt,
+      });
+    } else {
+      const x = fallbackStart + fallbackIndex * fallbackStep;
+      fallbackIndex += 1;
+      const def = kindDefaultSize(pp.kind);
+      out.push({
+        id,
+        kind: pp.kind || "misc",
+        prompt: pp.prompt || id.replace(/-/g, " "),
+        position: { x: clampNum(x, -dims.width / 2 + 0.5, dims.width / 2 - 0.5, 0), y: 0, z: 0 },
+        rotation_y: 0,
+        size: { ...def },
+        materials: [],
+      });
+    }
+  }
+  // Failure mode: LLM "placed" every prop but at (0,0,0). Detect by
+  // checking how many distinct x positions exist. If <2 for >1 prop,
+  // the placement is useless — spread them along the back row.
+  const distinctX = new Set(out.map((p) => Math.round(p.position.x * 10) / 10));
+  if (out.length > 1 && distinctX.size < 2) {
+    const step = (dims.width - 1) / Math.max(out.length - 1, 1);
+    const start = -(dims.width - 1) / 2;
+    out.forEach((p, i) => {
+      p.position = {
+        x: clampNum(start + i * step, -dims.width / 2 + 0.5, dims.width / 2 - 0.5, 0),
+        y: p.position.y,
+        z: clampNum(-dims.depth / 2 + 0.6, -dims.depth / 2, dims.depth / 2, 0),
+      };
+    });
+  }
+  return out;
+}
+
+/** Realistic default bounding-box sizes per kind. Used by the
+ *  normalizer's per-axis fallback when the LLM omits a dimension —
+ *  prevents the "everything's a cube" failure mode where chairs end
+ *  up 0.5×0.5×0.5 because size.h was missing. */
+const KIND_DEFAULT_SIZE = {
+  desk:      { w: 1.2,  h: 0.75, d: 0.7 },
+  chair:     { w: 0.55, h: 1.05, d: 0.55 },
+  table:     { w: 0.9,  h: 0.75, d: 0.9 },
+  cabinet:   { w: 0.6,  h: 1.4,  d: 0.45 },
+  shelf:     { w: 1.0,  h: 1.8,  d: 0.4 },
+  monitor:   { w: 0.5,  h: 0.45, d: 0.15 },
+  lamp:      { w: 0.3,  h: 0.5,  d: 0.3 },
+  plant:     { w: 0.45, h: 1.0,  d: 0.45 },
+  art:       { w: 0.8,  h: 1.1,  d: 0.05 },
+  sign:      { w: 0.5,  h: 0.4,  d: 0.05 },
+  rug:       { w: 1.6,  h: 0.02, d: 1.0 },
+  door:      { w: 0.9,  h: 2.1,  d: 0.05 },
+  window:    { w: 1.5,  h: 1.2,  d: 0.05 },
+  partition: { w: 1.2,  h: 1.4,  d: 0.05 },
+  machine:   { w: 0.7,  h: 1.5,  d: 0.5 },
+  fixture:   { w: 0.6,  h: 0.05, d: 0.4 },
+  misc:      { w: 0.5,  h: 0.5,  d: 0.5 },
+};
+function kindDefaultSize(kind) {
+  return KIND_DEFAULT_SIZE[kind] || KIND_DEFAULT_SIZE.misc;
+}
+
+function normalizeLayoutOutput(parsed, baseLayout) {
+  const seen = new Set();
+  const propsIn = Array.isArray(parsed?.props) ? parsed.props : [];
+  const props = propsIn.map((p, i) => {
+    let id = slugifyPropId(p?.id);
+    if (!id) id = `prop-${i + 1}`;
+    while (seen.has(id)) id = `${id}-${seen.size + 1}`;
+    seen.add(id);
+    const rawKind = typeof p?.kind === "string" ? p.kind.toLowerCase().trim() : "misc";
+    const kind = KNOWN_PROP_KINDS_SERVER.has(rawKind) ? rawKind : "misc";
+    const prompt = (typeof p?.prompt === "string" && p.prompt.trim())
+      ? p.prompt.trim().slice(0, 500)
+      : id.replace(/-/g, " ");
+    // Per-axis fallbacks come from the kind-default (chair = tall &
+    // narrow, rug = wide & flat, etc.) so a missing axis no longer
+    // collapses the prop into a cube.
+    const def = kindDefaultSize(kind);
+    const size = {
+      w: clampNum(p?.size?.w, 0.05, 10, def.w),
+      h: clampNum(p?.size?.h, 0.01, 10, def.h),
+      d: clampNum(p?.size?.d, 0.05, 10, def.d),
+    };
+    const position = {
+      x: clampNum(p?.position?.x, -50, 50, 0),
+      y: clampNum(p?.position?.y, 0, 10, 0),
+      z: clampNum(p?.position?.z, -50, 50, 0),
+    };
+    const rotation_y = clampNum(p?.rotation_y, -Math.PI * 4, Math.PI * 4, 0);
+    return {
+      id, kind, prompt, position, rotation_y, size,
+      materials: Array.isArray(p?.materials) ? p.materials.filter((m) => typeof m === "string") : [],
+    };
+  });
+  const dimsIn = parsed?.dimensions || {};
+  const baseDims = baseLayout?.dimensions || {};
+  // Shelter game uses wide side-scroller cells: cellWidth=2 m × N cols,
+  // ROOM_DEPTH fixed at 3 m, interior ~2.8 m tall. Defaults clamp into
+  // that grammar when the LLM omits or hallucinates dimensions.
+  const dimensions = {
+    width: clampNum(dimsIn.width, 0.5, 50, baseDims.width || 6),
+    depth: clampNum(dimsIn.depth, 0.5, 50, baseDims.depth || 3),
+    height: clampNum(dimsIn.height, 0.5, 50, baseDims.height || 2.8),
+  };
+  return { dimensions, props };
+}
+
+function sanityCheckLayout(body, expectedId) {
+  if (!body || typeof body !== "object") throw new Error("body must be an object");
+  if (typeof body.id !== "string" || !body.id) throw new Error("id required");
+  if (body.id !== expectedId) throw new Error(`id "${body.id}" does not match path "${expectedId}"`);
+  if (!body.dimensions || typeof body.dimensions !== "object") {
+    throw new Error("dimensions required");
+  }
+  for (const k of ["width", "depth", "height"]) {
+    if (typeof body.dimensions[k] !== "number" || body.dimensions[k] <= 0) {
+      throw new Error(`dimensions.${k} must be a positive number`);
+    }
+  }
+  if (!Array.isArray(body.props)) throw new Error("props must be an array");
+}
+
+app.get("/rooms/:roomId/layout", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const dir = getRoomDir(req.params.roomId);
+    const path = join(dir, "layout.json");
+    if (!existsSync(path)) return res.status(404).json({ error: "no layout" });
+    const layout = JSON.parse(readFileSync(path, "utf8"));
+    res.json({ layout, mtime: statSync(path).mtimeMs });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put(
+  "/rooms/:roomId/layout",
+  express.json({ limit: "1mb" }),
+  (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    try {
+      const roomId = req.params.roomId;
+      sanityCheckLayout(req.body, roomId);
+      const dir = getRoomDir(roomId);
+      mkdirSync(dir, { recursive: true });
+      // Pretty-print for human-edit-ability — these files are small.
+      writeFileSync(join(dir, "layout.json"), JSON.stringify(req.body, null, 2));
+      res.json({ ok: true, roomId, propCount: req.body.props.length });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  },
+);
+
+// ─── Layout generation via LLM ──────────────────────────────────
+//
+// Streams progress via SSE. The model prompt asks for a single JSON
+// object matching our layout schema (see src/lib/roomLayoutSchema.js).
+// We retry up to 3× on parse / sanity-check failures, feeding the
+// previous attempt + error back as a correction message.
+
+const LAYOUT_SYSTEM_PROMPT = [
+  "You are a room designer for a 1980s corporate office game",
+  "(Severance / Stanley Parable aesthetic). Given a user brief, produce",
+  "a single JSON object with TWO keys: `flux_prompt` (a vivid prompt for",
+  "a text-to-image model) and `layout` (the structured 3D room data).",
+  "Both are derived from the same brief, so they must describe the SAME",
+  "room. The image is moodboard / inspiration; the layout is the source",
+  "of truth for the 3D engine.",
+  "",
+  "Output a single valid JSON object. No prose, no markdown fences.",
+  "",
+  "Schema:",
+  "{",
+  '  "flux_prompt": "<single prompt for FLUX text-to-image, ~40-80 words.',
+  '                  Describe a wide 3/4-angle interior shot of this room,',
+  '                  with concrete materials, palette, lighting, atmosphere,',
+  '                  furniture in view. Photorealistic. No people. No text.",',
+  '  "layout": {',
+  '    "version": 1,',
+  '    "id": "<slug, lower-alnum + dashes>",',
+  '    "name": "<short display name>",',
+  '    "description": "<1 sentence>",',
+  '    "vibe": "<short evocative quote>",',
+  '    "category": "lobby" | "work" | "service" | "mystery",',
+  '    "dimensions": { "width": number, "depth": number, "height": number },  // metres',
+  '    "palette": { "wall": "#hex", "floor": "#hex", "accent": "#hex", "ceiling": "#hex", "trim": "#hex" },',
+  '    "materials": {',
+  '      "wall":    { "prompt": "<material description>", "tiling": { "u": int, "v": int } },',
+  '      "floor":   { "prompt": "..." },',
+  '      "ceiling": { "prompt": "..." }',
+  '    },',
+  '    "lighting": {',
+  '      "fluorescent": { "color": "#hex", "intensity": 0..1 },',
+  '      "accent":      { "color": "#hex", "intensity": 0..1, "positions": [{x,y,z},...] }',
+  '    },',
+  '    "props": [',
+  '      {',
+  '        "id": "<slug, unique within room>",',
+  '        "kind": "desk"|"chair"|"table"|"cabinet"|"shelf"|"monitor"|"lamp"|"plant"|"art"|"sign"|"rug"|"door"|"window"|"partition"|"machine"|"fixture"|"misc",',
+  '        "prompt": "<concise visual description>",',
+  '        "position": { "x": number, "y": number, "z": number },  // room-local metres; floor=0',
+  '        "rotation_y": number,                                    // radians',
+  '        "size": { "w": number, "h": number, "d": number },       // bounding-box metres',
+  '        "materials": []                                           // optional shared-lib refs, leave [] for now',
+  '      }',
+  '    ]',
+  '  }',
+  "}",
+  "",
+  "Coordinates: room is centred on the origin. +x right, +y up, +z forward",
+  "(toward the open front of the room). Back wall at z = -depth/2, front",
+  "edge at z = +depth/2. Floor at y = 0. The prop's `position` is the",
+  "centre of its bottom face (so y=0 sits a desk on the floor).",
+  "",
+  "Constraints:",
+  "- The flux_prompt describes the SAME room the layout encodes — same",
+  "  furniture, same palette, same vibe. They are two views of one design.",
+  "- Every prop's bounding box must lie inside the room (with ~0.1m clearance).",
+  "- No two props' bounding boxes may overlap unless one logically sits on/under",
+  "  the other (chair under desk OK; two desks colliding NOT OK).",
+  "- Use 3-8 props for small rooms, up to ~15 for big ones.",
+  "- Match the office aesthetic: beiges, muted teals/greens, dark wood trim.",
+  "  Avoid saturated colours.",
+  "- Realistic furniture sizes: desk ~1.2x0.75x0.7, chair ~0.55x1.05x0.55,",
+  "  filing cabinet ~0.6x1.4x0.45, etc.",
+  "",
+  "Return only the JSON object.",
+].join("\n");
+
+/**
+ * Compact summary of an existing layout — palette + dimensions + prop
+ * kinds — small enough to inline into the prompt without blowing the
+ * context. Used when the caller sets `basedOn` so the LLM has real
+ * material to riff off rather than just a slug.
+ */
+function summariseLayout(layout) {
+  if (!layout) return null;
+  const propLines = (layout.props || [])
+    .slice(0, 30)  // cap so we don't blow context on giant rooms
+    .map((p) => `  - ${p.kind || "misc"}: ${p.prompt}`)
+    .join("\n");
+  return [
+    `Reference layout "${layout.id}" (${layout.name || layout.id}):`,
+    `  vibe: ${layout.vibe || "—"}`,
+    `  category: ${layout.category || "—"}`,
+    `  dimensions: ${layout.dimensions.width}m × ${layout.dimensions.depth}m × ${layout.dimensions.height}m`,
+    `  palette: wall=${layout.palette?.wall} floor=${layout.palette?.floor} accent=${layout.palette?.accent}`,
+    `  props (${(layout.props || []).length}):`,
+    propLines,
+  ].join("\n");
+}
+
+function loadLayoutSummaryById(roomId) {
+  if (!roomId) return null;
+  try {
+    const path = join(getRoomDir(roomId), "layout.json");
+    if (!existsSync(path)) return null;
+    const layout = JSON.parse(readFileSync(path, "utf8"));
+    return summariseLayout(layout);
+  } catch { return null; }
+}
+
+async function callLlmForLayout({ userPrompt, basedOn, attempt, prevAttempt, prevError, roomId, onChunk, providerId }) {
+  const cfg = resolveLlmProvider(providerId || "default");
+  if (!cfg.baseUrl || !cfg.apiKey || !cfg.model) {
+    throw new Error(`LLM "${cfg.presetId}" not configured (missing baseUrl/apiKey/model)`);
+  }
+  const baseSummary = basedOn ? loadLayoutSummaryById(basedOn) : null;
+  const userContent = baseSummary
+    ? `${baseSummary}\n\nUser request: ${userPrompt}\n\nProduce a NEW layout that takes inspiration from the reference but is its own room — different name, id (caller will overwrite), vibe, and prop set. Keep the same general office aesthetic.`
+    : userPrompt;
+  const messages = [
+    { role: "system", content: LAYOUT_SYSTEM_PROMPT },
+    { role: "user", content: userContent },
+  ];
+  // Register this fetch with the service-state in-flight tracker so the
+  // gemma-4-31b status page / sidebar dot shows it. One call per attempt
+  // so retries are visible as distinct entries in recentCalls.
+  const call = SERVICE_REGISTRY["gemma-4-31b"]
+    ? services.startCall("gemma-4-31b", {
+        roomId: roomId || null,
+        kind: "room-layout",
+        attempt: attempt + 1,
+        promptHead: userPrompt.slice(0, 80),
+      })
+    : null;
+  if (prevAttempt && prevError) {
+    messages.push({ role: "assistant", content: prevAttempt });
+    messages.push({
+      role: "user",
+      content: `That output failed validation: ${prevError}\n\nReturn a corrected JSON object — only JSON, no commentary.`,
+    });
+  }
+  const url = chatCompletionsUrl(cfg.baseUrl);
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${cfg.apiKey}`,
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        messages,
+        temperature: attempt === 0 ? 0.7 : 0.4,  // tighten on retries
+        max_tokens: 4096,
+        stream: true,
+        // Enable Gemma's reasoning channel — deltas surface in
+        // `delta.reasoning` separate from `delta.content`, letting the
+        // UI show "thinking" alongside the JSON output. NIM-hosted
+        // models reject the field; only send it for our gemma preset.
+        ...(cfg.presetId === "default"
+          ? { chat_template_kwargs: { enable_thinking: true } }
+          : {}),
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`LLM ${r.status}: ${body.slice(0, 300)}`);
+    }
+    if (!r.body) throw new Error("LLM returned no stream body");
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let content = "";
+    let reasoning = "";
+    let usage = null;
+    let totalTokens = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        let parsed;
+        try { parsed = JSON.parse(payload); } catch { continue; }
+        if (parsed.usage) usage = parsed.usage;
+        const delta = parsed.choices?.[0]?.delta || {};
+        // vLLM/Gemma streams thinking under `delta.reasoning`. Other
+        // OpenAI-compat models use `reasoning_content`. Accept both.
+        const r = delta.reasoning ?? delta.reasoning_content;
+        if (r) {
+          reasoning += r;
+          totalTokens += 1;
+          onChunk?.("thinking", r, { totalTokens });
+        }
+        if (delta.content) {
+          content += delta.content;
+          totalTokens += 1;
+          onChunk?.("token", delta.content, { totalTokens });
+        }
+      }
+    }
+    if (!content) {
+      // No JSON came through. If the model put everything in reasoning
+      // (some prompts trigger that), surface a clear error.
+      throw new Error(reasoning ? "LLM produced reasoning but no JSON output" : "LLM returned empty content");
+    }
+    call?.end({
+      ok: true,
+      completionTokens: usage?.completion_tokens ?? null,
+      reasoningChars: reasoning.length,
+      contentChars: content.length,
+    });
+    return content;
+  } catch (err) {
+    call?.end({ ok: false, error: err.message });
+    throw err;
+  }
+}
+
+/**
+ * Stream an LLM chat call, forwarding `thinking` (gemma's reasoning
+ * channel) + `token` (final content) events through `send`. Returns the
+ * accumulated content text once the stream closes. Used by the
+ * prompt+palette regen and layout-from-prompt endpoints.
+ *
+ * Mirrors the streaming logic in callLlmForLayout but with a single
+ * attempt and no retry (callers handle retries themselves).
+ */
+async function streamLlmJson({ providerId, systemPrompt, userPrompt, maxTokens, send, kindLabel }) {
+  const cfg = resolveLlmProvider(providerId || "default");
+  if (!cfg.baseUrl || !cfg.apiKey || !cfg.model) {
+    throw new Error(`LLM "${cfg.presetId}" not configured (missing baseUrl/apiKey/model)`);
+  }
+  const call = SERVICE_REGISTRY["gemma-4-31b"]
+    ? services.startCall("gemma-4-31b", {
+        kind: kindLabel || "llm-stream",
+        promptHead: (userPrompt || "").slice(0, 80),
+        provider: cfg.presetId,
+      })
+    : null;
+  const url = chatCompletionsUrl(cfg.baseUrl);
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${cfg.apiKey}`,
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: maxTokens || 1500,
+        stream: true,
+        ...(cfg.presetId === "default"
+          ? { chat_template_kwargs: { enable_thinking: true } }
+          : {}),
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`LLM ${r.status}: ${body.slice(0, 300)}`);
+    }
+    if (!r.body) throw new Error("LLM returned no stream body");
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let content = "";
+    let reasoning = "";
+    let totalTokens = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        let parsed;
+        try { parsed = JSON.parse(payload); } catch { continue; }
+        const delta = parsed.choices?.[0]?.delta || {};
+        const r = delta.reasoning ?? delta.reasoning_content;
+        if (r) {
+          reasoning += r;
+          totalTokens += 1;
+          send?.("thinking", { text: r, totalTokens });
+        }
+        if (delta.content) {
+          content += delta.content;
+          totalTokens += 1;
+          send?.("token", { text: delta.content, totalTokens });
+        }
+      }
+    }
+    if (!content) {
+      throw new Error(reasoning ? "LLM produced reasoning but no JSON output" : "LLM returned empty content");
+    }
+    call?.end({ ok: true, contentChars: content.length, reasoningChars: reasoning.length });
+    return content;
+  } catch (err) {
+    call?.end({ ok: false, error: err.message });
+    throw err;
+  }
+}
+
+/** Strip optional code fences / leading commentary so JSON.parse works
+ *  even when the model decorates the output. */
+function extractJsonObject(text) {
+  if (!text) throw new Error("empty response");
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) return fenced[1].trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("no JSON object found in response");
+  }
+  return text.slice(start, end + 1);
+}
+
+app.post("/rooms/:roomId/layout/generate", apiQuota.middleware, async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+  const roomId = req.params.roomId;
+  const { prompt, basedOn, dimensions, skipConcept, providerId } = req.body || {};
+  try {
+    if (!prompt || typeof prompt !== "string" || prompt.length < 10) {
+      throw new Error("prompt is required (>= 10 chars)");
+    }
+    // Warmup probe — surfaces Cloud Run cold-start as proper stages so
+    // the UI can show "gemma-4-31b is cold — first request can take ~4 min"
+    // instead of just hanging on a slow fetch. Skipped silently when the
+    // service is missing from the registry (e.g. user pointed
+    // LLM_BASE_URL elsewhere via override).
+    // Only probe gemma's warmup if the caller actually plans to hit
+    // that deployment. NIM-hosted models are always warm.
+    const isDefaultLlm = !providerId || providerId === "default";
+    if (isDefaultLlm && SERVICE_REGISTRY["gemma-4-31b"]) {
+      send("stage", { stage: "probing", message: "checking gemma-4-31b service" });
+      try {
+        await services.ensureWarm("gemma-4-31b", {
+          onStage: (s) => send("stage", s),
+          onHeartbeat: (hb) => send("heartbeat", hb),
+        });
+      } catch (warmErr) {
+        // Warmup failure is informative but not fatal — the model may
+        // still respond. We log and continue; the LLM call itself will
+        // surface the real error if there is one.
+        console.warn("[room:layout:generate] warmup probe failed:", warmErr.message);
+      }
+    }
+    send("stage", { stage: "probing", message: "calling LLM…" });
+
+    let prevAttempt = null;
+    let prevError = null;
+    let layout = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // Backoff on transient errors. Cloud Run typically asks "try again
+      // in 30 seconds" — start at 20s and double, with jitter. Schema /
+      // parse failures retry immediately since the model is fine, just
+      // produced bad JSON.
+      if (attempt > 0 && /\b(429|5\d\d|fetch failed|timeout|ECONN)/i.test(prevError || "")) {
+        const waitMs = 20_000 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 4000);
+        send("stage", { stage: "backoff", message: `transient ${prevError?.slice(0, 60) || ""} — waiting ${Math.round(waitMs / 1000)}s` });
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
+      send("stage", {
+        stage: "generating",
+        message: `LLM attempt ${attempt + 1}/3${prevError ? ` (retry: ${prevError.slice(0, 80)})` : ""}`,
+      });
+      let raw;
+      try {
+        raw = await callLlmForLayout({
+          userPrompt: prompt,
+          basedOn,
+          attempt,
+          prevAttempt,
+          prevError,
+          roomId,
+          providerId,
+          // Forward each delta to the route's SSE so the frontend can
+          // show Gemma thinking + JSON tokens streaming in.
+          onChunk: (kind, text, meta) => send(kind, { attempt: attempt + 1, text, ...meta }),
+        });
+      } catch (err) {
+        prevError = err.message;
+        prevAttempt = null;
+        continue;
+      }
+      send("stage", { stage: "parsing", message: `parsing attempt ${attempt + 1}` });
+      let parsed;
+      try {
+        parsed = JSON.parse(extractJsonObject(raw));
+      } catch (err) {
+        prevError = `JSON parse: ${err.message}`;
+        prevAttempt = raw;
+        continue;
+      }
+      // The new schema wraps the layout in { flux_prompt, layout }.
+      // Older shape (just the layout) is accepted as a fallback so the
+      // pipeline still works if the LLM forgets the wrapper.
+      const fluxPrompt =
+        typeof parsed.flux_prompt === "string" ? parsed.flux_prompt :
+        typeof parsed.fluxPrompt === "string" ? parsed.fluxPrompt :
+        "";
+      const layoutObj = parsed.layout && typeof parsed.layout === "object" ? parsed.layout : parsed;
+      // Force the path id to win — caller is the source of truth here.
+      layoutObj.id = roomId;
+      // Apply caller's dimension override if provided.
+      if (dimensions && typeof dimensions === "object") {
+        layoutObj.dimensions = { ...layoutObj.dimensions, ...dimensions };
+      }
+      // Inline the flux prompt so it's discoverable from the layout alone.
+      if (fluxPrompt) layoutObj.fluxPrompt = fluxPrompt;
+      send("stage", { stage: "validating", message: "checking schema + bounds" });
+      try {
+        sanityCheckLayout(layoutObj, roomId);
+        layout = layoutObj;
+        break;
+      } catch (err) {
+        prevError = err.message;
+        prevAttempt = raw;
+        continue;
+      }
+    }
+    if (!layout) throw new Error(`LLM failed after 3 attempts: ${prevError}`);
+
+    send("stage", { stage: "saving", message: "writing layout.json" });
+    const dir = getRoomDir(roomId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "layout.json"), JSON.stringify(layout, null, 2));
+
+    // Concept image — kicked off after layout is saved so even if FLUX
+    // fails the layout still lands. Failure here is non-fatal: the
+    // image is *inspiration*, the layout is the source of truth.
+    // skipConcept=true (used by "regenerate layout only" UX) keeps the
+    // existing concept.png intact and saves a FLUX call.
+    let conceptUrl = null;
+    if (skipConcept) {
+      send("stage", { stage: "concept-skipped", message: "concept image kept (skipConcept)" });
+    } else if (layout.fluxPrompt) {
+      try {
+        send("stage", { stage: "concept-generating", message: "FLUX rendering concept image" });
+        const enriched = enrichPromptWithPalette(layout.fluxPrompt, layout.palette);
+        const { buffer } = await generateImageBytes({
+          prompt: enriched,
+          imageProviderId: req.body?.imageProviderId,
+        });
+        writeFileSync(join(dir, "concept.png"), buffer);
+        conceptUrl = `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/concept?t=${Date.now()}`;
+        send("stage", { stage: "concept-saved", message: `concept image (${buffer.length}B)` });
+      } catch (err) {
+        console.warn("[room:layout:generate] concept image failed:", err.message);
+        send("stage", { stage: "concept-failed", message: `concept skipped: ${err.message}` });
+      }
+    }
+
+    apiQuota.recordSuccess();
+    send("done", {
+      roomId,
+      propCount: Array.isArray(layout.props) ? layout.props.length : 0,
+      url: `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/layout`,
+      conceptUrl,
+      fluxPrompt: layout.fluxPrompt || null,
+    });
+    res.end();
+  } catch (err) {
+    console.error("[room:layout:generate]", err);
+    apiQuota.refund();
+    send("error", { error: err.message || String(err) });
+    res.end();
+  }
+});
+
+// ─── Initial room concept (no layout structure yet) ──────────────
+//
+// Produces only the room's metadata + FLUX prompt + palette + concept
+// image. Layout structure (dimensions, props) is generated separately
+// via /rooms/:id/layout/from-prompt — keeps each step focused and
+// editable. Caller flow: POST /rooms/:id/initial to spin up the room,
+// then POST /rooms/:id/layout/from-prompt to populate geometry.
+
+const INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT = [
+  "You are creating the initial concept for a 1980s corporate office",
+  "room (Severance / Stanley Parable aesthetic). Given a user brief,",
+  "produce a single JSON object describing the room, its palette, the",
+  "FLUX prompt, AND the canonical list of props (without spatial",
+  "positions yet — those come in a later layout step).",
+  "",
+  "Schema:",
+  "{",
+  '  "name": "<short display name, title case>",',
+  '  "description": "<1-2 sentence room description>",',
+  '  "vibe": "<short evocative quote in the Lumon / Severance voice>",',
+  '  "category": "lobby" | "work" | "service" | "mystery",',
+  '  "flux_prompt": "<single FLUX text-to-image prompt, ~40-80 words. Describe a wide 3/4 angle interior shot — materials, lighting, atmosphere. Crucially, the prompt must visually describe EVERY prop in proposed_props so the rendered mockup contains them all. Photorealistic. No people. No text labels.>",',
+  '  "palette": { "wall": "#hex", "floor": "#hex", "accent": "#hex", "ceiling": "#hex", "trim": "#hex" },',
+  '  "proposed_props": [',
+  '    { "id": "<slug>", "kind": "desk"|"chair"|"table"|"cabinet"|"shelf"|"monitor"|"lamp"|"plant"|"art"|"sign"|"rug"|"door"|"window"|"partition"|"machine"|"fixture"|"misc", "prompt": "<concise visual description, 6-15 words>" }',
+  '  ]',
+  "}",
+  "",
+  "Constraints:",
+  "- The flux_prompt MUST NOT name specific colours, hex codes, or",
+  "  pigment words (avoid 'beige walls', 'teal floor', 'muted green',",
+  "  etc.). Describe the room in terms of materials, textures, lighting,",
+  "  furniture, and atmosphere — the palette below carries the colour",
+  "  information separately and is enriched into the prompt downstream.",
+  "- The palette is the SOLE source of colour. Pick five hex values",
+  "  that fit the room's mood. Pull from the wide office aesthetic —",
+  "  any of these directions are encouraged, mix and match:",
+  "    · cold institutional: pale greys, blue-greys, off-whites,",
+  "      black-rubber trim",
+  "    · warm bureaucratic: tobacco beiges, ochre, dark mahogany",
+  "    · 1970s avocado / harvest-gold / rust",
+  "    · Severance-Lumon: soft mint, sage, oat, Wedgwood blue",
+  "    · clinical wellness: pale lilac, dusty rose, eucalyptus",
+  "    · fluorescent-lit: cool greys with a chartreuse or jade pop",
+  "    · executive: oxblood, hunter green, brass, cognac leather",
+  "    · archive/storage: ochre, oxide red, weathered olive",
+  "  Vary across rooms — do not default to the same Severance teal +",
+  "  beige every time. Pick the palette family that best matches the",
+  "  room's purpose and brief. Avoid fully saturated primary colours",
+  "  unless one of the directions explicitly calls for it.",
+  "- All five palette entries must be valid #rrggbb hex.",
+  "- proposed_props: 3-8 props for small rooms, up to 12 for big ones.",
+  "  Each must be a distinct piece of furniture or fixture, with a slug",
+  "  id (lowercase, dashes) unique within the room.",
+  "- The flux_prompt MUST mention every proposed prop (by description,",
+  "  not colour) so the rendered image contains them. The list and the",
+  "  picture must agree on what's there, even though colour comes from",
+  "  the palette pass.",
+  "- Rooms in this game are WIDE side-scroller cells, sized to fit",
+  "  multiple workers comfortably: typically 4–8 m wide, 3 m deep,",
+  "  ~2.8 m tall. The flux_prompt should describe a WIDE landscape",
+  "  shot — long horizontal interior, props arranged left-to-right,",
+  "  not a deep tunnel. Include phrases like 'wide angle' or 'panoramic",
+  "  cross-section view'.",
+  "- Do not invent dimensions, positions, or sizes — those come later.",
+  "",
+  "Return only the JSON. No markdown, no commentary.",
+].join("\n");
+
+// Where the override (if any) lives. Pattern matches LLM_CONFIG_PATH.
+const INITIAL_ROOM_PROMPT_PATH = join(WORKSPACE, "initial-room-prompt.txt");
+function readInitialRoomPromptOverride() {
+  try {
+    if (!existsSync(INITIAL_ROOM_PROMPT_PATH)) return null;
+    const t = readFileSync(INITIAL_ROOM_PROMPT_PATH, "utf8");
+    return t.trim() ? t : null;
+  } catch { return null; }
+}
+function getInitialRoomSystemPrompt() {
+  return readInitialRoomPromptOverride() || INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT;
+}
+
+// Read the prompt + override status — UI shows both default and current
+// so the user can revert.
+app.get("/v1/initial-prompt", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  const override = readInitialRoomPromptOverride();
+  res.json({
+    text: override ?? INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT,
+    default: INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT,
+    overridden: !!override,
+  });
+});
+app.put(
+  "/v1/initial-prompt",
+  express.json({ limit: "32kb" }),
+  (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    const text = typeof req.body?.text === "string" ? req.body.text : "";
+    if (!text.trim()) return res.status(400).json({ error: "text required" });
+    writeFileSync(INITIAL_ROOM_PROMPT_PATH, text);
+    res.json({ ok: true, overridden: true, text });
+  },
+);
+app.delete("/v1/initial-prompt", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  if (existsSync(INITIAL_ROOM_PROMPT_PATH)) unlinkSync(INITIAL_ROOM_PROMPT_PATH);
+  res.json({
+    ok: true,
+    overridden: false,
+    text: INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT,
+  });
+});
+
+app.post(
+  "/rooms/:roomId/initial",
+  express.json({ limit: "16kb" }),
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    const roomId = req.params.roomId;
+    const { prompt, providerId, skipConcept, imageProviderId } = req.body || {};
+    try {
+      if (!prompt || typeof prompt !== "string" || prompt.length < 5) {
+        throw new Error("prompt is required (>= 5 chars)");
+      }
+      send("stage", { stage: "generating", message: "creating room concept" });
+
+      const text = await streamLlmJson({
+        providerId,
+        systemPrompt: getInitialRoomSystemPrompt(),
+        userPrompt: prompt,
+        maxTokens: 1500,
+        send,
+        kindLabel: "initial-room",
+      });
+      let parsed;
+      try { parsed = JSON.parse(extractJsonObject(text)); }
+      catch (err) { throw new Error(`JSON parse failed: ${err.message}`); }
+
+      const palette = (parsed.palette && typeof parsed.palette === "object") ? parsed.palette : {};
+      const proposedProps = normalizeProposedProps(parsed.proposed_props || parsed.proposedProps);
+      const layout = {
+        version: 1,
+        id: roomId,
+        name: parsed.name || "Untitled room",
+        description: parsed.description || "",
+        vibe: parsed.vibe || "",
+        category: parsed.category || "work",
+        // Placeholder dimensions matching the shelter game's room
+        // grammar (wide side-scroller cells, ROOM_DEPTH = 3 m, ~2.8 m
+        // interior). Layout-from-prompt overwrites these with LLM
+        // values; this is just the empty-room shape until then.
+        dimensions: { width: 6, depth: 3, height: 2.8 },
+        palette: {
+          wall: palette.wall || "#d8cdb4",
+          floor: palette.floor || "#a89878",
+          accent: palette.accent || "#c8a868",
+          ceiling: palette.ceiling || "#e8e4d8",
+          trim: palette.trim || "#6a4a32",
+        },
+        materials: {},
+        lighting: {
+          fluorescent: { color: "#e8eef0", intensity: 0.55 },
+          accent: { color: palette.accent || "#ffd8a0", intensity: 0.45, positions: [] },
+        },
+        fluxPrompt: parsed.flux_prompt || parsed.fluxPrompt || "",
+        // proposedProps is the canonical prop list. props[] stays empty
+        // until "Generate layout" runs the from-prompt flow which reads
+        // proposedProps and produces positioned props.
+        proposedProps,
+        props: [],
+        seededFrom: "initial",
+      };
+
+      send("stage", { stage: "validating", message: "checking schema" });
+      sanityCheckLayout(layout, roomId);
+
+      const dir = getRoomDir(roomId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "layout.json"), JSON.stringify(layout, null, 2));
+
+      let conceptUrl = null;
+      if (!skipConcept && layout.fluxPrompt) {
+        try {
+          send("stage", { stage: "concept-generating", message: "FLUX rendering concept image" });
+          const enriched = enrichPromptWithPalette(layout.fluxPrompt, layout.palette);
+          const { buffer } = await generateImageBytes({ prompt: enriched, imageProviderId });
+          writeFileSync(join(dir, "concept.png"), buffer);
+          conceptUrl = `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/concept?t=${Date.now()}`;
+          send("stage", { stage: "concept-saved", message: `concept image (${buffer.length}B)` });
+        } catch (err) {
+          console.warn("[room:initial] concept image failed:", err.message);
+          send("stage", { stage: "concept-failed", message: `concept skipped: ${err.message}` });
+        }
+      }
+
+      apiQuota.recordSuccess();
+      send("done", {
+        roomId,
+        url: `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/layout`,
+        conceptUrl,
+        fluxPrompt: layout.fluxPrompt,
+      });
+      res.end();
+    } catch (err) {
+      console.error("[room:initial]", err);
+      apiQuota.refund();
+      send("error", { error: err.message || String(err) });
+      res.end();
+    }
+  },
+);
+
+// Build a fresh layout (dimensions + props) from an existing room's
+// prompt + palette. Distinct from /rooms/:id/layout/generate which
+// also re-creates the prompt — this flow assumes the prompt and
+// palette are stable and only re-rolls the spatial structure.
+const LAYOUT_FROM_PROMPT_SYSTEM_PROMPT = [
+  "You are a 3D-layout designer for a 1980s corporate office room.",
+  "The user has already locked in the room's visual concept (FLUX",
+  "prompt + palette) AND its canonical prop list (proposed_props,",
+  "supplied in the user message). Your job is to PLACE those props in",
+  "3D — produce dimensions, positions, sizes, and rotations.",
+  "",
+  "Output a single JSON object with EXACTLY these two keys:",
+  '  "dimensions": { "width": number, "depth": number, "height": number },  // metres',
+  '  "props": [ { "id", "kind", "prompt", "position", "rotation_y", "size", "materials": [] } ]',
+  "",
+  "EVERY prop MUST have a unique non-zero position. NEVER place all",
+  "props at (0,0,0). NEVER omit position or size. The whole point of",
+  "this step is spatial placement — a prop without coordinates is useless.",
+  "",
+  "Coordinates: room centred on origin. +x right, +y up, +z forward.",
+  "Back wall at z = -depth/2, front edge at z = +depth/2. Floor at",
+  "y = 0. `position` is the centre of the prop's bottom face.",
+  "",
+  "Placement rules:",
+  "- Floor-standing props (desk, chair, table, cabinet, shelf, plant,",
+  "  machine, rug, partition): y = 0.",
+  "- Wall-mounted thin props (art, sign, window, clock, directory,",
+  "  fluorescent panel): place flush with the back wall — z near",
+  "  -depth/2 + size.d/2, y between 1.0 and 2.2 for eye-level art.",
+  "- Items resting ON another prop (monitor on desk, bell on counter,",
+  "  microwave on counter, lamp on table): y MUST equal the supporting",
+  "  prop's position.y + supporting.size.h, and x/z must lie within",
+  "  the supporting prop's footprint. Pick a supporting prop and stack",
+  "  on it — don't leave them floating at y=0.",
+  "- Spread floor props left-to-right across the room. Don't cluster",
+  "  everything at x=0. A room with 6 props and width=6 should look",
+  "  roughly like x ≈ -2.5, -1.5, -0.5, +0.5, +1.5, +2.5 (some jitter",
+  "  is fine, but the centroid should NOT be the origin).",
+  "",
+  "Sizing rules — emit realistic bbox metres for each kind:",
+  "  desk      ~1.2 × 0.75 × 0.7   (w h d)",
+  "  chair     ~0.55 × 1.05 × 0.55",
+  "  table     ~0.9 × 0.75 × 0.9",
+  "  cabinet   ~0.6 × 1.4 × 0.45",
+  "  shelf     ~1.0 × 1.8 × 0.4",
+  "  monitor   ~0.5 × 0.45 × 0.15  (sits on desk)",
+  "  lamp      ~0.3 × 0.5 × 0.3    (sits on table/desk)",
+  "  plant     ~0.45 × 1.0 × 0.45  (floor) or ~0.3 × 0.4 × 0.3 (table)",
+  "  art       ~0.8 × 1.1 × 0.05   (wall-mounted)",
+  "  sign      ~0.5 × 0.4 × 0.05   (wall-mounted)",
+  "  rug       ~1.6 × 0.02 × 1.0   (lies flat on floor, h≈0.02)",
+  "  door      ~0.9 × 2.1 × 0.05   (wall-flush)",
+  "  window    ~1.5 × 1.2 × 0.05   (wall-flush, y≈1.0)",
+  "  partition ~1.2 × 1.4 × 0.05",
+  "  machine   ~0.7 × 1.5 × 0.5",
+  "  fixture   varies by prompt — read the prompt and SIZE accordingly.",
+  "             A 'reception counter' is ~1.6×1.0×0.6 (NOT a 5cm panel).",
+  "             A 'radiator cover' is ~0.6×0.7×0.15 (vertical).",
+  "             A 'ceiling fluorescent' is ~1.2×0.05×0.4 (mounted high).",
+  "  misc      read the prompt — a 'service bell' is ~0.1×0.15×0.1,",
+  "             a 'desk phone' is ~0.25×0.1×0.25, etc.",
+  "",
+  "Other constraints:",
+  "- Use EVERY prop in proposed_props. Don't omit any, don't invent new.",
+  "- Keep each prop's `id`, `kind`, and `prompt` exactly as given.",
+  "- Rooms are WIDE side-scroller cells. Pick width 5–8 m (small=5,",
+  "  mid=6, large=8), depth 3–4 m, height 2.6–3 m.",
+  "- Two props at the same y must NOT overlap on x/z (chair under desk",
+  "  is exempt: chair y=0 lies under desk y=0; chair half-tucks).",
+  "",
+  "Return only the JSON. No markdown, no commentary.",
+].join("\n");
+
+app.post(
+  "/rooms/:roomId/layout/from-prompt",
+  express.json({ limit: "16kb" }),
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    const roomId = req.params.roomId;
+    const providerId = req.body?.providerId;
+    try {
+      const dir = getRoomDir(roomId);
+      const layoutPath = join(dir, "layout.json");
+      if (!existsSync(layoutPath)) throw new Error("no layout — generate one first");
+      const layout = JSON.parse(readFileSync(layoutPath, "utf8"));
+      const fluxPrompt = (layout.fluxPrompt || "").trim();
+      const palette = layout.palette || {};
+      if (!fluxPrompt) throw new Error("layout has no fluxPrompt to layout from");
+
+      const proposedProps = Array.isArray(layout.proposedProps) ? layout.proposedProps : [];
+      const proposedBlock = proposedProps.length
+        ? [
+            "",
+            "proposed_props (canonical — place every entry, keep ids and prompts):",
+            ...proposedProps.map((p) => `  - id="${p.id}" kind="${p.kind || 'misc'}" prompt="${p.prompt}"`),
+          ].join("\n")
+        : "";
+
+      const userPrompt = [
+        `FLUX prompt for this room:\n${fluxPrompt}`,
+        "",
+        `Palette: ${Object.entries(palette).map(([k, v]) => `${k} ${v}`).join(", ")}`,
+        layout.name ? `Name: ${layout.name}` : "",
+        layout.description ? `Description: ${layout.description}` : "",
+        layout.vibe ? `Vibe: ${layout.vibe}` : "",
+        proposedBlock,
+      ].filter(Boolean).join("\n");
+
+      send("stage", { stage: "generating", message: "laying out geometry" });
+
+      const text = await streamLlmJson({
+        providerId,
+        systemPrompt: LAYOUT_FROM_PROMPT_SYSTEM_PROMPT,
+        userPrompt,
+        maxTokens: 4096,
+        send,
+        kindLabel: "layout-from-prompt",
+      });
+
+      let parsed;
+      try { parsed = JSON.parse(extractJsonObject(text)); }
+      catch (err) { throw new Error(`JSON parse failed: ${err.message}`); }
+
+      // Normalise LLM output, then reconcile against the canonical
+      // proposedProps list: keep any missing entries from being
+      // dropped, and force their ids/prompts to match what the user
+      // approved.
+      const cleaned = normalizeLayoutOutput(parsed, layout);
+      const reconciled = reconcileWithProposedProps(cleaned.props, proposedProps, cleaned.dimensions);
+      const merged = {
+        ...layout,
+        id: roomId,
+        dimensions: cleaned.dimensions,
+        props: reconciled,
+      };
+      send("stage", { stage: "validating", message: "checking schema + bounds" });
+      sanityCheckLayout(merged, roomId);
+
+      writeFileSync(layoutPath, JSON.stringify(merged, null, 2));
+      apiQuota.recordSuccess();
+      send("done", {
+        roomId,
+        propCount: merged.props.length,
+        url: `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/layout`,
+      });
+      res.end();
+    } catch (err) {
+      console.error("[room:layout:from-prompt]", err);
+      apiQuota.refund();
+      send("error", { error: err.message || String(err) });
+      res.end();
+    }
+  },
+);
+
+// Re-derive the FLUX prompt + palette from the room's name +
+// description. Doesn't touch dimensions or props — those are the
+// "structure" of the room and survive prompt-only re-rolls. The new
+// prompt + palette get persisted to layout.json. Caller usually
+// follows this with a concept-image regenerate.
+const PROMPT_PALETTE_SYSTEM_PROMPT = [
+  "You are a room aesthetic re-imaginer. Given a room's name and",
+  "description, produce a single JSON object with three keys:",
+  "{",
+  '  "flux_prompt": "<single FLUX text-to-image prompt, 40-80 words. Wide 3/4 angle interior. Must visually describe EVERY proposed_prop. Photorealistic, no people, no text.>",',
+  '  "palette": { "wall": "#hex", "floor": "#hex", "accent": "#hex", "ceiling": "#hex", "trim": "#hex" },',
+  '  "proposed_props": [',
+  '    { "id": "<slug>", "kind": "desk|chair|table|cabinet|shelf|monitor|lamp|plant|art|sign|rug|door|window|partition|machine|fixture|misc", "prompt": "<concise visual description, 6-15 words>" }',
+  '  ]',
+  "}",
+  "",
+  "Severance / Stanley Parable / 1980s corporate office aesthetic.",
+  "",
+  "flux_prompt: do NOT name colours, hex codes, or pigment words.",
+  "Describe materials, textures, lighting, furniture, atmosphere only —",
+  "colour is delivered separately via the palette and enriched into",
+  "the prompt downstream.",
+  "",
+  "palette: vary across rooms. Pull from any of these directions:",
+  "  · cold institutional (pale greys, blue-greys, off-whites)",
+  "  · warm bureaucratic (tobacco beige, ochre, mahogany)",
+  "  · 1970s avocado / harvest-gold / rust",
+  "  · Severance-Lumon mint / sage / oat / Wedgwood",
+  "  · clinical wellness (pale lilac, dusty rose, eucalyptus)",
+  "  · fluorescent-cool greys with chartreuse / jade accent",
+  "  · executive oxblood / hunter green / brass / cognac",
+  "  · archive ochre / oxide red / weathered olive",
+  "Pick the family that fits the room's purpose. Avoid fully saturated",
+  "primaries. Do NOT default to the same Severance teal+beige each time.",
+  "",
+  "proposed_props: 3-8 small rooms, up to 12 big. Slug ids, unique.",
+  "The flux_prompt MUST mention each proposed prop (by description,",
+  "not colour) so the rendered image and the list agree.",
+  "Wide side-scroller-style rooms (4-8 m wide × 3 m deep × ~2.8 m tall).",
+  "flux_prompt should describe a WIDE landscape shot (panoramic,",
+  "cross-section), not a deep tunnel.",
+  "Return only the JSON. No markdown.",
+].join("\n");
+
+app.post(
+  "/rooms/:roomId/prompt/regenerate",
+  express.json({ limit: "16kb" }),
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    const roomId = req.params.roomId;
+    const providerId = req.body?.providerId;
+    try {
+      const dir = getRoomDir(roomId);
+      const layoutPath = join(dir, "layout.json");
+      if (!existsSync(layoutPath)) throw new Error("no layout — generate one first");
+      const layout = JSON.parse(readFileSync(layoutPath, "utf8"));
+      const name = (layout.name || "").trim();
+      const description = (layout.description || "").trim();
+      const vibe = (layout.vibe || "").trim();
+      if (!name && !description) throw new Error("layout has no name or description to riff off");
+
+      send("stage", { stage: "generating", message: "re-deriving prompt + palette" });
+
+      const userPrompt = [
+        `Room name: ${name || "(untitled)"}`,
+        description ? `Description: ${description}` : "",
+        vibe ? `Vibe: ${vibe}` : "",
+      ].filter(Boolean).join("\n");
+
+      // Streamed LLM call: forward thinking + token deltas as SSE events
+      // so the frontend can show live progress rather than hanging on a
+      // 30-60s opaque request.
+      const text = await streamLlmJson({
+        providerId,
+        systemPrompt: PROMPT_PALETTE_SYSTEM_PROMPT,
+        userPrompt,
+        maxTokens: 800,
+        send,
+        kindLabel: "prompt-palette",
+      });
+      let parsed;
+      try { parsed = JSON.parse(extractJsonObject(text)); }
+      catch (err) { throw new Error(`JSON parse failed: ${err.message}`); }
+
+      const newFluxPrompt = typeof parsed.flux_prompt === "string" ? parsed.flux_prompt : (typeof parsed.fluxPrompt === "string" ? parsed.fluxPrompt : null);
+      if (!newFluxPrompt) throw new Error("LLM didn't return flux_prompt");
+
+      // Merge the new palette over the existing one (preserve any
+      // fields the LLM omitted — e.g. trim).
+      const newPalette = parsed.palette && typeof parsed.palette === "object"
+        ? { ...layout.palette, ...parsed.palette }
+        : layout.palette;
+
+      const newProposed = normalizeProposedProps(parsed.proposed_props || parsed.proposedProps);
+
+      layout.fluxPrompt = newFluxPrompt;
+      layout.palette = newPalette;
+      // Replace proposedProps when the LLM produced any. If it returned
+      // none, keep what was there so we don't accidentally clear the
+      // canonical list.
+      if (newProposed.length) layout.proposedProps = newProposed;
+      writeFileSync(layoutPath, JSON.stringify(layout, null, 2));
+
+      apiQuota.recordSuccess();
+      send("done", {
+        roomId,
+        fluxPrompt: newFluxPrompt,
+        palette: newPalette,
+      });
+      res.end();
+    } catch (err) {
+      console.error("[room:prompt:regenerate]", err);
+      apiQuota.refund();
+      send("error", { error: err.message || String(err) });
+      res.end();
+    }
+  },
+);
+
+// Concept image — moodboard inspiration that accompanies a generated
+// layout. Independent regenerate so users can vibe-iterate without
+// touching the layout JSON.
+app.get("/rooms/:roomId/concept", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const path = join(getRoomDir(req.params.roomId), "concept.png");
+    if (!existsSync(path)) return res.status(404).json({ error: "no concept" });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-cache");
+    return createReadStream(path).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Regenerate the concept image — re-runs FLUX with either the supplied
+// prompt or the one stored on layout.fluxPrompt. New seed → new vibe.
+app.post(
+  "/rooms/:roomId/concept/regenerate",
+  express.json({ limit: "16kb" }),
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    try {
+      const roomId = req.params.roomId;
+      const dir = getRoomDir(roomId);
+      let prompt = (req.body && typeof req.body.prompt === "string") ? req.body.prompt : "";
+      if (!prompt) {
+        const path = join(dir, "layout.json");
+        if (existsSync(path)) {
+          const layout = JSON.parse(readFileSync(path, "utf8"));
+          prompt = layout.fluxPrompt || "";
+        }
+      }
+      if (!prompt) return res.status(400).json({ error: "no prompt — pass body.prompt or generate a layout first" });
+      // Pull palette from the layout so the image-generation prompt
+      // gets enriched with the chosen colours.
+      let palette = null;
+      const layoutPath = join(dir, "layout.json");
+      if (existsSync(layoutPath)) {
+        try { palette = JSON.parse(readFileSync(layoutPath, "utf8")).palette || null; }
+        catch { /* missing or corrupt is fine */ }
+      }
+      const imageProviderId = req.body?.imageProviderId;
+      const enriched = enrichPromptWithPalette(prompt, palette);
+      const { buffer } = await generateImageBytes({ prompt: enriched, imageProviderId });
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "concept.png"), buffer);
+      // If a body.prompt override was passed, persist it back into the
+      // layout so the next refresh reflects what produced this image.
+      if (req.body?.prompt && req.body.persistPrompt) {
+        const path = join(dir, "layout.json");
+        if (existsSync(path)) {
+          const layout = JSON.parse(readFileSync(path, "utf8"));
+          layout.fluxPrompt = req.body.prompt;
+          writeFileSync(path, JSON.stringify(layout, null, 2));
+        }
+      }
+      apiQuota.recordSuccess();
+      res.json({
+        ok: true,
+        url: `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/concept?t=${Date.now()}`,
+        bytes: buffer.length,
+      });
+    } catch (err) {
+      apiQuota.refund();
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// List all rooms that have a layout.json on disk. Used by the new /rooms
+// page to enumerate everything the LLM has generated, alongside the
+// static seeds. Lives at /room-layouts (not /rooms/layouts) because the
+// older `/rooms/:id` route would shadow it.
+app.get("/room-layouts", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    if (!existsSync(ROOMS_DIR)) return res.json({ rooms: [] });
+    const out = [];
+    for (const dirent of readdirSync(ROOMS_DIR, { withFileTypes: true })) {
+      if (!dirent.isDirectory()) continue;
+      const path = join(ROOMS_DIR, dirent.name, "layout.json");
+      if (!existsSync(path)) continue;
+      try {
+        const layout = JSON.parse(readFileSync(path, "utf8"));
+        out.push({
+          id: dirent.name,
+          name: layout.name || dirent.name,
+          mtime: statSync(path).mtimeMs,
+          propCount: Array.isArray(layout.props) ? layout.props.length : 0,
+        });
+      } catch { /* skip corrupt */ }
+    }
+    out.sort((a, b) => b.mtime - a.mtime);
+    res.json({ rooms: out });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ─── Per-prop generation: FLUX text-to-image → TRELLIS image-to-3d ───
+//
+// Props are shared across rooms (one prop id = one GLB), so we store
+// them under WORKSPACE/props/<propId>/{image.png, model.glb}. Frontend
+// `roomAssetStore` calls these endpoints with two SSE flows.
+const PROPS_DIR = join(WORKSPACE, "props");
+mkdirSync(PROPS_DIR, { recursive: true });
+
+function getPropDir(propId) {
+  const safe = String(propId).replace(/[^a-z0-9_-]/gi, "");
+  if (!safe) throw new Error("invalid propId");
+  return join(PROPS_DIR, safe);
+}
+
+// Stage 1 — text → image. Saves WORKSPACE/props/<propId>/image.png.
+app.post(
+  "/props/:propId/image/generate/stream",
+  express.json({ limit: "1mb" }),
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    const propId = req.params.propId;
+    const { prompt = "", palette, imageProviderId, roomId } = req.body || {};
+    try {
+      if (!prompt || prompt.length < 5) throw new Error("prompt is required");
+      // Resolve palette: prefer one passed in body; otherwise look up
+      // the room's layout if roomId was provided. This keeps the
+      // generated prop consistent with the parent room's mockup colours.
+      let resolvedPalette = palette;
+      if (!resolvedPalette && roomId) {
+        try {
+          const layoutPath = join(getRoomDir(roomId), "layout.json");
+          if (existsSync(layoutPath)) {
+            resolvedPalette = JSON.parse(readFileSync(layoutPath, "utf8")).palette;
+          }
+        } catch { /* missing layout is fine, just skip enrichment */ }
+      }
+      const enriched = framePropForTrellis(prompt, resolvedPalette);
+      send("stage", { stage: "generating", message: "FLUX text-to-image" });
+      const { buffer } = await generateImageBytes({ prompt: enriched, imageProviderId });
+      const dir = getPropDir(propId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "image.png"), buffer);
+      const url = `${PUBLIC_BRIDGE_URL}/props/${propId}/image?t=${Date.now()}`;
+      apiQuota.recordSuccess();
+      send("done", { url, bytes: buffer.length, imageUrl: url });
+      res.end();
+    } catch (err) {
+      console.error("[prop:image]", err);
+      apiQuota.refund();
+      send("error", { error: err.message || String(err) });
+      res.end();
+    }
+  },
+);
+
+// Stage 2 — image → 3D mesh. Reuses callTrellisMesh.
+app.post(
+  "/props/:propId/model/generate/stream",
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    const propId = req.params.propId;
+    let endInflight = null;
+    let heartbeat = null;
+    try {
+      const dir = getPropDir(propId);
+      const imagePath = join(dir, "image.png");
+      if (!existsSync(imagePath)) throw new Error("no image — run image generation first");
+      const imageBuf = readFileSync(imagePath);
+      send("stage", { stage: "loaded", message: `using image.png (${imageBuf.length}B)` });
+
+      const call = services.startCall("trellis", { propId, kind: "prop-mesh" });
+      endInflight = (info = {}) => call.end(info);
+
+      const { buffer, startedAt } = await callTrellisMesh({
+        tpose: { buffer: imageBuf, mime: "image/png" },
+        send,
+      });
+      heartbeat = setInterval(() => {
+        send("heartbeat", { elapsedMs: Date.now() - startedAt });
+      }, 5000);
+
+      writeFileSync(join(dir, "model.glb"), buffer);
+      const url = `${PUBLIC_BRIDGE_URL}/props/${propId}/model?t=${Date.now()}`;
+
+      apiQuota.recordSuccess();
+      endInflight?.({ ok: true });
+      endInflight = null;
+      send("done", { url, bytes: buffer.length, modelUrl: url });
+      res.end();
+    } catch (err) {
+      console.error("[prop:model]", err);
+      apiQuota.refund();
+      endInflight?.({ ok: false, error: err.message });
+      send("error", { error: err.message || String(err) });
+      res.end();
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
+  },
+);
+
+// State probe: which artefacts exist for this prop. Used for state
+// recovery on page reload.
+app.get("/props/:propId/state", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const dir = getPropDir(req.params.propId);
+    const hasImage = existsSync(join(dir, "image.png"));
+    const hasModel = existsSync(join(dir, "model.glb"));
+    res.json({
+      propId: req.params.propId,
+      hasImage,
+      hasModel,
+      imageUrl: hasImage ? `${PUBLIC_BRIDGE_URL}/props/${req.params.propId}/image` : null,
+      modelUrl: hasModel ? `${PUBLIC_BRIDGE_URL}/props/${req.params.propId}/model` : null,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/props/:propId/image", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const path = join(getPropDir(req.params.propId), "image.png");
+    if (!existsSync(path)) return res.status(404).json({ error: "not found" });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-cache");
+    return createReadStream(path).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/props/:propId/model", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const path = join(getPropDir(req.params.propId), "model.glb");
+    if (!existsSync(path)) return res.status(404).json({ error: "not found" });
+    res.setHeader("Content-Type", "model/gltf-binary");
+    res.setHeader("Cache-Control", "no-cache");
+    return createReadStream(path).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
