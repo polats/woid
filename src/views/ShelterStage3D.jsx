@@ -192,7 +192,9 @@ function buildRoom(room, cellW, cellH) {
   }
 
   const roomType = getRoomType(room.type ?? room.id)
-  const palette = roomType?.palette
+  // Generated rooms carry their palette on the placed-room entry —
+  // prefer it over the static-catalogue lookup, which won't find them.
+  const palette = room.palette ?? roomType?.palette
   group.add(buildShell(w, h, room.color, palette))
 
   // Generated rooms (kind: 'generated' with a layoutId) load their

@@ -83,7 +83,7 @@ export default function Shelter() {
             category: rt.category,
             gridX, gridY, gridW, gridH,
             color: rt.color ?? '#9aa3b0',
-            ...(isGen ? { kind: 'generated', layoutId: rt.layoutId } : {}),
+            ...(isGen ? { kind: 'generated', layoutId: rt.layoutId, palette: rt.palette } : {}),
           }
           storeApi.addBuiltRoom(newRoom)
         })

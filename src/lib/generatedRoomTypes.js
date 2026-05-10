@@ -50,8 +50,19 @@ export async function refresh() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     const j = await r.json()
     const rooms = (j.rooms || []).filter((x) => x.propCount > 0)
-    const types = rooms.map((r) => {
+    // Fetch each layout to grab its palette so the placed room paints
+    // walls/floor/trim from the LLM-chosen palette instead of a flat
+    // fallback grey. Concurrent fetches; failures fall back to defaults.
+    const types = await Promise.all(rooms.map(async (r) => {
       const { gridW, gridH } = gridSizeFor(r)
+      let palette = null
+      try {
+        const lr = await fetch(`${BRIDGE_URL}/rooms/${encodeURIComponent(r.id)}/layout`)
+        if (lr.ok) {
+          const layout = (await lr.json()).layout
+          if (layout?.palette) palette = layout.palette
+        }
+      } catch { /* offline fallback */ }
       return {
         id: `gen:${r.id}`,
         kind: 'generated',
@@ -61,11 +72,12 @@ export async function refresh() {
         defaultBuilt: false,
         tier: 1,
         gridW, gridH,
-        color: '#9aa3b0',
+        color: palette?.accent || '#9aa3b0',
+        palette,
         description: `${r.propCount} props · generated`,
         isWork: false,
       }
-    })
+    }))
     state = { types, ready: true }; emit()
   } catch {
     state = { types: [], ready: true }; emit()
