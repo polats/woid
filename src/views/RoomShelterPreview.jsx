@@ -14,6 +14,7 @@ import {
 import {
   ROOM_ASSET_STATUS,
   getStatus as getAssetStatus,
+  refreshRoomFromBridge,
   subscribe as subAssets,
 } from '../lib/roomAssetStore.js'
 
@@ -41,6 +42,7 @@ export default function RoomShelterPreview({ roomId, height = 480 }) {
   useEffect(() => {
     if (!id) return
     fetchLayout(id)
+    refreshRoomFromBridge(id)  // probe bridge for existing prop GLBs
     return subLayouts(() => setTick((t) => t + 1))
   }, [id])
 
