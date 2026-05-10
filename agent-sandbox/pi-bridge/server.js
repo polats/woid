@@ -7270,6 +7270,32 @@ app.put(
   },
 );
 
+// Status flag: 'draft' (default — sits in the room editor only) vs
+// 'added' (also surfaces in the shelter build menu). Edits the same
+// layout.json in place; nothing else cares about the field.
+app.post(
+  "/rooms/:roomId/status",
+  express.json({ limit: "1kb" }),
+  (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    try {
+      const roomId = req.params.roomId;
+      const status = req.body?.status;
+      if (status !== "draft" && status !== "added") {
+        throw new Error("status must be 'draft' or 'added'");
+      }
+      const path = join(getRoomDir(roomId), "layout.json");
+      if (!existsSync(path)) throw new Error("no layout — generate one first");
+      const layout = JSON.parse(readFileSync(path, "utf8"));
+      layout.status = status;
+      writeFileSync(path, JSON.stringify(layout, null, 2));
+      res.json({ ok: true, roomId, status });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  },
+);
+
 // ─── Layout generation via LLM ──────────────────────────────────
 //
 // Streams progress via SSE. The model prompt asks for a single JSON
@@ -8444,11 +8470,13 @@ app.get("/room-layouts", (_req, res) => {
       if (!existsSync(path)) continue;
       try {
         const layout = JSON.parse(readFileSync(path, "utf8"));
+        const status = layout.status === "added" ? "added" : "draft";
         out.push({
           id: dirent.name,
           name: layout.name || dirent.name,
           mtime: statSync(path).mtimeMs,
           propCount: Array.isArray(layout.props) ? layout.props.length : 0,
+          status,
         });
       } catch { /* skip corrupt */ }
     }

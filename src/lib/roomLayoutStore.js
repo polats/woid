@@ -144,6 +144,28 @@ export async function listLayouts() {
   } catch { return [] }
 }
 
+/**
+ * Flip a room between 'draft' (lives in the room editor only) and
+ * 'added' (also visible in the shelter build menu). Persists to the
+ * layout.json on the bridge.
+ */
+export async function setRoomStatus(roomId, status) {
+  if (!BRIDGE_URL) throw new Error('no bridge configured')
+  if (status !== 'draft' && status !== 'added') {
+    throw new Error(`invalid status: ${status}`)
+  }
+  const r = await fetch(`${BRIDGE_URL}/rooms/${encodeURIComponent(roomId)}/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  })
+  if (!r.ok) {
+    const body = await r.text().catch(() => '')
+    throw new Error(`setRoomStatus failed: ${r.status} ${body}`)
+  }
+  return r.json()
+}
+
 export async function generateFromPrompt({ roomId, prompt, basedOn, dimensions, skipConcept, providerId, onProgress }) {
   if (!BRIDGE_URL) throw new Error('no bridge configured')
   if (!roomId) throw new Error('roomId required')

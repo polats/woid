@@ -31,14 +31,14 @@ export function getState() { return state }
 
 function emit() { for (const fn of subscribers) fn(state) }
 
-function gridSizeFor(layoutBrief) {
-  // Default cell footprint: rough approximation from layout dimensions
-  // assuming shelter cellW ≈ cellH ≈ 1 m. Bigger rooms get bigger
-  // grid footprints. Clamp 2..6 wide, 1..2 tall for legibility.
-  const propCount = layoutBrief.propCount ?? 0
-  const gridW = Math.max(2, Math.min(6, Math.round(propCount / 4) + 2))
-  const gridH = propCount > 8 ? 2 : 1
-  return { gridW, gridH }
+function gridSizeFor(_layoutBrief) {
+  // Standardised footprint: same shape as the bundled lobby /
+  // pattern-sorting rooms (gridW=2, gridH=1). With cellWidth=2 and
+  // cellHeight=1.1 that's a 4 × 1.1 × 3 m shelter cell. The dressing
+  // pipeline anisotropically scales the LLM's real-metres layout to
+  // fit. Keeps avatar / room proportions matched to the rest of the
+  // shelter regardless of prop count.
+  return { gridW: 2, gridH: 1 }
 }
 
 export async function refresh() {
@@ -49,7 +49,9 @@ export async function refresh() {
     const r = await fetch(`${BRIDGE_URL}/room-layouts`)
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     const j = await r.json()
-    const rooms = (j.rooms || []).filter((x) => x.propCount > 0)
+    // Only rooms explicitly flagged 'added' surface in the shelter
+    // build menu. Drafts stay in the room editor only.
+    const rooms = (j.rooms || []).filter((x) => x.propCount > 0 && x.status === 'added')
     // Fetch each layout to grab its palette so the placed room paints
     // walls/floor/trim from the LLM-chosen palette instead of a flat
     // fallback grey. Concurrent fetches; failures fall back to defaults.

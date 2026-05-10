@@ -58,17 +58,26 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
   // already rendered, so the cell looks empty but valid.
   fetchLayoutOnce(layoutId).then((layout) => {
     if (!layout?.props?.length) return
+    // Isotropic scale: pick the smallest axis fit so proportions are
+    // preserved. Anisotropic stretching squashed props (a desk would
+    // become longer than tall when sy < sz). Trade-off is unused
+    // floor area at the cell edges, which reads cleanly in the
+    // dollhouse view.
     const sx = w / Math.max(layout.dimensions.width, 0.01)
     const sy = h / Math.max(layout.dimensions.height, 0.01)
     const sz = depth / Math.max(layout.dimensions.depth, 0.01)
-    dressing.scale.set(sx, sy, sz)
+    const s = Math.min(sx, sy, sz)
+    dressing.scale.set(s, s, s)
     // Shelter rooms have y=0 at vertical centre, y in [-h/2, +h/2].
     // Layouts have y=0 at floor, y in [0, height]. Translate the
     // dressing origin down to the cell's floor so layout y=0 sits on
-    // the shelter floor. Translation is in PARENT (group) space —
-    // do NOT divide by sy; sy only scales the dressing's children.
+    // the shelter floor. Translation is in PARENT (group) space.
     dressing.position.y = -h / 2
     const loader = getLoader()
+    // Tint placeholders with the room's accent so blank slots read as
+    // belonging to the room (matches the room editor's gray-box style).
+    // Falls back to a neutral mid-grey when the layout has no palette.
+    const accentHex = layout.palette?.accent || '#a0a0a0'
     for (const prop of layout.props) {
       const wrapper = new THREE.Group()
       wrapper.name = `prop:${prop.id}`
@@ -76,11 +85,15 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
       wrapper.rotation.y = prop.rotation_y || 0
       dressing.add(wrapper)
 
-      // Faint placeholder in case GLB never resolves (shows footprint).
+      // Solid-coloured placeholder in case GLB never resolves. Opacity
+      // 0.55 (vs the editor's wireframe) so the cell reads as occupied
+      // even at dollhouse scale where wireframes flicker.
       const box = new THREE.Mesh(
         new THREE.BoxGeometry(prop.size.w, prop.size.h, prop.size.d),
         new THREE.MeshStandardMaterial({
-          color: 0xa0a0a0, transparent: true, opacity: 0.18, depthWrite: false,
+          color: accentHex,
+          roughness: 0.78, metalness: 0.04,
+          transparent: true, opacity: 0.55,
         }),
       )
       box.position.y = prop.size.h / 2

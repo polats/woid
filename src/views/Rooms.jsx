@@ -15,6 +15,7 @@ import {
   listLlmProviders,
   resetInitialRoomPrompt,
   setInitialRoomPrompt,
+  setRoomStatus,
 } from '../lib/roomLayoutStore.js'
 import SplitButton from '../components/SplitButton.jsx'
 
@@ -37,10 +38,29 @@ export default function Rooms() {
   }
   useEffect(() => { refreshLayouts() }, [])
 
+  // Tab filter — drafts (in editor only) vs added (also surfaces in
+  // the shelter build menu). Static catalogue rooms have no status,
+  // so they show under both tabs.
+  const [statusTab, setStatusTab] = useState('drafts')
+
   // Merge: bridge listing first (newest mtime first), then any static
   // rooms not yet on disk. The bridge already lists migrated rooms, so
   // most cards come from the bridge; statics serve as the fallback.
-  const cards = mergeRoomCards(bridgeLayouts, staticTypes)
+  const allCards = mergeRoomCards(bridgeLayouts, staticTypes)
+  const cards = allCards.filter((c) => {
+    if (!c.generated) return true // static rooms ignore the tab filter
+    return statusTab === 'added' ? c.status === 'added' : c.status !== 'added'
+  })
+  const draftCount = allCards.filter((c) => c.generated && c.status !== 'added').length
+  const addedCount = allCards.filter((c) => c.generated && c.status === 'added').length
+
+  async function toggleRoomStatus(roomId, currentStatus) {
+    const next = currentStatus === 'added' ? 'draft' : 'added'
+    try {
+      await setRoomStatus(roomId, next)
+      await refreshLayouts()
+    } catch (err) { console.error('[setRoomStatus]', err) }
+  }
 
   const [showSettings, setShowSettings] = useState(false)
 
@@ -71,6 +91,24 @@ export default function Rooms() {
         <NewRoomFromPromptForm
           onCreated={(newId) => { setSelectedId(newId); refreshLayouts() }}
         />
+        <nav className="rooms-status-tabs" role="tablist" aria-label="room status">
+          <button
+            type="button" role="tab"
+            aria-selected={statusTab === 'drafts'}
+            className={`rooms-status-tab${statusTab === 'drafts' ? ' active' : ''}`}
+            onClick={() => setStatusTab('drafts')}
+          >
+            Drafts <span className="rooms-status-tab-count">{draftCount}</span>
+          </button>
+          <button
+            type="button" role="tab"
+            aria-selected={statusTab === 'added'}
+            className={`rooms-status-tab${statusTab === 'added' ? ' active' : ''}`}
+            onClick={() => setStatusTab('added')}
+          >
+            Added <span className="rooms-status-tab-count">{addedCount}</span>
+          </button>
+        </nav>
         <ul className="sandbox3-card-list room-card-list">
           {cards.map((rt) => {
             const summary = summarizeRoomAssets(rt.id)
@@ -112,6 +150,20 @@ export default function Rooms() {
                       </span>
                     )}
                   </div>
+                  {rt.generated && (
+                    <button
+                      type="button"
+                      className={`room-card-status-btn${rt.status === 'added' ? ' is-added' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); toggleRoomStatus(rt.id, rt.status) }}
+                      title={
+                        rt.status === 'added'
+                          ? 'Move back to drafts (hides from shelter build menu)'
+                          : 'Add to shelter build menu'
+                      }
+                    >
+                      {rt.status === 'added' ? '✓ added · move to drafts' : '+ add to shelter'}
+                    </button>
+                  )}
                 </div>
               </li>
             )
@@ -239,6 +291,7 @@ function mergeRoomCards(bridgeLayouts, staticTypes) {
       props: [],
       generated: true,
       mtime: b.mtime,
+      status: b.status || 'draft',
     })
   }
   for (const rt of staticTypes) {

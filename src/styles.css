@@ -9437,6 +9437,41 @@ body.tutorial-hud-hidden .shelter-currency-hud {
   display: flex; flex-direction: column;
   max-height: 280px;
 }
+.rooms-status-tabs {
+  display: flex; gap: 0;
+  border-bottom: 1.5px solid var(--ink);
+  margin-bottom: 6px;
+}
+.rooms-status-tab {
+  flex: 1;
+  padding: 6px 8px;
+  background: transparent; border: 0;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink); opacity: .55;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.rooms-status-tab.active { opacity: 1; border-bottom-color: var(--transmit); }
+.rooms-status-tab-count {
+  font-size: 9px; opacity: .65;
+  background: var(--paper-2); padding: 1px 5px; border-radius: 8px;
+}
+.room-card-status-btn {
+  margin-top: 4px;
+  width: 100%;
+  padding: 4px 6px;
+  background: var(--paper-2); border: 1px dashed var(--ink); border-radius: 4px;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 700;
+  font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink); cursor: pointer; opacity: .85;
+}
+.room-card-status-btn:hover { opacity: 1; }
+.room-card-status-btn.is-added {
+  background: var(--transmit); color: #fff;
+  border-style: solid; border-color: var(--transmit); opacity: 1;
+}
 .rooms-prompt-stream-tabs {
   display: flex; gap: 0;
   border-bottom: 1.5px solid var(--ink);
