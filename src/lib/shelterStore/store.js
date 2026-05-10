@@ -34,7 +34,24 @@ const blankSnapshot = () => ({
   rooms: {},
   agents: {},
   events: [],
+  // Player wallet — earned via room.collect, spent via build / upgrade.
+  // Persisted across sessions like everything else in the snapshot.
+  cash: 0,
+  // Player-side XP. Each collect bumps this alongside the per-worker
+  // xp; the player's level is derived via levelForXp() and surfaces
+  // in the bottom-of-screen XP bar + level-up celebration.
+  playerXp: 0,
+  // Player-built rooms — placed by Build Mode. Bundled-layout rooms
+  // (lobby, pattern-sorting) are NOT in this list; the stage merges
+  // both lists at render time. Each entry has the same shape as the
+  // layout entries: { id, name, type, gridX, gridY, gridW, gridH, color }.
+  builtRooms: [],
 })
+
+/** XP curve — level N requires (N-1) * 100 cumulative xp. Level 1 starts. */
+export function levelForXp(xp) {
+  return 1 + Math.floor(Math.max(0, xp) / 100)
+}
 
 /**
  * Build a full agent record from a partial. Single source of truth
@@ -56,7 +73,15 @@ function makeAgentRecord(partial, simMinutes) {
     llmEnabled: partial.llmEnabled ?? false,
     traits: partial.traits ?? {},
     scheduleId: partial.scheduleId ?? 'worker',
+    // assignment        — resolver's current placement, written each tick
+    //                     ({ roomId, role }). Fluctuates with the schedule.
+    // manualAssignment  — player's sticky choice ({ roomId }). The
+    //                     resolver respects it during `work` slots; rest /
+    //                     social still go through the schedule's defaults
+    //                     so the day-night cycle still has weight.
     assignment: partial.assignment ?? null,
+    manualAssignment: partial.manualAssignment ?? null,
+    xp: partial.xp ?? 0,
     state: partial.state ?? 'idle',
     stateSince: partial.stateSince ?? simMinutes,
     pos: partial.pos ?? null,
@@ -205,12 +230,155 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
     return true
   }
 
+  /**
+   * Player-built room. The entry is appended to `builtRooms` with a
+   * unique id so ShelterStage3D can detect new rooms vs already-
+   * rendered ones. Costs deducted by the caller — the store stays
+   * dumb about pricing rules.
+   */
+  function addBuiltRoom(entry) {
+    if (!entry?.id || !entry?.type) {
+      console.warn('[shelterStore] addBuiltRoom: id + type required', entry)
+      return null
+    }
+    const list = snapshot.builtRooms ?? []
+    if (list.some((r) => r.id === entry.id)) {
+      console.warn('[shelterStore] addBuiltRoom: duplicate id', entry.id)
+      return null
+    }
+    commit({ ...snapshot, builtRooms: [...list, entry] })
+    return entry
+  }
+
+  /**
+   * Wipe all player-built rooms — layout rooms (lobby, pattern-sorting)
+   * stay since they're not in this list. Used by the tutorial host so
+   * a re-run starts with the original two-room shelter.
+   */
+  function clearBuiltRooms() {
+    if ((snapshot.builtRooms ?? []).length === 0) return
+    commit({ ...snapshot, builtRooms: [] })
+  }
+
+  /**
+   * Wipe all rooms' production state — productionTimer back to 0,
+   * productionReady back to false. Used by the tutorial host so the
+   * bar starts empty on a re-run instead of inheriting partial fill
+   * (or a stuck "ready" coin) from the previous pass.
+   */
+  function resetRoomProduction() {
+    const rooms = snapshot.rooms ?? {}
+    let mutated = false
+    const next = {}
+    for (const [id, r] of Object.entries(rooms)) {
+      if ((r.productionTimer ?? 0) === 0 && !r.productionReady) {
+        next[id] = r
+        continue
+      }
+      next[id] = { ...r, productionTimer: 0, productionReady: false }
+      mutated = true
+    }
+    if (!mutated) return
+    commit({ ...snapshot, rooms: next })
+  }
+
   // ── Rooms ─────────────────────────────────────────────────────────
   function upsertRoom(roomId, patch) {
-    const prev = snapshot.rooms[roomId] ?? { upgradeLevel: 1, productionTimer: 0 }
+    const prev = snapshot.rooms[roomId] ?? {
+      upgradeLevel: 1,
+      productionTimer: 0,
+      productionReady: false,
+    }
     const next = { ...prev, ...patch }
     commit({ ...snapshot, rooms: { ...snapshot.rooms, [roomId]: next } })
     return next
+  }
+
+  // ── Assignment + production ──────────────────────────────────────
+  /**
+   * Player-set worker assignment. Stored on `manualAssignment` so the
+   * resolver's per-tick `assignment` writes can't clobber it; the
+   * resolver reads `manualAssignment` and routes the agent to that
+   * room for work slots only (decision 2c).
+   */
+  function setAssignment(agentId, roomId) {
+    const a = snapshot.agents[agentId]
+    if (!a) return null
+    const next = {
+      ...a,
+      manualAssignment: { roomId },
+      // Reset walk/pace state so the next tick re-routes them
+      // toward the new room cleanly.
+      walkFrom: null, walkTo: null,
+      paceFrom: null, paceTo: null,
+      paceMode: null, paceStartedAt: null,
+      paceRestUntil: null, paceRestRole: null,
+    }
+    commit({ ...snapshot, agents: { ...snapshot.agents, [agentId]: next } })
+    return next
+  }
+
+  /**
+   * Wipe player-side progression to a fresh state — playerXp = 0,
+   * level derived as 1. Used by the tutorial host so a re-run starts
+   * cleanly: the recruit's first collect crosses the level-1→2
+   * threshold without overshooting from leftover XP.
+   *
+   * Doesn't touch cash, agent xp, or rooms — those are gameplay
+   * outcomes and should persist unless explicitly reset elsewhere.
+   */
+  function resetPlayerProgress() {
+    if (!snapshot.playerXp) return
+    commit({ ...snapshot, playerXp: 0 })
+  }
+
+  function clearAssignment(agentId) {
+    const a = snapshot.agents[agentId]
+    if (!a) return null
+    const next = { ...a, manualAssignment: null }
+    commit({ ...snapshot, agents: { ...snapshot.agents, [agentId]: next } })
+    return next
+  }
+
+  /**
+   * Collect production from a ready room. Pays out `rewardCash` to
+   * the player wallet and `rewardXp` to each assigned worker, then
+   * resets the room's timer + ready flag. No-op if the room isn't
+   * ready or doesn't exist.
+   *
+   * The room-type catalogue is the source of truth for reward
+   * amounts — passed in by the caller so the store stays decoupled
+   * from `roomTypes.js`.
+   */
+  function collectRoom(roomId, { rewardCash = 0, rewardXp = 0 } = {}) {
+    const room = snapshot.rooms[roomId]
+    if (!room || !room.productionReady) return null
+    const assigned = Object.values(snapshot.agents).filter(
+      (a) => a.manualAssignment?.roomId === roomId
+    )
+    const nextAgents = { ...snapshot.agents }
+    for (const a of assigned) {
+      nextAgents[a.id] = { ...a, xp: (a.xp ?? 0) + rewardXp }
+    }
+    const nextRooms = {
+      ...snapshot.rooms,
+      [roomId]: { ...room, productionTimer: 0, productionReady: false },
+    }
+    const totalXp = rewardXp * Math.max(1, assigned.length)
+    commit({
+      ...snapshot,
+      cash: (snapshot.cash ?? 0) + rewardCash,
+      // Player-side XP scales with worker count so multi-slot rooms
+      // (later) are correctly more rewarding.
+      playerXp: (snapshot.playerXp ?? 0) + totalXp,
+      agents: nextAgents,
+      rooms: nextRooms,
+    })
+    return {
+      rewardCash, rewardXp, totalXp,
+      roomId,
+      workerIds: assigned.map((a) => a.id),
+    }
   }
 
   // ── Bulk / sync ───────────────────────────────────────────────────
@@ -249,6 +417,8 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
     getSnapshot, listAgents, getAgent,
     // mutations
     addAgent, updateAgent, removeAgent, upsertRoom, clear,
+    setAssignment, clearAssignment, collectRoom, resetPlayerProgress,
+    addBuiltRoom, clearBuiltRooms, resetRoomProduction,
     // clock
     advanceClock, fastForward,
     // sync

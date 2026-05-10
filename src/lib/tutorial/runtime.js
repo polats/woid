@@ -30,6 +30,25 @@
  *           outline?, motion?, closeup?, ms? }       focus the matched agent (outline + motion swap)
  *
  *   { type: "panCamera", dx?, dy?, ms? }             pan the stage camera by (dx, dy) over `ms`
+ *   { type: "setMotion", target, motion: string }   immediately swap the matched agent's motion
+ *                                                    role (e.g. 'dizzy', 'wave'). Persists until a
+ *                                                    later setMotion or focus call replaces it.
+ *   { type: "showCard" } / { type: "hideCard" }      let the ShelterCharacterCard render during the
+ *                                                    run (default suppressed)
+ *   { type: "pulseCardTab", tab?: string }           draw attention to a card tab with a pulse +
+ *                                                    glow CSS class. Pass null to clear.
+ *   { type: "pulseRoom", room?: roomId }             pulse a room on the stage in bright yellow
+ *                                                    (used during assignment-mode to point at the
+ *                                                    target room). Pass null to clear.
+ *   { type: "startAssignmentMode", target }          engage room-picker for the matched agent so
+ *                                                    the player can tap a work room directly
+ *   { type: "awaitAssignmentMode" }                  block until the player engages assignment mode
+ *                                                    (e.g. by tapping the Assignment tab)
+ *   { type: "awaitAssignment", target, roomId? }     block until the matched agent's manual
+ *                                                    assignment matches `roomId` (any room if
+ *                                                    omitted). Player-driven progression.
+ *   { type: "awaitCollect" }                         block until the player taps a ready room and
+ *                                                    collects the payout (detected via cash delta).
  *   { type: "showCarousel", source?: "starter" }    slide in the agent-card carousel sourced from
  *                                                    starter-tagged characters; remains visible
  *                                                    until `hideCarousel` or step end
@@ -65,6 +84,11 @@ let state = {
   awaitingTap: false,       // tap-to-advance hint visible
   carousel: null,            // { source } | null — agent-card carousel overlay
   hiredPubkey: null,         // set when the player taps Hire on a carousel card
+  cardVisible: false,        // suppress / unsuppress ShelterCharacterCard during a run
+  pulseTab: null,            // 'profile' | 'schedule' | 'assignment' | null — tab id to highlight
+  pulseRoom: null,           // roomId | null — room to bright-yellow pulse on the stage
+  pulseGameTab: null,        // 'stage' | 'build' | 'agents' | null — bottom-nav tab to highlight
+  pulseBuildCard: null,      // roomTypeId | null — card to highlight in the build carousel
 }
 
 let cancelToken = 0
@@ -112,7 +136,8 @@ export function reset() {
     active: false, stepId: null, actionIndex: 0,
     overlayAlpha: 0, hudHidden: false,
     dialog: null, awaitingTap: false, carousel: null,
-    hiredPubkey: null,
+    hiredPubkey: null, cardVisible: false, pulseTab: null, pulseRoom: null,
+    pulseGameTab: null, pulseBuildCard: null,
   })
   // Stage-side override cleanup is handled by the caller's ctx when
   // it re-plays via play(); here we just snap state back so the panel
@@ -151,6 +176,21 @@ async function tweenOverlay(toAlpha, ms, isCancelled) {
  * an `await sleep(ms)` so a missing target stalls gracefully instead
  * of deadlocking the run.
  */
+/**
+ * Substitute `{hiredName}` (and future `{...}` placeholders) in a
+ * dialog text string. Looks up the recruit's display name via
+ * ctx.resolveCharacter; resolves to '' if no recruit is set, so a
+ * stray placeholder degrades to "blank space" rather than the literal
+ * brace text.
+ */
+function applyTemplate(text, ctx) {
+  if (!text || typeof text !== 'string') return text
+  const hiredName = state.hiredPubkey && ctx?.resolveCharacter
+    ? (ctx.resolveCharacter({ pubkey: state.hiredPubkey })?.name ?? '')
+    : ''
+  return text.replace(/\{hiredName\}/g, hiredName)
+}
+
 function resolveTarget(target, ctx) {
   if (target == null) return null
   if (target === 'hired' || target?.hired) return state.hiredPubkey ?? null
@@ -181,15 +221,26 @@ async function runAction(action, ctx, isCancelled) {
       await sleep(Number(action.ms ?? 0))
       return
     case 'dialog': {
-      const speaker = ctx.resolveCharacter
-        ? ctx.resolveCharacter({ role: action.speakerRole })
-        : null
+      // Resolve speaker via the target shape (`speaker: "hired" | { role } |
+      // { pubkey }`) when present; fall back to the legacy `speakerRole`
+      // shorthand. Either way ctx.resolveCharacter looks up the actual
+      // name + avatar for the dialog box.
+      let speaker = null
+      if (action.speaker !== undefined) {
+        const pubkey = resolveTarget(action.speaker, ctx)
+        if (pubkey && ctx.resolveCharacter) {
+          speaker = ctx.resolveCharacter({ pubkey })
+        }
+      }
+      if (!speaker && action.speakerRole && ctx.resolveCharacter) {
+        speaker = ctx.resolveCharacter({ role: action.speakerRole })
+      }
       set({
         dialog: {
           speakerRole: action.speakerRole ?? null,
           speakerName: speaker?.name ?? action.speakerRole ?? '',
           speakerAvatarUrl: speaker?.avatarUrl ?? null,
-          text: action.text ?? '',
+          text: applyTemplate(action.text ?? '', ctx),
         },
       })
       if (action.tapToAdvance) {
@@ -254,6 +305,170 @@ async function runAction(action, ctx, isCancelled) {
       // Camera tween + role swap settle. Default 1500ms matches
       // FOCUS_TWEEN_MS in ShelterStage3D.
       await sleep(Number(action.ms ?? 1500))
+      return
+    }
+    case 'setMotion': {
+      const pubkey = resolveTarget(action.target, ctx)
+      if (pubkey && ctx.setMotion) {
+        await ctx.setMotion(pubkey, action.motion ?? null)
+      } else if (!pubkey) {
+        console.warn('[tutorial] setMotion: target did not resolve', action.target)
+      }
+      return
+    }
+    case 'showCard': {
+      set({ cardVisible: true })
+      return
+    }
+    case 'hideCard': {
+      set({ cardVisible: false })
+      return
+    }
+    case 'pulseCardTab': {
+      set({ pulseTab: action.tab ?? null })
+      return
+    }
+    case 'pulseRoom': {
+      set({ pulseRoom: action.room ?? null })
+      return
+    }
+    case 'pulseGameTab': {
+      set({ pulseGameTab: action.tab ?? null })
+      return
+    }
+    case 'pulseBuildCard': {
+      // Card id matches a room-type id (e.g. 'break-room'). The
+      // build carousel subscribes to tutorial state and applies an
+      // is-pulsing class to the matching card.
+      set({ pulseBuildCard: action.roomType ?? null })
+      return
+    }
+    case 'awaitBuildMode': {
+      // Block until shelterBuildMode flips active (player tapped
+      // the Build tab).
+      if (!ctx.isBuildModeActive) {
+        await sleep(action.ms ?? 500)
+        return
+      }
+      await new Promise((resolve) => {
+        const check = () => {
+          if (isCancelled()) { resolve(); return }
+          if (ctx.isBuildModeActive()) { resolve(); return }
+          setTimeout(check, 200)
+        }
+        check()
+      })
+      return
+    }
+    case 'awaitBuildSelection': {
+      // Block until the player taps a card in the build carousel.
+      // If `roomType` is provided, only that specific selection
+      // resolves; otherwise any selection unblocks.
+      const wantedType = action.roomType ?? null
+      if (!ctx.getBuildSelection) {
+        await sleep(action.ms ?? 500)
+        return
+      }
+      await new Promise((resolve) => {
+        const check = () => {
+          if (isCancelled()) { resolve(); return }
+          const sel = ctx.getBuildSelection()
+          if (wantedType ? sel === wantedType : !!sel) { resolve(); return }
+          setTimeout(check, 200)
+        }
+        check()
+      })
+      return
+    }
+    case 'awaitBuilt': {
+      // Block until a built room of `roomType` (or any built room if
+      // omitted) appears in the store. The param is `roomType`, NOT
+      // `type` — a JSON action object can only have one `type` key,
+      // and that's already the action discriminator.
+      const wantedType = action.roomType ?? null
+      if (!ctx.hasBuiltRoom) {
+        await sleep(action.ms ?? 500)
+        return
+      }
+      await new Promise((resolve) => {
+        const check = () => {
+          if (isCancelled()) { resolve(); return }
+          if (ctx.hasBuiltRoom(wantedType)) { resolve(); return }
+          setTimeout(check, 200)
+        }
+        check()
+      })
+      return
+    }
+    case 'startAssignmentMode': {
+      // Pre-arm the room picker so the player can tap a glowing
+      // work room directly — they don't need to first open the
+      // Assignment tab on the card.
+      const pubkey = resolveTarget(action.target ?? 'hired', ctx)
+      if (pubkey && ctx.startAssignmentMode) ctx.startAssignmentMode(pubkey)
+      return
+    }
+    case 'awaitAssignmentMode': {
+      // Block until shelterAssignmentMode flips active. Used in step
+      // 3 — we want the dialog to wait specifically for the player
+      // to tap the Assignment tab (which auto-engages mode), not for
+      // any tap-anywhere advance. Otherwise the layer-tap eats the
+      // first tab click and advances the dialog instead.
+      if (!ctx.isAssignmentModeActive) {
+        await sleep(action.ms ?? 500)
+        return
+      }
+      await new Promise((resolve) => {
+        const check = () => {
+          if (isCancelled()) { resolve(); return }
+          if (ctx.isAssignmentModeActive()) { resolve(); return }
+          setTimeout(check, 200)
+        }
+        check()
+      })
+      return
+    }
+    case 'awaitCollect': {
+      // Block until the player taps a ready room and collects its
+      // production. Detected via cash increasing from a baseline
+      // captured at action start. The room id is arbitrary — any
+      // collection unblocks; we don't care which room, only that
+      // some payout landed in the wallet.
+      const startCash = ctx.getCash?.() ?? 0
+      await new Promise((resolve) => {
+        const check = () => {
+          if (isCancelled()) { resolve(); return }
+          const now = ctx.getCash?.() ?? 0
+          if (now > startCash) { resolve(); return }
+          setTimeout(check, 200)
+        }
+        check()
+      })
+      return
+    }
+    case 'awaitAssignment': {
+      // Block until the matched agent's manualAssignment.roomId
+      // equals action.roomId. Polls the host's getAssignment() at a
+      // gentle cadence — the player's expected to do something soon
+      // so we don't need a per-frame check.
+      const targetPubkey = resolveTarget(action.target ?? 'hired', ctx)
+      const wantedRoom = action.roomId ?? null
+      if (!targetPubkey || !ctx.getAssignment) {
+        await sleep(500)
+        return
+      }
+      await new Promise((resolve) => {
+        const check = () => {
+          if (isCancelled()) { resolve(); return }
+          const current = ctx.getAssignment(targetPubkey)
+          if (wantedRoom ? current === wantedRoom : !!current) {
+            resolve()
+            return
+          }
+          setTimeout(check, 200)
+        }
+        check()
+      })
       return
     }
     case 'showCarousel': {
@@ -341,6 +556,11 @@ export async function play(step, ctx) {
     dialog: null,
     awaitingTap: false,
     hiredPubkey: null,
+    cardVisible: false,
+    pulseTab: null,
+    pulseRoom: null,
+    pulseGameTab: null,
+    pulseBuildCard: null,
   })
   try {
     for (let i = 0; i < step.actions.length; i++) {
@@ -350,6 +570,12 @@ export async function play(step, ctx) {
     }
   } finally {
     if (!isCancelled()) {
+      // active flips off so the dev panel's "running" indicator
+      // clears, and the dialog/carousel/await-tap UI tears down. We
+      // intentionally LEAVE cardVisible + pulseTab set — the final
+      // step in a run often points the player at a UI element they
+      // need to interact with, and we want that highlight to persist
+      // until reset() or another step explicitly clears it.
       set({ active: false, dialog: null, awaitingTap: false, carousel: null })
     }
   }

@@ -57,6 +57,20 @@ export function panCamera({ dx = 0, dy = 0, ms = 1500 } = {}) {
 }
 
 /**
+ * Swap the agent's motion immediately. Used by the tutorial's
+ * `setMotion` action (e.g. flip the new recruit to a 'dizzy' pose
+ * during the first-day greeting). The matched handle's `focusRole`
+ * is set so the per-frame motion sync keeps the new pose while the
+ * agent stays focused — no need to re-trigger focusAgent.
+ */
+export function setAgentMotion({ pubkey, motion }) {
+  if (!handler || !pubkey) return Promise.resolve()
+  return new Promise((resolve) => {
+    handler({ type: 'setAgentMotion', pubkey, motion, onComplete: resolve })
+  })
+}
+
+/**
  * Tween the camera to a NAMED framing state without clearing the
  * current focus state — focusRole / focusedAgentIdRef stay intact so
  * the sync loop keeps Edi in arms-crossed during the zoom out.

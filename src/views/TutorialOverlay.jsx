@@ -5,6 +5,28 @@ import TutorialAgentCarousel from './TutorialAgentCarousel.jsx'
 const DIALOG_FADE_MS = 320
 
 /**
+ * Parse a dialog string into an array of plain + styled segments.
+ * Supports `<tag>...</tag>` inline markers (currently `<ominous>` —
+ * bold + red pulse for words like "The Company"). Unknown tags fall
+ * back to plain text. Non-greedy match so multiple tagged spans on
+ * one line work.
+ */
+function parseStyledText(text) {
+  if (!text || typeof text !== 'string') return []
+  const out = []
+  const re = /<(\w+)>([\s\S]*?)<\/\1>/g
+  let last = 0
+  let m
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push({ text: text.slice(last, m.index), style: null })
+    out.push({ text: m[2], style: m[1] })
+    last = m.index + m[0].length
+  }
+  if (last < text.length) out.push({ text: text.slice(last), style: null })
+  return out
+}
+
+/**
  * Renders the tutorial scrim, dialog box, and tap-to-advance chevron.
  * Subscribes to the tutorial runtime and toggles a `tutorial-hud-hidden`
  * class on the host element so the tab bar / status bar can fade out
@@ -99,7 +121,13 @@ export default function TutorialOverlay() {
               fully tear down the surrounding dialog box. */}
           <div className="tutorial-dialog-text" key={shownDialog.text}>
             <strong>{shownDialog.speakerName}</strong>
-            <p>{shownDialog.text}</p>
+            <p>
+              {parseStyledText(shownDialog.text).map((seg, i) => (
+                seg.style
+                  ? <span key={i} className={`tutorial-text-${seg.style}`}>{seg.text}</span>
+                  : <span key={i}>{seg.text}</span>
+              ))}
+            </p>
           </div>
           {t.awaitingTap && !carouselOpen && (
             <div className="tutorial-tap-hint" aria-hidden="true">

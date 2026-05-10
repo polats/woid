@@ -14,7 +14,13 @@ import {
   walkInAgent as busWalkInAgent,
   cameraTo as busCameraTo,
   clearTutorialOverrides as busClearTutorialOverrides,
+  setAgentMotion as busSetAgentMotion,
 } from '../lib/shelterStageBus.js'
+import {
+  start as startAssignmentMode,
+  getState as getAssignmentModeState,
+} from '../lib/shelterAssignmentMode.js'
+import { getState as getBuildModeState } from '../lib/shelterBuildMode.js'
 
 /**
  * Tutorial runtime host hook.
@@ -207,6 +213,45 @@ export function useTutorialHost({ scripts, bridgeUrl } = {}) {
     cameraTo: (cameraState, ms) => busCameraTo({ state: cameraState, ms }),
     exitFocus: () => busExitFocus(),
     clearTutorialOverrides: () => busClearTutorialOverrides(),
+    setMotion: (pubkey, motion) => busSetAgentMotion({ pubkey, motion }),
+    // Read the player's manual assignment for a pubkey — used by
+    // awaitAssignment to wait for the player to pick a room.
+    getAssignment: (pubkey) => {
+      const fresh = store.getSnapshot()?.agents ?? {}
+      const a = Object.values(fresh).find((x) => x.pubkey === pubkey)
+      return a?.manualAssignment?.roomId ?? null
+    },
+    // Engage assignment mode for the agent matching `pubkey`. The
+    // tutorial uses this to pre-arm the room picker before the player
+    // has tapped the Assignment tab — pattern-sorting becomes
+    // tappable the moment Edi mentions it.
+    startAssignmentMode: (pubkey) => {
+      const fresh = store.getSnapshot()?.agents ?? {}
+      const agent = Object.values(fresh).find((x) => x.pubkey === pubkey)
+      if (!agent?.id) return
+      startAssignmentMode(agent.id, ({ agentId, roomId }) => {
+        store.setAssignment(agentId, roomId)
+      })
+    },
+    // Polled by the awaitAssignmentMode action so step 3 can block
+    // until the player actually engages the Assignment tab. Without
+    // this gate the tap-to-advance dialog would consume the tab tap
+    // before it reached the tab button.
+    isAssignmentModeActive: () => !!getAssignmentModeState().active,
+    // Player wallet — used by awaitCollect to detect when the
+    // player has tapped a ready room and collected the payout.
+    getCash: () => Number(store.getSnapshot()?.cash ?? 0),
+    // Used by awaitBuilt — true if any built room (of optional
+    // matching type) exists in the store.
+    hasBuiltRoom: (type) => {
+      const built = store.getSnapshot()?.builtRooms ?? []
+      return type
+        ? built.some((r) => r.type === type)
+        : built.length > 0
+    },
+    // Build-mode probes for awaitBuildMode + awaitBuildSelection.
+    isBuildModeActive: () => !!getBuildModeState().active,
+    getBuildSelection: () => getBuildModeState().selectedType ?? null,
     findStep: (id) => (scripts?.steps ?? []).find((s) => s.id === id) ?? null,
   }), [resolveCharacter, focus, walkIn, scripts])
 
@@ -215,8 +260,20 @@ export function useTutorialHost({ scripts, bridgeUrl } = {}) {
     // the run can hit the bridge data without a per-action fetch.
     if (npcChars.length === 0) await fetchNpcs()
     scrubNonNpcAgents()
+    // Reset player-side XP so the tutorial's level-up beat lands
+    // cleanly (the first collect crosses the level-1→2 threshold
+    // exactly, instead of overshooting from leftover xp).
+    if (store.resetPlayerProgress) store.resetPlayerProgress()
+    // Snap the map back to the bundled layout (lobby + pattern-
+    // sorting) so a tutorial re-run doesn't see leftover Break Rooms
+    // or other player builds from the previous pass.
+    if (store.clearBuiltRooms) store.clearBuiltRooms()
+    // Reset every room's productionTimer / productionReady so the
+    // bar starts empty — otherwise a re-run inherits a half-full
+    // (or stuck-ready) bar from the previous attempt.
+    if (store.resetRoomProduction) store.resetRoomProduction()
     return playTutorial(step, buildCtx())
-  }, [npcChars, fetchNpcs, scrubNonNpcAgents, buildCtx])
+  }, [npcChars, fetchNpcs, scrubNonNpcAgents, buildCtx, store])
 
   const playById = useCallback(async (id) => {
     const step = (scripts?.steps ?? []).find((s) => s.id === id)
@@ -231,7 +288,10 @@ export function useTutorialHost({ scripts, bridgeUrl } = {}) {
     resetTutorial()
     busClearTutorialOverrides()
     scrubNonNpcAgents()
-  }, [scrubNonNpcAgents])
+    if (store.resetPlayerProgress) store.resetPlayerProgress()
+    if (store.clearBuiltRooms) store.clearBuiltRooms()
+    if (store.resetRoomProduction) store.resetRoomProduction()
+  }, [scrubNonNpcAgents, store])
 
   return { state, isActive: !!state.active, play, playById, reset }
 }

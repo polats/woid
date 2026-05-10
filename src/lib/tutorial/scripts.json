@@ -51,7 +51,7 @@
         {
           "type": "dialog",
           "speakerRole": "receptionist",
-          "text": "Good choice. Let's welcome them to The Company.",
+          "text": "Good choice. Let's welcome them to <ominous>The Company</ominous>.",
           "tapToAdvance": true
         },
         { "type": "cameraTo", "state": "room", "ms": 1400 },
@@ -82,6 +82,118 @@
           "outline": true,
           "motion": "wave",
           "ms": 1200
+        },
+        { "type": "playStep", "id": "first-greeting" }
+      ]
+    },
+    {
+      "id": "first-greeting",
+      "name": "First-day greeting",
+      "summary": "Recruit's dizzy first-day hello, Edi welcomes them, then points the player at the Assignment tab.",
+      "actions": [
+        {
+          "type": "setMotion",
+          "target": "hired",
+          "motion": "dizzy"
+        },
+        {
+          "type": "dialog",
+          "speaker": "hired",
+          "text": "Good.. morning? evening..?",
+          "tapToAdvance": true
+        },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "{hiredName}, welcome to your first day. Meet your manager.",
+          "tapToAdvance": true
+        },
+        { "type": "showCard" },
+        { "type": "delay", "ms": 350 },
+        { "type": "pulseCardTab", "tab": "assignment" },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Please assign them a task here."
+        },
+        { "type": "awaitAssignmentMode" },
+        { "type": "playStep", "id": "assign-work" }
+      ]
+    },
+    {
+      "id": "assign-work",
+      "name": "Assign work",
+      "summary": "Zooms out so Pattern Sorting is visible, pulses it yellow, waits for the player to assign the recruit there, then closes with the comp dialog.",
+      "actions": [
+        { "type": "cameraTo", "state": "home", "ms": 1200 },
+        { "type": "setMotion", "target": "hired", "motion": null },
+        { "type": "pulseRoom", "room": "pattern-sorting" },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Pattern Sorting is meaningful work. Assign them there."
+        },
+        {
+          "type": "awaitAssignment",
+          "target": "hired",
+          "roomId": "pattern-sorting"
+        },
+        { "type": "pulseRoom", "room": null },
+        { "type": "pulseCardTab", "tab": null },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Work is compensated per unit of completion.",
+          "tapToAdvance": true
+        },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Collect the reward once done."
+        },
+        { "type": "awaitCollect" },
+        { "type": "showHud" },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Congratulations. You have worked hard enough to unlock the Break Room.",
+          "tapToAdvance": true
+        },
+        { "type": "playStep", "id": "build-break-room" }
+      ]
+    },
+    {
+      "id": "build-break-room",
+      "name": "Build the Break Room",
+      "summary": "Edi walks the player through the build flow: tap the Build Mode tab, pick the Break Room card, place it beside Pattern Sorting.",
+      "actions": [
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Let's add the Break Room. Tap the Build Mode."
+        },
+        { "type": "pulseGameTab", "tab": "build" },
+        { "type": "awaitBuildMode" },
+        { "type": "pulseGameTab", "tab": null },
+        { "type": "pulseBuildCard", "roomType": "break-room" },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Tap on The Break Room Card."
+        },
+        { "type": "awaitBuildSelection", "roomType": "break-room" },
+        { "type": "pulseBuildCard", "roomType": null },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "Tap on a Glowing Cell to Place"
+        },
+        { "type": "awaitBuilt", "roomType": "break-room" },
+        {
+          "type": "dialog",
+          "speakerRole": "receptionist",
+          "text": "That's it Manager. I'm expecting great things from you.",
+          "tapToAdvance": true
         }
       ]
     }

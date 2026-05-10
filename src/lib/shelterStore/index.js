@@ -7,7 +7,7 @@
  *
  * See docs/design/shelter-agents.md.
  */
-export { createShelterStore, LocalOnlySync } from './store.js'
+export { createShelterStore, LocalOnlySync, levelForXp } from './store.js'
 export {
   SIM_MINUTES_PER_REAL_SECOND,
   OFFLINE_CAP_MIN,

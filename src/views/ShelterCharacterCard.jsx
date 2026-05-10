@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import config from '../config.js'
+import { subscribe as subTutorial, getState as getTutorial } from '../lib/tutorial/runtime.js'
+import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
+import { levelForXp } from '../lib/shelterStore/index.js'
+import { getRoomType } from '../lib/shelterWorld/roomTypes.js'
+import { start as startAssignmentMode } from '../lib/shelterAssignmentMode.js'
 
 const cfg = config.agentSandbox || {}
 
@@ -37,6 +42,37 @@ export default function ShelterCharacterCard({ agent }) {
   const [character, setCharacter] = useState(null)
   const [schedule, setSchedule] = useState(null)
   const [rooms, setRooms] = useState([])
+  // Subscribe to the tutorial runtime's pulseTab so step 3 can
+  // highlight the Assignment tab without prop-threading from Shelter.
+  const tutorial = useSyncExternalStore(subTutorial, getTutorial)
+  const pulseTab = tutorial.pulseTab ?? null
+
+  // Live shelter snapshot for the active agent's manualAssignment +
+  // the assigned room's production timer, plus the store API for the
+  // setAssignment / clearAssignment mutations bound to the buttons.
+  const shelterSnap = useShelterStore()
+  const shelterApi = useShelterStoreApi()
+  const liveAgent = (agent?.id && shelterSnap?.agents?.[agent.id]) || null
+  const manualRoomId = liveAgent?.manualAssignment?.roomId ?? null
+  const assignedRoom = manualRoomId ? shelterSnap?.rooms?.[manualRoomId] : null
+  const assignedRoomType = manualRoomId ? getRoomType(manualRoomId) : null
+  const xp = liveAgent?.xp ?? 0
+  const level = levelForXp(xp)
+
+  // Tab activation handler — when the player switches INTO the
+  // Assignment tab from elsewhere AND the recruit isn't yet
+  // assigned, auto-enter selection mode (no extra "Assign" button
+  // step). Doesn't re-fire if the player taps the already-active
+  // tab so cancels don't loop.
+  const handleTabActivate = (id) => {
+    const wasOn = tab === id
+    setTab(id)
+    if (!wasOn && id === 'assignment' && !manualRoomId && agent?.id) {
+      startAssignmentMode(agent.id, ({ agentId, roomId }) => {
+        shelterApi.setAssignment(agentId, roomId)
+      })
+    }
+  }
 
   useEffect(() => { setImgFailed(false); setTab('profile') }, [agent?.id])
 
@@ -134,33 +170,64 @@ export default function ShelterCharacterCard({ agent }) {
             })}
           </ul>
         )}
+        {tab === 'assignment' && (
+          <AssignmentPanel
+            agent={agent}
+            manualRoomId={manualRoomId}
+            assignedRoom={assignedRoom}
+            assignedRoomType={assignedRoomType}
+            xp={xp}
+            level={level}
+            onAssign={() => {
+              if (!agent?.id) return
+              startAssignmentMode(agent.id, ({ agentId, roomId }) => {
+                shelterApi.setAssignment(agentId, roomId)
+              })
+            }}
+          />
+        )}
       </div>
 
       <nav className="shelter-card-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'profile'}
-          className={`shelter-card-tab${tab === 'profile' ? ' active' : ''}`}
-          onClick={() => setTab('profile')}
-          title="Profile"
-        >
-          <IconProfile />
-          <span>Profile</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'schedule'}
-          className={`shelter-card-tab${tab === 'schedule' ? ' active' : ''}`}
-          onClick={() => setTab('schedule')}
-          title="Schedule — daily timetable"
-        >
-          <IconSchedule />
-          <span>Schedule</span>
-        </button>
+        <CardTab id="profile" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Profile">
+          <IconProfile /><span>Profile</span>
+        </CardTab>
+        <CardTab id="schedule" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Schedule — daily timetable">
+          <IconSchedule /><span>Schedule</span>
+        </CardTab>
+        <CardTab id="assignment" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Assignment — current task">
+          <IconAssignment /><span>Assignment</span>
+        </CardTab>
       </nav>
     </aside>
+  )
+}
+
+/**
+ * Tab button. Adds an `is-pulsing` class when the tutorial runtime
+ * has marked this tab as the one to draw attention to (and the tab
+ * isn't already active — once the player opens it, the highlight
+ * stops on its own without needing the runtime to clear pulseTab).
+ */
+function CardTab({ id, tab, setTab, pulseTab, title, children }) {
+  const isActive = tab === id
+  const isPulsing = pulseTab === id && !isActive
+  const cls = [
+    'shelter-card-tab',
+    isActive ? 'active' : '',
+    isPulsing ? 'is-pulsing' : '',
+  ].filter(Boolean).join(' ')
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={isActive}
+      className={cls}
+      onClick={() => setTab(id)}
+      title={title}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -178,6 +245,70 @@ function IconSchedule() {
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7v5l3 2" />
+    </svg>
+  )
+}
+function AssignmentPanel({
+  agent, manualRoomId, assignedRoom, assignedRoomType, xp, level,
+  onAssign,
+}) {
+  if (!manualRoomId) {
+    return (
+      <div className="shelter-card-assignment">
+        <p className="shelter-card-bio-empty">
+          Tap a room to assign.
+        </p>
+        <button type="button" className="shelter-card-assign-btn" onClick={onAssign} disabled={!agent?.id}>
+          Pick room
+        </button>
+      </div>
+    )
+  }
+  const dur = Number(assignedRoomType?.productionDuration ?? 0)
+  const timer = Number(assignedRoom?.productionTimer ?? 0)
+  const ready = !!assignedRoom?.productionReady
+  const pct = dur > 0 ? Math.min(100, Math.round((timer / dur) * 100)) : 0
+  const reward = Number(assignedRoomType?.rewardCash ?? 0)
+  return (
+    <div className="shelter-card-assignment">
+      <div className="shelter-card-assignment-row">
+        <span className="shelter-card-assignment-label">Room</span>
+        <strong className="shelter-card-assignment-room-name">
+          {assignedRoomType?.name ?? manualRoomId}
+        </strong>
+        {/* Reassign sits inline so the row stays one line — no
+            scrolling to find the action. Tapping it re-enters
+            assignment-mode (same path the empty state uses) so the
+            player picks a new room with one tap. */}
+        <button
+          type="button"
+          className="shelter-card-reassign-btn"
+          onClick={onAssign}
+          title="Reassign"
+        >
+          Reassign
+        </button>
+      </div>
+      <div className="shelter-card-assignment-row">
+        <span className="shelter-card-assignment-label">Level</span>
+        <strong>{level}</strong>
+        <code className="shelter-card-assignment-xp">{xp} xp</code>
+      </div>
+      <div className={`shelter-card-progress${ready ? ' is-ready' : ''}`}>
+        <div className="shelter-card-progress-fill" style={{ width: `${pct}%` }} />
+        <span className="shelter-card-progress-label">
+          {ready ? `Ready · ¤${reward}` : `${pct}%`}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function IconAssignment() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="5" y="4" width="14" height="17" rx="1.5" />
+      <path d="M9 9h6M9 13h6M9 17h4" />
     </svg>
   )
 }

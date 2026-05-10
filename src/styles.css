@@ -5273,6 +5273,417 @@ body {
   letter-spacing: 0.02em;
   margin-top: 28px;
 }
+.shelter-cash {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: #c69a2c;
+}
+
+/* Bottom-left wallet badge — floats over the stage. The FX layer
+   queries this class to target the coin-fly destination. */
+.shelter-currency-hud {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(8, 10, 14, 0.78);
+  border: 1.5px solid #c69a2c;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+.shelter-currency-glyph {
+  font-size: 14px;
+  color: #ffd84a;
+}
+.shelter-currency-value {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: #f5f1e6;
+}
+
+/* XP bar — full-width, between the screen body and the tab bar. */
+.shelter-xp-bar {
+  position: relative;
+  height: 18px;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.22);
+  border-top: 1.5px solid var(--ink, #1a1a1a);
+  border-bottom: 1.5px solid var(--ink, #1a1a1a);
+  overflow: hidden;
+}
+.shelter-xp-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #5a78c0, #80a8ff);
+  transition: width 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.shelter-xp-bar-label {
+  position: relative;
+  display: block;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 18px;
+  color: #f5f1e6;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+}
+
+/* ── Build Mode carousel — slide-down deck of room cards ──────── */
+.shelter-build-carousel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 12px;
+  z-index: 5;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  font-family: var(--font-mono);
+  color: var(--ink);
+  padding: 8px;
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(-24px);
+  transition: opacity 320ms ease, transform 360ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.shelter-build-carousel.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.shelter-build-carousel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 6px;
+  border-bottom: 1px solid var(--ink-faint, rgba(0, 0, 0, 0.15));
+}
+.shelter-build-carousel-title {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.shelter-build-carousel-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ink);
+}
+.shelter-build-carousel-empty {
+  margin: 8px;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.shelter-build-carousel-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 4px 0;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+.shelter-build-card {
+  flex: 0 0 auto;
+  width: 160px;
+}
+.shelter-build-card-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+.shelter-build-card-btn:hover:not(:disabled) {
+  background: var(--paper-2, #fff8e0);
+}
+.shelter-build-card.selected .shelter-build-card-btn {
+  background: var(--ink);
+  color: var(--paper);
+}
+/* Tutorial-driven attention pulse on a specific build card —
+   crimson box-shadow + subtle background tint, matching the same
+   "look here" language as the Build tab pulse and the Assignment
+   tab pulse. */
+.shelter-build-card.is-pulsing .shelter-build-card-btn {
+  animation: shelter-build-card-pulse 1.4s ease-in-out infinite;
+}
+@keyframes shelter-build-card-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(230, 26, 58, 0);
+    background: var(--paper);
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgba(230, 26, 58, 0.55),
+                0 0 14px 2px rgba(230, 26, 58, 0.45);
+    background: #fff4d2;
+  }
+}
+.shelter-build-card-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.shelter-build-card-btn strong {
+  display: block;
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+.shelter-build-card-btn p {
+  margin: 4px 0;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--ink-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.shelter-build-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+.shelter-build-card-tag {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 5px;
+  border: 1px solid var(--ink);
+  letter-spacing: 0.04em;
+}
+.shelter-build-card-tag.is-work {
+  background: var(--ink);
+  color: var(--paper);
+}
+.shelter-build-card-tag.is-service {
+  background: var(--paper);
+  color: var(--ink);
+}
+.shelter-build-card-tag.is-payout {
+  background: #fff4d2;
+  color: #806020;
+  border-color: #c69a2c;
+}
+.shelter-build-card-tag.is-cycle {
+  background: var(--paper);
+  color: var(--ink-muted);
+}
+.shelter-build-card.selected .shelter-build-card-tag {
+  /* Inverted card → flip tag colours so they read against ink bg. */
+  border-color: rgba(245, 241, 230, 0.6);
+}
+.shelter-build-card.selected .shelter-build-card-tag.is-work {
+  background: var(--paper);
+  color: var(--ink);
+}
+.shelter-build-card.selected .shelter-build-card-tag.is-service,
+.shelter-build-card.selected .shelter-build-card-tag.is-cycle {
+  background: rgba(245, 241, 230, 0.12);
+  color: var(--paper);
+}
+.shelter-build-card.selected .shelter-build-card-tag.is-payout {
+  background: #c69a2c;
+  color: #1a1a1a;
+  border-color: #c69a2c;
+}
+.shelter-build-card.selected .shelter-build-card-btn p {
+  color: rgba(245, 241, 230, 0.75);
+}
+.shelter-build-card-btn code {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #c69a2c;
+}
+.shelter-build-carousel-hint {
+  margin: 6px 4px 0;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+/* ── FX layer (cash fly + level up) ────────────────────────────── */
+/* Absolute-positioned over the phone screen body so the level-up
+   celebration centers within the phone mockup, not the browser
+   viewport. Coins inside also use absolute positioning with local
+   coordinates that the JS computes via getBoundingClientRect. */
+.shelter-fx-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;
+}
+.shelter-fx-coin {
+  position: absolute;
+  /* Defaults — overridden via inline CSS custom props each instance */
+  left: var(--fx-from-x);
+  top: var(--fx-from-y);
+  transform: translate(-50%, -50%);
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: #1a1a1a;
+  background: linear-gradient(180deg, #ffe480, #c69a2c);
+  border: 1.5px solid #1a1a1a;
+  box-shadow: 0 0 12px rgba(255, 216, 74, 0.7);
+  animation: shelter-fx-coin-fly 950ms cubic-bezier(0.4, 0.05, 0.7, 1) forwards;
+  white-space: nowrap;
+}
+@keyframes shelter-fx-coin-fly {
+  0% {
+    left: var(--fx-from-x);
+    top:  var(--fx-from-y);
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+  85% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    left: var(--fx-to-x);
+    top:  var(--fx-to-y);
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+}
+
+.shelter-fx-celebration {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: shelter-fx-celebration-fade 2400ms ease forwards;
+}
+.shelter-fx-celebration-card {
+  background: rgba(8, 10, 14, 0.94);
+  border: 2px solid #ffd84a;
+  border-radius: 8px;
+  padding: 22px 36px;
+  text-align: center;
+  box-shadow:
+    0 0 30px rgba(255, 216, 74, 0.55),
+    0 0 80px rgba(255, 216, 74, 0.25);
+  animation: shelter-fx-celebration-pop 2400ms ease forwards;
+}
+.shelter-fx-celebration-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: #ffd84a;
+  margin-bottom: 6px;
+}
+.shelter-fx-celebration-level {
+  font-family: var(--font-mono);
+  font-size: 36px;
+  font-weight: 700;
+  color: #f5f1e6;
+  line-height: 1;
+  letter-spacing: 0.08em;
+}
+.shelter-fx-celebration-level span {
+  color: #ffd84a;
+  margin: 0 12px;
+  font-size: 28px;
+}
+
+/* Perks section — a divider + small list of cards under the level
+   transition. Tutorial uses this to surface the Break Room unlock. */
+.shelter-fx-perks {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 216, 74, 0.4);
+  text-align: left;
+}
+.shelter-fx-perks-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #c69a2c;
+  margin-bottom: 8px;
+  text-align: center;
+}
+.shelter-fx-perks-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shelter-fx-perk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 216, 74, 0.08);
+  border: 1px solid #ffd84a;
+  border-radius: 4px;
+  min-width: 240px;
+}
+.shelter-fx-perk-icon {
+  flex: 0 0 auto;
+  color: #ffd84a;
+}
+.shelter-fx-perk-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.shelter-fx-perk-meta strong {
+  display: block;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: #f5f1e6;
+}
+.shelter-fx-perk-meta p {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  color: rgba(245, 241, 230, 0.72);
+}
+@keyframes shelter-fx-celebration-pop {
+  0%   { transform: scale(0.7); opacity: 0; }
+  8%   { transform: scale(1.08); opacity: 1; }
+  14%  { transform: scale(1); }
+  92%  { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0.92); opacity: 0; }
+}
+@keyframes shelter-fx-celebration-fade {
+  0%, 92% { opacity: 1; }
+  100%    { opacity: 0; }
+}
+.shelter-fx-celebration {
+  /* Match the longer JS auto-dismiss for level-ups with perks (5.2s).
+     The fade animation runs once over that span; the pop animation
+     keyframes are normalised so most of the time is the steady "read
+     the perk card" plateau. */
+  animation-duration: 5200ms;
+}
+.shelter-fx-celebration-card {
+  animation-duration: 5200ms;
+}
 .game-screen-body {
   flex: 1;
   min-height: 0;
@@ -5572,6 +5983,133 @@ body {
   color: var(--paper);
 }
 .shelter-card-tab svg { flex-shrink: 0; }
+/* Tutorial-driven attention pulse — drawn under the tab via inset
+   box-shadow so it doesn't shift the tab's geometry. Crimson echoes
+   the focus-outline colour so the cue reads as part of the same
+   "look here" language. The class is added by the runtime's
+   pulseCardTab action and removed automatically once the player
+   opens the tab (CardTab in ShelterCharacterCard.jsx). */
+.shelter-card-tab.is-pulsing {
+  animation: shelter-card-tab-pulse 1.4s ease-in-out infinite;
+  z-index: 1;
+}
+@keyframes shelter-card-tab-pulse {
+  0%, 100% {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: inset 0 0 0 0 rgba(230, 26, 58, 0.0),
+                0 0 0 0 rgba(230, 26, 58, 0.0);
+  }
+  50% {
+    background: #fff4d2;
+    color: #c41a3a;
+    box-shadow: inset 0 0 0 2px rgba(230, 26, 58, 0.6),
+                0 0 12px 2px rgba(230, 26, 58, 0.45);
+  }
+}
+
+.shelter-card-assignment {
+  padding: 4px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.shelter-card-assignment-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.shelter-card-assignment-label {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted, #8a8a8a);
+  flex: 0 0 44px;
+}
+.shelter-card-assignment-xp {
+  font-size: 10px;
+  color: var(--ink-muted, #8a8a8a);
+  margin-left: auto;
+}
+.shelter-card-progress {
+  position: relative;
+  height: 16px;
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--ink, #1a1a1a);
+  overflow: hidden;
+  box-shadow: 0 0 10px rgba(198, 154, 44, 0.45);
+  animation: shelter-card-bar-glow 2.4s ease-in-out infinite;
+}
+@keyframes shelter-card-bar-glow {
+  0%, 100% { box-shadow: 0 0 6px rgba(198, 154, 44, 0.35); }
+  50%      { box-shadow: 0 0 14px rgba(198, 154, 44, 0.7); }
+}
+.shelter-card-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: #c69a2c;
+  transition: width 240ms ease;
+}
+.shelter-card-progress.is-ready .shelter-card-progress-fill {
+  background: #c41a3a;
+  animation: shelter-card-ready-pulse 1.2s ease-in-out infinite;
+}
+@keyframes shelter-card-ready-pulse {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.35); }
+}
+.shelter-card-progress-label {
+  position: relative;
+  display: block;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  line-height: 16px;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+.shelter-card-assign-btn {
+  align-self: flex-end;
+  padding: 5px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1.5px solid var(--ink, #1a1a1a);
+  background: var(--ink, #1a1a1a);
+  color: var(--paper, #f5f1e6);
+  cursor: pointer;
+}
+.shelter-card-assign-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* Inline Reassign button — sits to the right of the room name on the
+   first row of the assignment panel so the player doesn't have to
+   scroll past the bar to find it. Compact, matches the tab-pill
+   typography. */
+.shelter-card-assignment-room-name {
+  flex: 1;
+}
+.shelter-card-reassign-btn {
+  margin-left: auto;
+  padding: 3px 9px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1.5px solid var(--ink, #1a1a1a);
+  background: var(--paper, #f5f1e6);
+  color: var(--ink, #1a1a1a);
+  cursor: pointer;
+}
+.shelter-card-reassign-btn:hover {
+  background: var(--ink, #1a1a1a);
+  color: var(--paper, #f5f1e6);
+}
 
 /* ── NPCs view ───────────────────────────── */
 /* Layout reuses .sandbox3 + .sandbox3-cards from the agent sandbox so
@@ -6262,6 +6800,26 @@ body {
 }
 .game-tab + .game-tab { border-left: 1px solid var(--ink-faint); }
 .game-tab-glyph { font-size: 18px; line-height: 1; }
+/* Tutorial-driven attention pulse — used to point the player at the
+   Build tab when it's first introduced. Crimson echoes the focus-
+   outline and Assignment-tab pulse so the cue language stays
+   consistent across the game. */
+.game-tab.is-pulsing {
+  animation: game-tab-pulse 1.4s ease-in-out infinite;
+}
+@keyframes game-tab-pulse {
+  0%, 100% {
+    background: var(--paper);
+    color: var(--ink-muted);
+    box-shadow: inset 0 0 0 0 rgba(230, 26, 58, 0);
+  }
+  50% {
+    background: #fff4d2;
+    color: #c41a3a;
+    box-shadow: inset 0 0 0 2px rgba(230, 26, 58, 0.6),
+                0 0 12px 2px rgba(230, 26, 58, 0.45);
+  }
+}
 .game-tab:hover:not(.active) {
   color: var(--ink);
   background: var(--paper-2);
@@ -7894,7 +8452,12 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.45;
-  pointer-events: auto;
+  /* Default click-through so the player can interact with the stage
+     (tap a pulsing room, the Assignment tab, etc.) while a non-
+     blocking dialog is on screen. The layer flips to pointer-events:
+     auto when the dialog has tapToAdvance, capturing taps for the
+     advance gesture — see the .awaiting-tap selector below. */
+  pointer-events: none;
   box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
   opacity: 1;
   transform: translateY(0);
@@ -7919,10 +8482,39 @@ body {
      in, since the keyframe animation has already finished by then. */
   animation: none;
 }
+/* When the layer is in awaiting-tap mode, the dialog itself becomes
+   tappable so any click on the dialog area bubbles to the layer's
+   onClick (which advances). For non-tap dialogs (player-progression
+   driven) the dialog stays click-through and the stage handles the
+   real action. */
+.tutorial-layer.awaiting-tap .tutorial-dialog {
+  pointer-events: auto;
+}
 /* Text content remounts on each new line (key={text}); this animation
    gives the new text a soft slide-in so it doesn't pop. */
 .tutorial-dialog-text {
   animation: tutorial-dialog-text-enter 320ms ease 80ms both;
+}
+/* Inline emphasis for ominous words like "The Company". Bold + a
+   slow red pulse via text-shadow so it reads like the speaker just
+   said something they shouldn't have. The base colour briefly drops
+   the dialog's paper-cream so the contrast against the surrounding
+   text registers. */
+.tutorial-text-ominous {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  animation: tutorial-text-ominous-pulse 1.8s ease-in-out infinite;
+}
+@keyframes tutorial-text-ominous-pulse {
+  0%, 100% {
+    color: #f5f1e6;
+    text-shadow: 0 0 0 rgba(230, 26, 58, 0);
+  }
+  50% {
+    color: #ff5070;
+    text-shadow: 0 0 8px rgba(255, 80, 112, 0.55),
+                 0 0 2px rgba(230, 26, 58, 0.8);
+  }
 }
 @keyframes tutorial-dialog-text-enter {
   from {
@@ -8206,7 +8798,1712 @@ body {
    blocks the camera underneath). The Stage3D ResizeObserver picks up
    the new height. */
 body.tutorial-hud-hidden .game-status-bar,
-body.tutorial-hud-hidden .game-tab-bar {
+body.tutorial-hud-hidden .game-tab-bar,
+body.tutorial-hud-hidden .shelter-xp-bar,
+body.tutorial-hud-hidden .shelter-currency-hud {
   display: none;
 }
 
+
+/* ─────────────────────────────────────────────────────────────────
+   Rooms sidebar tab + room cards + room drawer (Severance / Stanley
+   Parable office aesthetic). Shares visual language with the agent
+   sidebar so the two tabs feel like siblings.
+   ───────────────────────────────────────────────────────────────── */
+
+.sandbox3-sidebar-tabs {
+  display: flex; gap: 0;
+  margin: 0 calc(var(--sp-3) * -1) var(--sp-2);
+  border-bottom: 1.5px solid var(--ink);
+}
+.sandbox3-sidebar-tab {
+  flex: 1;
+  padding: 8px 10px;
+  background: transparent; border: 0;
+  font-family: var(--font-display); font-weight: 800; font-stretch: 75%;
+  font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink); opacity: .55;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+}
+.sandbox3-sidebar-tab.active {
+  opacity: 1;
+  border-bottom-color: var(--transmit);
+}
+.sandbox3-sidebar-tab:hover { opacity: .9; }
+
+.room-card-list { gap: var(--sp-2); overflow-y: auto; }
+.room-card {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 10px;
+  align-items: stretch;
+  cursor: pointer;
+}
+.room-card-swatch {
+  display: flex; flex-direction: column;
+  border: 1.5px solid var(--ink);
+  overflow: hidden;
+  min-height: 56px;
+}
+.room-card-swatch span {
+  display: block; flex: 1; min-height: 16px;
+}
+.room-card-progress { background: var(--paper-2); }
+.room-card-progress.in-flight {
+  background: #f6e9c2;
+  animation: room-progress-pulse 1.4s ease-in-out infinite;
+}
+.room-card-progress.is-complete { background: #cce6cc; }
+.room-card-progress.has-failed { background: #f1c8c0; }
+@keyframes room-progress-pulse {
+  0%, 100% { opacity: .65; }
+  50% { opacity: 1; }
+}
+.room-card-help {
+  margin-top: var(--sp-2);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ── Room drawer ─────────────────────────────────────────────── */
+.room-drawer {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 460px; max-width: 100%;
+  background: var(--paper);
+  border-left: 2px solid var(--ink);
+  box-shadow: -4px 0 0 var(--transmit);
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+  z-index: 5;
+}
+.room-drawer-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: var(--sp-3);
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-drawer-header h2 {
+  margin: 0 0 4px;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 18px; letter-spacing: -.02em; text-transform: lowercase;
+  color: var(--ink);
+}
+.room-drawer-vibe {
+  margin: 0;
+  font-style: italic;
+  font-size: 12px;
+  color: var(--ink); opacity: .7;
+}
+.room-drawer-close {
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  font-size: 16px; font-weight: 800;
+  width: 28px; height: 28px;
+  cursor: pointer;
+  line-height: 1;
+}
+.room-drawer-close:hover { background: var(--ink); color: var(--paper); }
+
+.room-drawer-preview {
+  border-bottom: 1.5px solid var(--ink);
+  background: linear-gradient(180deg, #1a1a1d 0%, #2a2622 100%);
+}
+.room-mini-preview { display: block; }
+
+.room-drawer-section {
+  padding: var(--sp-3);
+  border-bottom: 1px dashed var(--ink-soft, rgba(0,0,0,.2));
+}
+.room-drawer-section h3 {
+  margin: 0 0 var(--sp-2);
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+}
+.room-drawer-section h3 small { font-weight: 500; opacity: .6; margin-left: 6px; }
+.room-drawer-section-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: var(--sp-2);
+}
+.room-drawer-actions { display: flex; gap: 6px; }
+
+/* Palette swatches */
+.room-palette-row {
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.room-palette-swatch {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 2px;
+  border: 1px solid var(--ink);
+  padding: 4px 6px;
+  background: var(--paper-2);
+  min-width: 60px;
+}
+.room-palette-chip {
+  display: block;
+  width: 36px; height: 36px;
+  border: 1px solid var(--ink);
+}
+.room-palette-swatch small {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+}
+.room-palette-swatch code {
+  font-size: 9px; opacity: .65;
+}
+
+/* Prop list */
+.room-prop-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.room-prop-row {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-prop-row.status-ready { background: #ecf3e8; }
+.room-prop-row.status-failed { background: #f6e1dc; }
+.room-prop-row.status-generating-image,
+.room-prop-row.status-generating-model,
+.room-prop-row.status-queued {
+  background: #fbf2d6;
+  animation: room-progress-pulse 1.4s ease-in-out infinite;
+}
+.room-prop-thumb {
+  position: relative;
+  width: 56px; height: 56px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.room-prop-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.room-prop-thumb-fallback {
+  font-family: var(--font-display); font-weight: 800;
+  font-size: 14px; letter-spacing: .08em;
+  color: var(--ink); opacity: .55;
+}
+.room-prop-slot {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
+  text-align: center;
+  background: rgba(0,0,0,.6); color: white;
+  padding: 1px 0;
+}
+.room-prop-slot.slot-back { background: rgba(50,50,80,.75); }
+.room-prop-slot.slot-mid  { background: rgba(40,80,60,.75); }
+.room-prop-slot.slot-fore { background: rgba(100,60,40,.75); }
+.room-prop-slot.slot-ceil { background: rgba(60,60,90,.75); }
+
+.room-prop-body { min-width: 0; }
+.room-prop-name {
+  font-family: var(--font-display); font-weight: 800; font-stretch: 75%;
+  font-size: 12px; letter-spacing: .04em;
+  color: var(--ink);
+  word-break: break-word;
+}
+.room-prop-count {
+  margin-left: 6px;
+  font-size: 10px; opacity: .65;
+}
+.room-prop-prompt {
+  font-size: 11px; line-height: 1.35;
+  color: var(--ink); opacity: .75;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.room-prop-meta {
+  margin-top: 5px;
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+.room-prop-pill {
+  font-size: 9px;
+  font-family: ui-monospace, monospace;
+  text-transform: uppercase; letter-spacing: .08em;
+  padding: 2px 6px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+}
+.room-prop-pill.pill-ready { background: #cce6cc; }
+.room-prop-pill.pill-failed { background: #f1c8c0; }
+.room-prop-pill.pill-generating-image,
+.room-prop-pill.pill-generating-model,
+.room-prop-pill.pill-queued { background: #f6e9c2; }
+.room-prop-shared {
+  font-size: 10px;
+  color: var(--ink); opacity: .7;
+}
+.room-prop-shared-list {
+  display: inline-flex; gap: 4px; flex-wrap: wrap;
+  margin-left: 4px;
+}
+.room-prop-shared-link {
+  border: 1px dashed var(--ink);
+  background: transparent;
+  font-size: 9px; padding: 1px 4px;
+  cursor: pointer;
+  color: inherit;
+}
+.room-prop-shared-link:hover { background: var(--ink); color: var(--paper); }
+.room-prop-actions { display: flex; align-items: flex-start; }
+
+/* Gameplay meta dl */
+.room-drawer-meta {
+  display: grid; grid-template-columns: auto 1fr;
+  gap: 4px 12px; margin: 0;
+  font-size: 12px;
+}
+.room-drawer-meta dt {
+  font-weight: 800; font-stretch: 75%; text-transform: uppercase;
+  font-size: 10px; letter-spacing: .06em; opacity: .65;
+  align-self: center;
+}
+.room-drawer-meta dd { margin: 0; }
+
+/* ── Room mocks section ─────────────────────────────────────── */
+.room-mock-section .room-drawer-actions { flex-wrap: wrap; gap: 6px; }
+.room-mock-subhead {
+  margin: var(--sp-2) 0 6px;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  opacity: .65;
+}
+.room-mock-refs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.room-mock-ref-thumb {
+  margin: 0;
+  border: 1.5px solid var(--ink);
+  background: #1a1a1d;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.room-mock-ref-thumb img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+.room-mock-ref-thumb figcaption {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
+  text-align: center; padding: 2px 0;
+  background: var(--ink); color: var(--paper);
+}
+.room-mock-outputs {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: var(--sp-2);
+}
+.room-mock-output {
+  display: block;
+  border: 2px solid var(--ink);
+  background: #1a1a1d;
+  box-shadow: 3px 3px 0 var(--transmit);
+  overflow: hidden;
+}
+.room-mock-output img { display: block; width: 100%; height: auto; }
+.room-mock-output:hover { transform: translate(-1px,-1px); box-shadow: 4px 4px 0 var(--transmit); }
+.room-mock-prompt {
+  margin-top: var(--sp-2);
+  border: 1px dashed var(--ink);
+  padding: 6px 8px;
+  background: var(--paper-2);
+}
+.room-mock-prompt summary {
+  cursor: pointer;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  opacity: .7;
+}
+.room-mock-prompt pre {
+  margin: 6px 0 0;
+  font-size: 10px; line-height: 1.45;
+  white-space: pre-wrap;
+  max-height: 220px; overflow-y: auto;
+  color: var(--ink);
+}
+.room-mock-help {
+  font-size: 11px; line-height: 1.4;
+  margin-top: var(--sp-2);
+}
+
+/* Scene section (room-level GLB) */
+.room-scene-viewer {
+  height: 320px;
+  background: #1a1a1d;
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--transmit);
+  margin-top: var(--sp-2);
+}
+.room-scene-viewer > div { width: 100%; height: 100%; }
+.room-scene-help { font-size: 11px; line-height: 1.4; }
+
+/* ─────────────────────────────────────────────────────────────────
+   /rooms page — full-screen sidebar+detail layout (mirrors NPCs).
+   ───────────────────────────────────────────────────────────────── */
+.rooms-page {
+  position: relative;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100%;
+  min-height: 0;
+  gap: 0;
+  background: var(--paper);
+}
+.rooms-page-sidebar {
+  display: flex; flex-direction: column;
+  padding: var(--sp-3);
+  gap: var(--sp-2);
+  border-right: 2px solid var(--ink);
+  background: var(--card);
+  overflow-y: auto;
+  min-height: 0;
+}
+.rooms-page-sidebar header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1.5px solid var(--ink);
+}
+.rooms-page-sidebar h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: 75%; font-weight: 800; font-size: 18px;
+  letter-spacing: -.02em; text-transform: lowercase;
+  color: var(--ink);
+}
+.rooms-page-main {
+  overflow-y: auto;
+  padding: 0;
+  min-height: 0;
+}
+
+/* The detail container — was .room-drawer, now standalone panel. */
+.room-detail {
+  display: flex; flex-direction: column;
+  max-width: 900px;
+  margin: 0 auto;
+  padding-bottom: var(--sp-4);
+}
+.room-detail-empty {
+  padding: var(--sp-4);
+  text-align: center;
+}
+.room-detail-header {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: var(--sp-3);
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-detail-header h2 {
+  margin: 0 0 4px;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 22px; letter-spacing: -.02em; text-transform: lowercase;
+  color: var(--ink);
+}
+.room-detail-vibe {
+  margin: 0;
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink); opacity: .7;
+}
+.room-detail-preview {
+  border-bottom: 1.5px solid var(--ink);
+  background: linear-gradient(180deg, #1a1a1d 0%, #2a2622 100%);
+}
+.room-detail-section {
+  padding: var(--sp-3);
+  border-bottom: 1px dashed rgba(0,0,0,.2);
+}
+.room-detail-section h3 {
+  margin: 0 0 var(--sp-2);
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+}
+.room-detail-section h3 small { font-weight: 500; opacity: .6; margin-left: 6px; }
+.room-detail-section-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: var(--sp-2);
+}
+.room-detail-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.room-detail-meta {
+  display: grid; grid-template-columns: auto 1fr;
+  gap: 4px 12px; margin: 0;
+  font-size: 12px;
+}
+.room-detail-meta dt {
+  font-weight: 800; font-stretch: 75%; text-transform: uppercase;
+  font-size: 10px; letter-spacing: .06em; opacity: .65;
+  align-self: center;
+}
+.room-detail-meta dd { margin: 0; }
+
+/* The 3D preview is wider on this page — give it more height. */
+.rooms-page .room-mini-preview { min-height: 360px; }
+.rooms-page .room-scene-viewer { height: 420px; }
+
+/* Pets placeholder in the Sandbox sidebar. */
+.sandbox3-pets-placeholder {
+  border: 1.5px dashed var(--ink);
+  background: var(--paper-2);
+  padding: var(--sp-3);
+  margin-top: var(--sp-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Sidebar h2 subhead hint pill — distinguishes cloud vs local
+   asset-service groups without crowding the section title. */
+.sidebar-subhead-hint {
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-family: ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: lowercase;
+  letter-spacing: .04em;
+  border: 1px solid var(--ink);
+  background: var(--paper-2);
+  opacity: .7;
+  vertical-align: middle;
+}
+
+/* Layout status badge in the room detail header. Tells the user
+   whether the gray-box is rendering from a saved JSON layout or a
+   fallback (no layout, invalid, etc). */
+.room-layout-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  border: 1px solid var(--ink);
+}
+.room-layout-badge.ok      { background: #cce6cc; }
+.room-layout-badge.loading { background: #f6e9c2; animation: room-progress-pulse 1.4s ease-in-out infinite; }
+.room-layout-badge.missing { background: var(--paper-2); opacity: .6; }
+.room-layout-badge.bad     { background: #f1c8c0; }
+
+/* Rooms-page sidebar — prompt form + LLM settings panel. */
+.rooms-page-sidebar-actions {
+  display: flex; align-items: center; gap: 6px;
+}
+.npcs-btn.small {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+.npcs-btn.small.active {
+  background: var(--ink); color: var(--paper);
+}
+
+.rooms-prompt-form {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: var(--sp-2);
+  border: 1.5px dashed var(--ink);
+  background: var(--paper-2);
+  margin-bottom: var(--sp-2);
+}
+.rooms-prompt-label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  opacity: .75;
+}
+.rooms-prompt-label textarea {
+  font-family: inherit; font-size: 12px; line-height: 1.45;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: 6px 8px;
+  resize: vertical;
+}
+.rooms-prompt-label textarea:disabled { opacity: .5; }
+.rooms-prompt-base {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; opacity: .8;
+}
+.rooms-prompt-base code {
+  font-family: ui-monospace, monospace;
+  background: var(--paper); padding: 1px 5px;
+  border: 1px solid var(--ink);
+}
+.rooms-prompt-actions {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
+}
+.rooms-prompt-actions small { font-size: 10px; }
+
+/* LLM settings — sits in the rooms-page sidebar */
+.rooms-llm-settings {
+  border: 2px solid var(--ink);
+  background: var(--paper-2);
+  padding: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  box-shadow: 3px 3px 0 var(--transmit);
+}
+.rooms-llm-settings header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin: 0 0 var(--sp-2);
+  border: 0;
+  padding: 0;
+}
+.rooms-llm-settings header h3 {
+  margin: 0;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+}
+.rooms-llm-settings dl {
+  display: grid; grid-template-columns: 1fr; gap: 6px;
+  margin: 0 0 var(--sp-2);
+  font-size: 11px;
+}
+.rooms-llm-settings dt {
+  font-weight: 800; font-stretch: 75%; text-transform: uppercase;
+  font-size: 9px; letter-spacing: .06em; opacity: .65;
+  display: flex; align-items: center; gap: 6px;
+}
+.rooms-llm-settings dd {
+  display: flex; gap: 6px; align-items: center;
+  margin: 0 0 4px;
+}
+.rooms-llm-settings input {
+  flex: 1; min-width: 0;
+  font-family: ui-monospace, monospace; font-size: 10px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: 3px 6px;
+}
+.rooms-llm-settings-actions {
+  display: flex; align-items: center; gap: 8px;
+}
+.rooms-llm-source-tag {
+  font-family: ui-monospace, monospace;
+  font-size: 8px;
+  text-transform: lowercase;
+  padding: 1px 4px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  letter-spacing: .04em;
+}
+.rooms-llm-source-tag.tag-env { background: #cce6cc; }
+.rooms-llm-source-tag.tag-override { background: #f6e9c2; }
+.rooms-llm-source-tag.tag-unset { background: var(--paper-2); opacity: .55; }
+
+.room-detail-close {
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  font-size: 14px; font-weight: 800;
+  width: 22px; height: 22px;
+  cursor: pointer;
+  line-height: 1;
+}
+.room-detail-close:hover { background: var(--ink); color: var(--paper); }
+
+/* Prompt suggestion chips */
+.rooms-prompt-chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin-top: 2px;
+}
+.rooms-prompt-chip {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  padding: 2px 7px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  cursor: pointer;
+  letter-spacing: .02em;
+}
+.rooms-prompt-chip:hover {
+  background: var(--ink); color: var(--paper);
+}
+.rooms-prompt-chip:disabled {
+  opacity: .45; cursor: not-allowed;
+}
+
+/* Streamed thinking + token output from Gemma */
+.rooms-prompt-stream {
+  margin-top: var(--sp-2);
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  display: flex; flex-direction: column;
+  max-height: 280px;
+}
+.rooms-prompt-stream-tabs {
+  display: flex; gap: 0;
+  border-bottom: 1.5px solid var(--ink);
+}
+.rooms-prompt-stream-tab {
+  flex: 1;
+  padding: 4px 8px;
+  background: transparent; border: 0;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 9px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink); opacity: .55;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.rooms-prompt-stream-tab.active {
+  opacity: 1;
+  border-bottom-color: var(--transmit);
+}
+.rooms-prompt-stream-tab:disabled { opacity: .3; cursor: not-allowed; }
+.rooms-prompt-stream-pane {
+  flex: 1; min-height: 0;
+  margin: 0; padding: 6px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 10px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word;
+  overflow-y: auto;
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+/* Concept image moodboard section */
+.room-concept-section .room-detail-section-head h3 small { font-style: italic; }
+.room-concept-image-wrap {
+  border: 2px solid var(--ink);
+  background: #1a1a1d;
+  box-shadow: 3px 3px 0 var(--transmit);
+  margin-top: var(--sp-2);
+  overflow: hidden;
+  max-width: 720px;
+}
+.room-concept-image {
+  display: block;
+  width: 100%; height: auto;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+.room-concept-prompt {
+  margin-top: var(--sp-2);
+  border: 1px dashed var(--ink);
+  padding: 6px 8px;
+  background: var(--paper-2);
+}
+.room-concept-prompt summary {
+  cursor: pointer;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  opacity: .7;
+}
+.room-concept-prompt pre {
+  margin: 6px 0 0;
+  font-family: ui-monospace, monospace;
+  font-size: 11px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.room-concept-edit {
+  margin-top: var(--sp-2);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.room-concept-edit textarea {
+  font-family: ui-monospace, monospace;
+  font-size: 11px; line-height: 1.5;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+/* Mockup section: single bordered container, two columns —
+   prompt textarea + re-roll on the left, image on the right.
+   Compact enough that the 3D preview is visible below it. */
+.room-mockup-section { padding: var(--sp-2) var(--sp-3); }
+.room-mockup-section .room-mockup-grid { max-width: 720px; }
+.room-mockup-right {
+  display: flex; flex-direction: column; gap: 8px;
+  min-width: 0;
+}
+.room-mockup-layout-panel {
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: 6px 8px;
+}
+.room-mockup-layout-panel details summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 0;
+  user-select: none;
+}
+.room-mockup-layout-panel details summary::-webkit-details-marker { display: none; }
+.room-mockup-layout-panel details summary::before {
+  content: '▸';
+  font-size: 10px;
+  transition: transform .15s ease;
+}
+.room-mockup-layout-panel details[open] summary::before { transform: rotate(90deg); }
+.room-mockup-layout-panel .room-json-pane {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 9px; line-height: 1.5;
+  background: var(--paper-2);
+  border: 1px solid var(--ink);
+  max-height: 220px; overflow: auto;
+  white-space: pre;
+}
+.room-mockup-layout-panel .npcs-btn { align-self: flex-start; }
+.room-mockup-header {
+  margin: 0 0 var(--sp-2);
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink);
+}
+.room-mockup-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-2);
+  padding: 10px;
+  box-shadow: 3px 3px 0 var(--transmit);
+}
+.room-mockup-controls {
+  display: flex; flex-direction: column; gap: 8px;
+  min-width: 0;
+}
+/* Prompt panel mirrors the layout JSON panel's framing — boxed,
+   bordered, with a head row and a fixed-height scrollable body. */
+.room-mockup-prompt-panel {
+  display: flex; flex-direction: column;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+}
+.room-mockup-prompt-head {
+  padding: 4px 10px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-concept-prompt-input {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: 10px; line-height: 1.5;
+  border: 0;
+  background: var(--paper);
+  padding: 6px 8px;
+  resize: none;
+  height: 180px;
+  overflow-y: auto;
+  transition: background .15s ease, box-shadow .15s ease;
+}
+.room-concept-prompt-input:focus,
+.room-concept-prompt-input:hover {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--transmit);
+}
+.room-mockup-controls .npcs-btn { align-self: flex-start; }
+.room-mockup-image-cell {
+  position: relative;
+  display: flex; align-items: stretch; justify-content: stretch;
+  background: #1a1a1d;
+  border: 1.5px solid var(--ink);
+  overflow: hidden;
+  min-height: 0;
+}
+.room-mockup-image-overlay {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(20, 20, 23, 0.55);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+.room-mockup-image-btn {
+  display: block;
+  padding: 0; margin: 0;
+  width: 100%; height: 100%;
+  min-height: 0;
+  border: 0; background: transparent;
+  cursor: zoom-in;
+}
+.room-mockup-image-btn:hover { filter: brightness(1.06); }
+.room-mockup-image-btn:focus-visible {
+  outline: 2px solid var(--transmit);
+  outline-offset: -2px;
+}
+.room-mockup-image {
+  width: 100%; height: 100%;
+  min-height: 120px;
+  /* Wide side-scroller mockup (3:2). object-fit: contain shows the
+     full panoramic image rather than cropping its centre — important
+     because the moodboard's framing IS the design intent. */
+  object-fit: contain;
+  background: #1a1a1d;
+  display: block;
+}
+.room-mockup-image-cell {
+  aspect-ratio: 3 / 2;
+}
+.room-mockup-image-cell .room-concept-help {
+  margin: auto; padding: 12px;
+  color: #ccc;
+  font-size: 11px;
+}
+.room-concept-help { font-size: 11px; line-height: 1.4; }
+@media (max-width: 720px) {
+  .room-mockup-grid { grid-template-columns: 1fr; }
+}
+
+/* Selected prop panel below the 3D preview. */
+.room-selected-prop {
+  background: linear-gradient(to right, rgba(255, 216, 74, 0.08), transparent);
+  border-left: 3px solid #ffd84a;
+}
+.room-selected-prop h3 code {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  background: var(--paper-2);
+  padding: 1px 6px;
+  border: 1px solid var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+.room-selected-prop-desc {
+  margin: 0 0 var(--sp-2);
+  font-size: 12px; line-height: 1.45;
+  color: var(--ink); opacity: .85;
+}
+.room-selected-prop-meta {
+  display: grid; grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 11px;
+}
+.room-selected-prop-meta dt {
+  font-weight: 800; font-stretch: 75%; text-transform: uppercase;
+  font-size: 9px; letter-spacing: .06em; opacity: .65;
+}
+.room-selected-prop-meta dd { margin: 0; font-family: ui-monospace, monospace; font-size: 10px; }
+
+/* Layout JSON viewer */
+.room-json-section { padding: var(--sp-2) var(--sp-3); }
+.room-json-section details { margin: 0; }
+.room-json-section summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 0;
+  user-select: none;
+}
+.room-json-section summary::-webkit-details-marker { display: none; }
+.room-json-section summary::before {
+  content: '▸';
+  font-size: 10px;
+  transition: transform .15s ease;
+}
+.room-json-section details[open] summary::before { transform: rotate(90deg); }
+.room-json-summary {
+  display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+}
+.room-json-summary small { font-weight: 500; opacity: .55; text-transform: none; letter-spacing: 0; }
+.room-json-pane {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  font-family: ui-monospace, monospace;
+  font-size: 10px; line-height: 1.5;
+  background: var(--paper-2);
+  border: 1.5px solid var(--ink);
+  max-height: 380px; overflow: auto;
+  white-space: pre;
+}
+
+/* Mockup grid: image left, JSON full right */
+.room-mockup-section .room-mockup-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 10px;
+  max-width: none;
+  align-items: stretch;
+}
+.room-mockup-left {
+  display: flex; flex-direction: column; gap: 8px;
+  min-width: 0;
+}
+.room-mockup-right.full {
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+}
+.room-mockup-layout-panel.full {
+  display: flex; flex-direction: column; gap: 0;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  height: 100%;
+}
+.room-mockup-layout-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 4px 10px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-mockup-layout-panel.full .room-json-pane.tall {
+  flex: 0 0 auto;
+  height: 220px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 10px; line-height: 1.45;
+  margin: 0;
+}
+.room-mockup-layout-actions {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border-top: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-mockup-provider-hint {
+  font-size: 9px; opacity: .55;
+}
+@media (max-width: 720px) {
+  .room-mockup-section .room-mockup-grid { grid-template-columns: 1fr; }
+}
+
+/* Preview row: 3D canvas + props sidebar */
+.room-preview-row {
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  gap: 0;
+  border-top: 1px dashed rgba(0,0,0,.2);
+  border-bottom: 1px dashed rgba(0,0,0,.2);
+  background: linear-gradient(180deg, #1a1a1d 0%, #2a2622 100%);
+}
+.room-preview-canvas { min-width: 0; }
+.room-props-sidebar {
+  display: flex; flex-direction: column;
+  border-left: 1.5px solid var(--ink);
+  background: var(--paper);
+  min-height: 0;
+  max-height: 420px;
+}
+.room-props-sidebar header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-props-sidebar h3 {
+  margin: 0;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  display: flex; align-items: baseline; gap: 6px;
+}
+.room-props-sidebar h3 small { font-weight: 500; }
+.room-props-list {
+  list-style: none; margin: 0; padding: 0;
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.room-props-item {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px dashed rgba(0,0,0,.15);
+  cursor: pointer;
+  user-select: none;
+}
+.room-props-item:hover { background: var(--paper-2); }
+.room-props-item.selected {
+  background: rgba(255, 216, 74, 0.18);
+  border-left: 3px solid #ffd84a;
+  padding-left: 5px;
+}
+.room-props-item-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 6px;
+}
+.room-props-item-id {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  word-break: break-word;
+}
+.room-props-item-meta {
+  display: flex; gap: 6px; align-items: baseline;
+  font-size: 9px;
+  color: var(--ink); opacity: .65;
+}
+.room-props-item-kind {
+  font-family: ui-monospace, monospace;
+  text-transform: lowercase;
+  border: 1px solid var(--ink);
+  padding: 0 4px;
+  flex-shrink: 0;
+  opacity: .85;
+}
+.room-props-item-prompt {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.room-props-item-actions {
+  display: flex; gap: 4px;
+  margin-top: 2px;
+}
+.room-props-empty { padding: 12px; font-size: 11px; }
+
+/* Split button — primary action + dropdown caret */
+.split-btn {
+  position: relative;
+  display: inline-flex;
+}
+.split-btn-main {
+  border-right-width: 0.75px;
+}
+.split-btn-caret {
+  padding: 4px 6px;
+  font-size: 11px;
+  border-left-width: 0.75px;
+  min-width: 22px;
+}
+.split-btn-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--transmit);
+  min-width: 240px;
+  max-width: 360px;
+}
+/* Portal-rendered variant — escapes overflow:auto / stacking-context
+   ancestors. position is fixed and sized via inline style. */
+.split-btn-menu-portal {
+  position: fixed;
+  z-index: 9999;
+  margin: 0;
+}
+.split-btn-menu li { margin: 0; }
+.split-btn-menu-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent; border: 0;
+  text-align: left; cursor: pointer;
+  font-size: 11px; line-height: 1.3;
+}
+.split-btn-menu-item:hover:not(:disabled) { background: var(--paper-2); }
+.split-btn-menu-item.active { background: rgba(58, 110, 165, .12); }
+.split-btn-menu-item:disabled { opacity: .45; cursor: not-allowed; }
+.split-btn-menu-tick {
+  width: 12px; flex-shrink: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--transmit);
+}
+.split-btn-menu-label { flex: 1; }
+.split-btn-menu-disabled {
+  font-size: 9px; opacity: .55;
+  font-family: ui-monospace, monospace;
+}
+
+/* Mockup re-roll action row — split button stacked on top of the
+   via-model label so all reroll buttons line up vertically. */
+.room-mockup-action-row {
+  display: flex; flex-direction: column; gap: 4px;
+  align-items: flex-start;
+}
+.room-mockup-action-row .room-mockup-provider-hint { margin-left: 2px; }
+
+/* Inline palette panel inside the Mockup right column. Compact framing
+   matches the layout JSON panel above it. */
+.room-mockup-right { gap: 6px; }
+.room-mockup-palette {
+  display: flex; flex-direction: column;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+}
+.room-mockup-palette-head {
+  padding: 4px 10px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-mockup-palette-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 8px 10px;
+}
+.room-mockup-palette-row .room-palette-swatch {
+  padding: 3px 5px; min-width: 52px;
+}
+.room-mockup-palette-row .room-palette-chip {
+  width: 28px; height: 28px;
+}
+.room-mockup-palette-row small { font-size: 9px; }
+.room-mockup-palette-row code { font-size: 8px; }
+
+/* 3D preview canvas wraps absolutely-positioned overlay UI. */
+.room-preview-canvas { position: relative; }
+
+/* Floating gear button — top-left of the 3D canvas. */
+.room-preview-gear {
+  position: absolute;
+  top: 8px; left: 8px;
+  z-index: 6;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1;
+  background: rgba(20, 20, 23, 0.65);
+  border: 1.5px solid var(--ink);
+  color: #f5f1e6;
+  cursor: pointer;
+  backdrop-filter: blur(2px);
+  transition: background .12s ease;
+}
+.room-preview-gear:hover { background: rgba(20, 20, 23, 0.9); }
+
+/* Layout JSON overlay — collapsed state (compact). */
+.room-preview-overlay {
+  position: absolute;
+  top: 8px; left: 8px;
+  z-index: 6;
+  width: 320px;
+  max-width: calc(100% - 16px);
+  display: flex; flex-direction: column;
+  background: rgba(247, 243, 234, 0.97);
+  border: 1.5px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--transmit);
+  backdrop-filter: blur(3px);
+}
+.room-preview-overlay.expanded {
+  width: 540px;
+  max-height: calc(100% - 16px);
+}
+.room-preview-overlay-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-preview-overlay-head .room-json-summary {
+  font-size: 10px;
+  display: flex; align-items: baseline; gap: 6px;
+  flex: 1; min-width: 0;
+}
+.room-preview-overlay-buttons {
+  display: flex; gap: 2px;
+  flex-shrink: 0;
+}
+.room-preview-overlay-btn {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  font-size: 11px; line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.room-preview-overlay-btn:hover { background: var(--ink); color: var(--paper); }
+.room-preview-overlay-json {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 9px; line-height: 1.45;
+  background: var(--paper);
+  color: var(--ink);
+  height: 140px; overflow: auto;
+  white-space: pre;
+}
+.room-preview-overlay.expanded .room-preview-overlay-json {
+  height: 360px;
+  font-size: 10px;
+}
+.room-preview-overlay-empty {
+  padding: 12px; font-size: 11px; margin: 0;
+}
+.room-preview-overlay-actions {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  border-top: 1.5px solid var(--ink);
+  background: var(--paper-2);
+  flex-wrap: wrap;
+}
+
+/* Equal-height columns inside the Mockup grid: stretch each column's
+   inner stack so palette pads down to match the image's natural height
+   on the right (or vice versa). */
+.room-mockup-section .room-mockup-grid {
+  align-items: stretch;
+}
+.room-mockup-left,
+.room-mockup-right {
+  height: 100%;
+}
+.room-mockup-left .room-mockup-prompt-panel { flex: 0 0 auto; }
+.room-mockup-left .room-mockup-palette { flex: 1 1 auto; }
+.room-mockup-right .room-mockup-image-cell { flex: 1 1 auto; }
+
+/* Reroll-prompt button in the prompt panel head (right-aligned). */
+.room-mockup-prompt-head {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px;
+}
+.room-mockup-reroll-prompt {
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+  padding: 2px 6px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.room-mockup-reroll-prompt:hover:not(:disabled) {
+  background: var(--ink); color: var(--paper);
+}
+.room-mockup-reroll-prompt:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Inline edit on room name + description in the header. */
+.room-detail-header h2 {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.room-detail-vibe {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.room-detail-edit-btn {
+  border: 1px solid var(--ink-soft, rgba(0,0,0,.2));
+  background: transparent;
+  font-size: 11px; line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+  opacity: .55;
+}
+.room-detail-edit-btn:hover { opacity: 1; background: var(--paper-2); }
+.room-detail-edit-input {
+  font: inherit; color: inherit;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: 2px 6px;
+  min-width: 200px;
+  flex: 1 1 auto;
+}
+
+/* Dice icon styling — keep emoji size small enough to fit the 28×28 box. */
+.room-preview-dice { font-size: 16px; }
+
+/* Reroll prompt + palette footer at the bottom of the left mockup column */
+.room-prompt-palette-footer {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: auto;  /* push to bottom of the flex column */
+}
+.room-prompt-palette-footer .rooms-prompt-stream { margin-top: 0; max-height: 200px; }
+.rooms-prompt-stream-pane.compact { font-size: 9px; max-height: 160px; }
+
+/* Native colour-picker chip — strip browser frame so it reads as a
+   flat colour square matching the previous span chip. */
+input.room-palette-chip {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0;
+  border: 1px solid var(--ink);
+  cursor: pointer;
+  background: transparent;
+}
+input.room-palette-chip::-webkit-color-swatch-wrapper { padding: 0; }
+input.room-palette-chip::-webkit-color-swatch { border: 0; }
+input.room-palette-chip::-moz-color-swatch { border: 0; }
+
+/* Stream pane in the prompt+palette footer: bounded, scrolls, never
+   grows the parent column. */
+.room-prompt-palette-footer .rooms-prompt-stream {
+  max-height: 140px;
+  margin-top: 0;
+}
+.room-prompt-palette-footer .rooms-prompt-stream-pane.compact {
+  max-height: 100px;
+}
+
+/* Stream pane inside the layout JSON overlay — replaces the JSON pane
+   while regenerating, so it inherits the same height envelope. */
+.room-preview-overlay .rooms-prompt-stream {
+  border: 0;
+  margin: 0;
+  height: 140px; max-height: 140px;
+}
+.room-preview-overlay.expanded .rooms-prompt-stream { height: 360px; max-height: 360px; }
+.room-preview-overlay .rooms-prompt-stream-pane {
+  background: var(--paper);
+  height: 100%; max-height: none;
+  font-size: 9px;
+}
+
+/* Editable text in the header — click to swap to input. */
+.room-detail-editable {
+  cursor: text;
+  padding: 1px 4px;
+  margin: -1px -4px;
+  border-radius: 0;
+  transition: background .12s ease;
+}
+.room-detail-editable:hover {
+  background: var(--paper-2);
+  box-shadow: inset 0 -1px 0 var(--ink);
+}
+.room-detail-editable:focus { outline: 1.5px solid var(--transmit); outline-offset: 1px; }
+
+/* Initial-prompt editor inside the LLM settings panel */
+.rooms-initial-prompt-editor {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px dashed rgba(0,0,0,.2);
+}
+.rooms-initial-prompt-editor header { margin: 0 0 6px; }
+.rooms-initial-prompt-editor h4 {
+  margin: 0;
+  display: flex; align-items: baseline; gap: 6px;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+}
+.rooms-initial-prompt-editor p { font-size: 10px; line-height: 1.4; margin: 0 0 6px; }
+.rooms-initial-prompt-editor textarea {
+  width: 100%; box-sizing: border-box;
+  font-family: ui-monospace, monospace;
+  font-size: 10px; line-height: 1.5;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: 6px 8px;
+  resize: vertical;
+  min-height: 180px;
+}
+
+/* Generate (split) button row in the New-room form */
+.rooms-prompt-actions {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
+}
+.rooms-prompt-actions small { font-size: 10px; }
+
+/* Empty-room state — amber-tinted, pulsing construction icon. The
+   button is bigger than the regular dice and has a halo pulse so it
+   reads as "click here next" rather than a passive settings button. */
+.room-preview-gear-empty {
+  background: rgba(255, 216, 74, 0.22);
+  border-color: #ffd84a;
+  color: #ffd84a;
+  width: 38px; height: 38px;
+  font-size: 18px;
+  animation: room-preview-gear-pulse 1.7s ease-in-out infinite;
+}
+.room-preview-gear-empty:hover {
+  background: rgba(255, 216, 74, 0.45);
+  animation: none;
+}
+@keyframes room-preview-gear-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(255, 216, 74, 0.65); }
+  70%  { box-shadow: 0 0 0 14px rgba(255, 216, 74, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(255, 216, 74, 0); }
+}
+
+/* TransformControls mode toolbar — shows top-right of the 3D canvas
+   when a prop is selected. Three icon buttons + keyboard hint. */
+.room-preview-transform-toolbar {
+  position: absolute;
+  top: 8px; right: 8px;
+  z-index: 6;
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 6px;
+  background: rgba(20, 20, 23, 0.78);
+  border: 1.5px solid var(--ink);
+  box-shadow: 2px 2px 0 var(--transmit);
+  backdrop-filter: blur(2px);
+  color: #f5f1e6;
+}
+.room-preview-transform-btn {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 1px solid #6a4a32;
+  color: #f5f1e6;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.room-preview-transform-btn:hover { background: rgba(255,216,74,0.18); }
+.room-preview-transform-btn.active {
+  background: #ffd84a; color: #1a1a1d;
+  border-color: #ffd84a;
+}
+.room-preview-transform-hint {
+  font-size: 9px; opacity: .65;
+  margin-left: 4px; max-width: 120px;
+  font-family: ui-monospace, monospace;
+}
+
+/* Apply-palette button row in the inline palette panel */
+.room-mockup-palette-actions {
+  padding: 4px 10px 6px;
+  border-top: 1px dashed rgba(0,0,0,.15);
+}
+
+/* Room sidebar card — concept-image thumbnail (square cell). */
+.room-card-thumb {
+  width: 56px; height: 56px;
+  border: 1.5px solid var(--ink);
+  background: #1a1a1d;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.room-card-thumb img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* "Props" tab on the 3D layout's top-right corner. */
+.room-preview-props-tab {
+  position: absolute;
+  top: 8px; right: 48px;
+  z-index: 7;
+  padding: 4px 12px;
+  border: 1.5px solid var(--ink);
+  background: rgba(20, 20, 23, 0.78);
+  color: #f5f1e6;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  cursor: pointer;
+  backdrop-filter: blur(2px);
+}
+.room-preview-props-tab:hover { background: rgba(255, 216, 74, 0.25); }
+.room-preview-props-tab.active {
+  background: #ffd84a; color: #1a1a1d; border-color: #ffd84a;
+}
+
+/* Side drawer that slides in from the right of the 3D preview canvas. */
+.room-prop-library {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  z-index: 6;
+  width: 300px;
+  display: flex; flex-direction: column;
+  background: var(--paper);
+  border-left: 1.5px solid var(--ink);
+  box-shadow: -3px 0 0 var(--transmit);
+  animation: room-prop-library-slide 0.18s ease-out;
+}
+@keyframes room-prop-library-slide {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.room-prop-library header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.room-prop-library h3 {
+  margin: 0;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+  display: flex; align-items: baseline; gap: 6px;
+}
+.room-prop-library h3 small { font-weight: 500; }
+.room-prop-library-help {
+  margin: 0; padding: 6px 10px;
+  font-size: 10px; line-height: 1.4;
+  border-bottom: 1px dashed rgba(0,0,0,.15);
+}
+.room-prop-library-list {
+  list-style: none; margin: 0; padding: 4px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.room-prop-library-empty { padding: 12px; font-size: 11px; }
+.room-prop-library-card {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid rgba(0,0,0,.15);
+  background: var(--paper);
+  cursor: grab;
+  user-select: none;
+}
+.room-prop-library-card:hover { background: var(--paper-2); border-color: var(--ink); }
+.room-prop-library-card:active { cursor: grabbing; }
+.room-prop-library-thumb {
+  width: 56px; height: 56px;
+  border: 1px solid var(--ink);
+  background: var(--paper-2);
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.room-prop-library-thumb img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.room-prop-library-thumb-fallback {
+  font-family: var(--font-display); font-weight: 800;
+  font-size: 13px; letter-spacing: .06em;
+  opacity: .5;
+}
+.room-prop-library-body { min-width: 0; }
+.room-prop-library-id {
+  font-family: ui-monospace, monospace;
+  font-size: 10px; font-weight: 700;
+  word-break: break-word;
+}
+.room-prop-library-kind {
+  display: inline-block;
+  font-family: ui-monospace, monospace;
+  font-size: 8px; text-transform: lowercase;
+  border: 1px solid var(--ink);
+  padding: 0 4px;
+  margin-top: 2px;
+}
+.room-prop-library-prompt {
+  margin: 3px 0 0;
+  font-size: 9px; line-height: 1.35;
+  opacity: .75;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Top-right Props tab + slide-over panel.
+   Panel overlays the page (absolute) instead of pushing layout left.
+   The tab sits in the top-right corner of the rooms-page; same
+   visual language as the woid global sidebar reopen affordance. */
+.rooms-page-right {
+  /* Span the full vertical extent of the rooms-page so the absolute
+     panel inside can anchor top:0 / bottom:0 and actually have height. */
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 320px;  /* used only to anchor the panel's right edge correctly */
+  pointer-events: none;
+  z-index: 8;
+}
+/* Vertically-centred tab on the page's right edge, mirroring the
+   woid global sidebar's collapsed-state pull-tab. Vertical "PROPS"
+   label + arrow glyph that flips with open/closed state. */
+.rooms-page-right-tab {
+  pointer-events: auto;
+  position: absolute;
+  top: 50%; right: 0;
+  transform: translateY(-50%);
+  width: 22px; min-height: 110px;
+  padding: 8px 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 8px;
+  border: 1.5px solid var(--ink);
+  border-right: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: -2px 2px 0 var(--ink);
+  z-index: 2;  /* sit above the panel so it's always grabbable */
+  transition: background .08s ease, right .18s ease-out;
+}
+.rooms-page-right-tab:hover { background: var(--paper-2); }
+.rooms-page-right-tab.active {
+  background: #ffd84a;
+  color: #1a1a1d;
+  /* Slide to the panel's left edge — wrapper is 320px wide and the
+     tab itself is 22px, so right:298px sits the tab flush against
+     the panel's outer-left border like a pull-handle. */
+  right: 298px;
+}
+.rooms-page-right-tab .rooms-page-right-tab-arrow {
+  font-family: var(--font-mono);
+  font-size: 16px; line-height: 1;
+}
+.rooms-page-right-tab .rooms-page-right-tab-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+.rooms-page-right-panel {
+  pointer-events: auto;
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 320px;
+  display: flex; flex-direction: column;
+  background: var(--paper);
+  border-left: 1.5px solid var(--ink);
+  box-shadow: -3px 0 0 var(--transmit);
+  animation: rooms-page-right-slide .18s ease-out;
+  z-index: 1;
+}
+@keyframes rooms-page-right-slide {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.rooms-page-right-panel header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.rooms-page-right-panel h3 {
+  margin: 0;
+  font-family: var(--font-display); font-stretch: 75%; font-weight: 800;
+  font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+  display: flex; align-items: baseline; gap: 6px;
+}
+.rooms-page-right-panel h3 small { font-weight: 500; }
+
+/* Icon-only mini buttons used by the props sidebar (gen/regen/delete).
+   Use the same flat-shadow + translate-on-hover language as .npcs-btn
+   so they read as proper buttons rather than text glyphs. */
+.npcs-btn.icon {
+  width: 26px; height: 26px;
+  padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; line-height: 1;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: 1.5px 1.5px 0 var(--transmit);
+  transition: transform .08s ease, box-shadow .08s ease, background .08s ease;
+}
+.npcs-btn.icon:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 2.5px 2.5px 0 var(--transmit);
+  background: var(--paper-2);
+}
+.npcs-btn.icon:active:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: 0 0 0 var(--transmit);
+}
+.npcs-btn.icon:disabled {
+  opacity: .55; cursor: not-allowed;
+  box-shadow: 1px 1px 0 var(--transmit);
+}
+.npcs-btn.icon.primary {
+  background: #ffd84a;
+  box-shadow: 1.5px 1.5px 0 var(--ink);
+}
+.npcs-btn.icon.primary:hover:not(:disabled) {
+  background: #ffe278;
+  box-shadow: 2.5px 2.5px 0 var(--ink);
+}
+.npcs-btn.icon.danger { background: rgba(168, 74, 58, .14); }
+.npcs-btn.icon.danger:hover:not(:disabled) {
+  background: rgba(168, 74, 58, .35);
+}
+.room-props-item-actions { gap: 3px; justify-content: space-between; }
+/* Push trash button to the far right so it can't be accidentally
+   tapped while reaching for gen/regen on the left. */
+.room-props-item-actions .npcs-btn.icon.danger { margin-left: auto; }
+
+/* Inline-edit input/textarea inside props sidebar items. */
+.room-props-item-input {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: 10px; line-height: 1.4;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  padding: 3px 5px;
+  resize: vertical;
+}
+.room-props-item-input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--transmit); }

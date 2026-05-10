@@ -24,7 +24,7 @@ import { resolveSchedule } from './schedules.js'
  * across stations without colliding.
  */
 
-export const WALK_DURATION_MIN = 5    // sim minutes — feels like 5 real seconds
+export const WALK_DURATION_MIN = 1.7   // sim minutes — ~1.7 real seconds, ~3× faster than the previous 5
 // Pacing — intra-room idle wandering. Agents in a steady state
 // (rest/work/social) alternate between a `moving` phase (PACE_DURATION_MIN
 // sim minutes lerping to a fresh in-room waypoint) and a `resting` phase
@@ -97,7 +97,16 @@ const STEADY_STATES = new Set(['rest', 'work', 'social'])
  * Pure function; the caller writes the patch back via the store.
  */
 export function resolveAgentState(agent, simMinutes) {
-  const slot = resolveSchedule(agent.scheduleId, simMinutes)
+  const baseSlot = resolveSchedule(agent.scheduleId, simMinutes)
+  // Manual assignment override (decision 2a): a manually-assigned
+  // worker stays at the assigned room 24/7 — no rest, no social
+  // wandering. Synthesises a `work` slot at the manual room so the
+  // rest of the resolver doesn't need a special branch. Schedule
+  // applies only when manualAssignment is null.
+  const manualRoom = agent.manualAssignment?.roomId ?? null
+  const slot = manualRoom
+    ? { from: 0, action: 'work', roomId: manualRoom }
+    : baseSlot
   const inRoom = agent.assignment?.roomId ?? null
 
   if (inRoom === null) {
