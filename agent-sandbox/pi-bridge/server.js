@@ -6884,6 +6884,29 @@ function slugifyPropId(s) {
   return out && /^[a-z0-9]/.test(out) ? out : "";
 }
 
+// Canonical zones the LLM may use for spatial placement. Each one maps
+// deterministically to coordinates in placeFromZones() — that's the
+// whole point of the structured-plan approach: the LLM commits to a
+// zone, the bridge renders coordinates. Stack semantics ("on:<id>",
+// "tucked-under:<id>") are also accepted and resolved by base prop.
+const KNOWN_ZONES = new Set([
+  "back-wall-left", "back-wall-center", "back-wall-right",
+  "side-wall-left", "side-wall-right",
+  "floor-left", "floor-center", "floor-right",
+  "ceiling-center",
+]);
+
+function normalizeZone(zone) {
+  if (typeof zone !== "string") return null;
+  const z = zone.trim().toLowerCase();
+  if (KNOWN_ZONES.has(z)) return z;
+  if (z.startsWith("on:") || z.startsWith("tucked-under:")) {
+    const targetId = slugifyPropId(z.split(":")[1]);
+    if (targetId) return z.startsWith("on:") ? `on:${targetId}` : `tucked-under:${targetId}`;
+  }
+  return null;
+}
+
 /** Slugify + dedupe + clean an LLM-emitted proposed_props array. */
 function normalizeProposedProps(raw) {
   if (!Array.isArray(raw)) return [];
@@ -6901,10 +6924,164 @@ function normalizeProposedProps(raw) {
     const prompt = (typeof p.prompt === "string" && p.prompt.trim())
       ? p.prompt.trim().slice(0, 300)
       : id.replace(/-/g, " ");
-    out.push({ id, kind, prompt });
+    const zone = normalizeZone(p.zone);
+    const orientation = typeof p.orientation === "string"
+      ? p.orientation.trim().toLowerCase().slice(0, 32)
+      : null;
+    const sh = p.size_hint || p.sizeHint;
+    const sizeHint = sh && typeof sh === "object"
+      ? {
+          w: clampNum(sh.w, 0.02, 10, null),
+          h: clampNum(sh.h, 0.02, 10, null),
+          d: clampNum(sh.d, 0.02, 10, null),
+        }
+      : null;
+    const entry = { id, kind, prompt };
+    if (zone) entry.zone = zone;
+    if (orientation) entry.orientation = orientation;
+    if (sizeHint && sizeHint.w && sizeHint.h && sizeHint.d) entry.sizeHint = sizeHint;
+    out.push(entry);
   }
   return out;
 }
+
+/**
+ * Deterministically place props from a zoned proposed_props list.
+ * No LLM call: turns each prop's zone into x/y/z + rotation_y. Stack
+ * relationships (on:X, tucked-under:X) are resolved after their base
+ * is placed — order-independent within a single pass since we resolve
+ * floor/wall/ceiling first, then stacks.
+ *
+ * Returns the same shape reconcileWithProposedProps would, so the
+ * caller can drop into the from-prompt path unchanged.
+ */
+function placeFromZones(proposedProps, dimensions) {
+  const { width: W, depth: D, height: H } = dimensions;
+  const propsById = new Map();
+  // Pass 1: ground/wall/ceiling props — anything not stacking on another
+  // prop. Group by zone to spread within the zone.
+  const byZone = new Map();
+  const stacked = [];
+  for (const pp of proposedProps) {
+    if (!pp.zone) continue;
+    if (pp.zone.startsWith("on:") || pp.zone.startsWith("tucked-under:")) {
+      stacked.push(pp); continue;
+    }
+    const list = byZone.get(pp.zone) || []; list.push(pp); byZone.set(pp.zone, list);
+  }
+
+  function size(pp) {
+    if (pp.sizeHint && pp.sizeHint.w && pp.sizeHint.h && pp.sizeHint.d) {
+      return { w: pp.sizeHint.w, h: pp.sizeHint.h, d: pp.sizeHint.d };
+    }
+    return { ...kindDefaultSize(pp.kind) };
+  }
+
+  function rotateForOrient(pp, fallback = 0) {
+    if (!pp.orientation) return fallback;
+    if (pp.orientation === "faces-front" || pp.orientation === "faces-south") return 0;
+    if (pp.orientation === "faces-back" || pp.orientation === "faces-north") return Math.PI;
+    if (pp.orientation === "faces-left" || pp.orientation === "faces-west") return Math.PI / 2;
+    if (pp.orientation === "faces-right" || pp.orientation === "faces-east") return -Math.PI / 2;
+    return fallback;
+  }
+
+  function placeRow(zoneList, anchorX, anchorZ, axis = "x") {
+    // Distribute along given axis. anchorX/Z are the row centre.
+    const n = zoneList.length;
+    const span = axis === "x" ? Math.min(W * 0.8, n * 1.2) : Math.min(D * 0.6, n * 0.8);
+    const step = n > 1 ? span / (n - 1) : 0;
+    const start = -span / 2;
+    zoneList.forEach((pp, i) => {
+      const off = n > 1 ? start + i * step : 0;
+      const sz = size(pp);
+      let x = anchorX, z = anchorZ;
+      if (axis === "x") x = anchorX + off; else z = anchorZ + off;
+      // Push thin wall-flush props against the wall: the prop's depth
+      // axis is its thickness, so the centre sits half-thickness away
+      // from the wall plane.
+      if (pp.zone === "back-wall-left" || pp.zone === "back-wall-center" || pp.zone === "back-wall-right") {
+        z = -D / 2 + sz.d / 2;
+      } else if (pp.zone === "side-wall-left") {
+        x = -W / 2 + sz.w / 2;
+      } else if (pp.zone === "side-wall-right") {
+        x = W / 2 - sz.w / 2;
+      } else if (pp.zone === "ceiling-center") {
+        // y will be set below
+      }
+      let y = 0;
+      if (pp.zone === "ceiling-center") y = H - sz.h;
+      // Wall-mounted high props (window, art, sign) raise off the floor
+      else if (pp.zone.startsWith("back-wall") && (pp.kind === "art" || pp.kind === "sign" || pp.kind === "window" || pp.kind === "fixture")) {
+        y = Math.max(0, Math.min(H - sz.h, 1.4));
+      }
+      const placed = {
+        id: pp.id,
+        kind: pp.kind,
+        prompt: pp.prompt,
+        position: { x: round3(x), y: round3(y), z: round3(z) },
+        rotation_y: round3(rotateForOrient(pp)),
+        size: sz,
+        materials: [],
+      };
+      propsById.set(pp.id, placed);
+    });
+  }
+
+  // Anchors per zone — back wall row is centred near z = -D/2; floor
+  // rows sit near z = 0 (mid-room).
+  placeRow(byZone.get("back-wall-left") || [], -W / 3, -D / 2, "x");
+  placeRow(byZone.get("back-wall-center") || [], 0, -D / 2, "x");
+  placeRow(byZone.get("back-wall-right") || [], +W / 3, -D / 2, "x");
+  placeRow(byZone.get("side-wall-left") || [], -W / 2, 0, "z");
+  placeRow(byZone.get("side-wall-right") || [], +W / 2, 0, "z");
+  placeRow(byZone.get("floor-left") || [], -W / 3, 0, "x");
+  placeRow(byZone.get("floor-center") || [], 0, 0, "x");
+  placeRow(byZone.get("floor-right") || [], +W / 3, 0, "x");
+  placeRow(byZone.get("ceiling-center") || [], 0, 0, "x");
+
+  // Pass 2: stacked props. y = base.y + base.h; x/z within base footprint
+  // (centred unless multiple stack on same base, then spread along x).
+  const onWho = new Map();
+  for (const pp of stacked) {
+    const targetId = pp.zone.split(":")[1];
+    const list = onWho.get(targetId) || []; list.push(pp); onWho.set(targetId, list);
+  }
+  for (const [targetId, list] of onWho) {
+    const base = propsById.get(targetId);
+    if (!base) {
+      // Base wasn't placed — fall back to floor centre.
+      placeRow(list.map((pp) => ({ ...pp, zone: "floor-center" })), 0, 0, "x");
+      continue;
+    }
+    const baseTop = base.position.y + base.size.h;
+    list.forEach((pp, i) => {
+      const sz = size(pp);
+      const span = base.size.w * 0.7;
+      const step = list.length > 1 ? span / (list.length - 1) : 0;
+      const off = list.length > 1 ? -span / 2 + i * step : 0;
+      const isUnder = pp.zone.startsWith("tucked-under:");
+      const placed = {
+        id: pp.id,
+        kind: pp.kind,
+        prompt: pp.prompt,
+        position: {
+          x: round3(base.position.x + off),
+          y: isUnder ? 0 : round3(baseTop),
+          z: round3(base.position.z + (isUnder ? base.size.d * 0.3 : 0)),
+        },
+        rotation_y: round3(rotateForOrient(pp, base.rotation_y)),
+        size: sz,
+        materials: [],
+      };
+      propsById.set(pp.id, placed);
+    });
+  }
+
+  return Array.from(propsById.values());
+}
+
+function round3(n) { return Math.round(n * 1000) / 1000; }
 
 /**
  * Reconcile the LLM-emitted positioned props against the canonical
@@ -7607,7 +7784,14 @@ const INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT = [
   '  "flux_prompt": "<single FLUX text-to-image prompt, ~40-80 words. Describe a wide 3/4 angle interior shot — materials, lighting, atmosphere. Crucially, the prompt must visually describe EVERY prop in proposed_props so the rendered mockup contains them all. Photorealistic. No people. No text labels.>",',
   '  "palette": { "wall": "#hex", "floor": "#hex", "accent": "#hex", "ceiling": "#hex", "trim": "#hex" },',
   '  "proposed_props": [',
-  '    { "id": "<slug>", "kind": "desk"|"chair"|"table"|"cabinet"|"shelf"|"monitor"|"lamp"|"plant"|"art"|"sign"|"rug"|"door"|"window"|"partition"|"machine"|"fixture"|"misc", "prompt": "<concise visual description, 6-15 words>" }',
+  '    {',
+  '      "id": "<slug>",',
+  '      "kind": "desk"|"chair"|"table"|"cabinet"|"shelf"|"monitor"|"lamp"|"plant"|"art"|"sign"|"rug"|"door"|"window"|"partition"|"machine"|"fixture"|"misc",',
+  '      "prompt": "<concise visual description, 6-15 words>",',
+  '      "zone": "<one of: back-wall-left, back-wall-center, back-wall-right, side-wall-left, side-wall-right, floor-left, floor-center, floor-right, ceiling-center, on:<otherPropId>, tucked-under:<otherPropId>>",',
+  '      "orientation": "<one of: faces-front, faces-back, faces-left, faces-right>",',
+  '      "size_hint": { "w": <metres>, "h": <metres>, "d": <metres> }',
+  '    }',
   '  ]',
   "}",
   "",
@@ -7637,6 +7821,50 @@ const INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT = [
   "- proposed_props: 3-8 props for small rooms, up to 12 for big ones.",
   "  Each must be a distinct piece of furniture or fixture, with a slug",
   "  id (lowercase, dashes) unique within the room.",
+  "- EVERY prop MUST include `zone` and `orientation`. The downstream",
+  "  layout step turns zones into precise 3D coordinates — there is no",
+  "  second LLM pass for placement. Choose the zone that best matches",
+  "  what the flux_prompt describes for that prop.",
+  "- Zone semantics:",
+  "    · back-wall-left / -center / -right: prop sits against the back",
+  "      wall (z = -depth/2). Use for desks lined up against the back,",
+  "      counters, credenzas, mailboxes, art on the back wall.",
+  "    · side-wall-left / -right: prop against the left or right wall.",
+  "    · floor-left / -center / -right: free-standing on the floor away",
+  "      from walls (chair pulled into the centre, plant in the middle,",
+  "      central pedestal, rug).",
+  "    · ceiling-center: ceiling fixture (fluorescent panel, pendant).",
+  "    · on:<otherId>: prop sits ON another prop (monitor on desk,",
+  "      microwave on counter, bell on counter, lamp on table).",
+  "    · tucked-under:<otherId>: prop tucks UNDER another (chair under",
+  "      desk).",
+  "- The flux_prompt MUST verbally describe the same arrangement the",
+  "  zones encode (left to right, what's on the back wall, what's on",
+  "  what). The image and the layout will then describe ONE room.",
+  "- size_hint: REQUIRED. Realistic axis-aligned bounding box in metres.",
+  "  Pick numbers that match what you wrote in `prompt`. Examples (mix",
+  "  and match — adjust if your prompt suggests different):",
+  "    desk:           1.2 × 0.75 × 0.7",
+  "    reception counter: 1.6–2.5 × 1.0 × 0.6 (long, waist-high)",
+  "    chair:          0.55 × 1.05 × 0.55  (task chair)",
+  "    couch:          1.8 × 0.85 × 0.9",
+  "    crt monitor:    0.5 × 0.45 × 0.45",
+  "    flat monitor:   0.55 × 0.4 × 0.08",
+  "    keyboard:       0.45 × 0.04 × 0.15",
+  "    desk lamp:      0.2 × 0.5 × 0.2",
+  "    fluorescent panel (ceiling): 1.2 × 0.05 × 0.4",
+  "    book / pen tray: 0.25 × 0.05 × 0.15",
+  "    service bell:   0.1 × 0.15 × 0.1",
+  "    plant (floor):  0.45 × 1.0 × 0.45",
+  "    plant (table):  0.25 × 0.4 × 0.25",
+  "    cabinet:        0.6 × 1.4 × 0.45",
+  "    credenza:       1.5 × 0.8 × 0.45",
+  "    door:           0.9 × 2.1 × 0.05",
+  "    window:         1.5 × 1.2 × 0.05",
+  "    painting / sign:0.6 × 0.8 × 0.05",
+  "    rug:            1.6 × 0.02 × 1.0",
+  "    fern in pot:    0.4 × 0.7 × 0.4",
+  "  When in doubt, eyeball the actual object's real-world size.",
   "- The flux_prompt MUST mention every proposed prop (by description,",
   "  not colour) so the rendered image contains them. The list and the",
   "  picture must agree on what's there, even though colour comes from",
@@ -7900,6 +8128,44 @@ app.post(
       if (!fluxPrompt) throw new Error("layout has no fluxPrompt to layout from");
 
       const proposedProps = Array.isArray(layout.proposedProps) ? layout.proposedProps : [];
+
+      // Fast path: every proposed prop has a zone → no LLM call needed.
+      // Bridge translates zones to coordinates deterministically. This
+      // is how new (post-2026-05-10) rooms work; older rooms without
+      // zones fall through to the LLM placement path below.
+      const allZoned = proposedProps.length > 0
+        && proposedProps.every((p) => typeof p.zone === "string" && p.zone.trim());
+      if (allZoned) {
+        send("stage", { stage: "placing", message: "translating zones to coordinates" });
+        // Pick room dimensions from prop count: more props → wider room.
+        const propCount = proposedProps.length;
+        const dimensions = {
+          width: clampNum(5 + Math.floor(propCount / 3) * 0.8, 4, 10, 6),
+          depth: clampNum(3 + Math.floor(propCount / 5) * 0.4, 3, 5, 3.5),
+          height: 2.7,
+        };
+        const placed = placeFromZones(proposedProps, dimensions);
+        const merged = {
+          ...layout,
+          id: roomId,
+          dimensions,
+          props: placed,
+          placedFrom: "zones",
+        };
+        send("stage", { stage: "validating", message: "checking schema + bounds" });
+        sanityCheckLayout(merged, roomId);
+        writeFileSync(layoutPath, JSON.stringify(merged, null, 2));
+        apiQuota.recordSuccess();
+        send("done", {
+          roomId,
+          propCount: merged.props.length,
+          url: `${PUBLIC_BRIDGE_URL}/rooms/${roomId}/layout`,
+          placedFrom: "zones",
+        });
+        return res.end();
+      }
+
+      // Legacy LLM placement path (rooms whose proposed_props lack zones).
       const proposedBlock = proposedProps.length
         ? [
             "",

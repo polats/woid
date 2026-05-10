@@ -38,9 +38,11 @@ async function consumeSse(res) {
   return { donePayload, errorMsg }
 }
 
-async function ensureImage(propId, prompt, roomId) {
-  const state = await (await fetch(`${BRIDGE}/props/${propId}/state`)).json()
-  if (state.hasImage) return { ok: true, cached: true }
+async function ensureImage(propId, prompt, roomId, { force = false } = {}) {
+  if (!force) {
+    const state = await (await fetch(`${BRIDGE}/props/${propId}/state`)).json()
+    if (state.hasImage) return { ok: true, cached: true }
+  }
   const r = await fetch(`${BRIDGE}/props/${propId}/image/generate/stream`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt, roomId }),
@@ -49,15 +51,17 @@ async function ensureImage(propId, prompt, roomId) {
   return { ok: !!donePayload, error: errorMsg }
 }
 
-async function ensureModel(propId) {
-  const state = await (await fetch(`${BRIDGE}/props/${propId}/state`)).json()
-  if (state.hasModel) return { ok: true, cached: true }
+async function ensureModel(propId, { force = false } = {}) {
+  if (!force) {
+    const state = await (await fetch(`${BRIDGE}/props/${propId}/state`)).json()
+    if (state.hasModel) return { ok: true, cached: true }
+  }
   const r = await fetch(`${BRIDGE}/props/${propId}/model/generate/stream`, { method: 'POST' })
   const { donePayload, errorMsg } = await consumeSse(r)
   return { ok: !!donePayload, error: errorMsg }
 }
 
-async function generateForRoom(roomId) {
+async function generateForRoom(roomId, opts = {}) {
   const lr = await fetch(`${BRIDGE}/rooms/${roomId}/layout`)
   if (!lr.ok) { console.log(`  ! ${roomId}: no layout`); return }
   const layout = (await lr.json()).layout
@@ -65,11 +69,11 @@ async function generateForRoom(roomId) {
   console.log(`\n=== ${roomId} (${props.length} props) ===`)
   for (const p of props) {
     process.stdout.write(`  ${p.id.padEnd(28)} `)
-    const img = await ensureImage(p.id, p.prompt, roomId)
+    const img = await ensureImage(p.id, p.prompt, roomId, opts)
     if (!img.ok) { console.log(`img✗ ${img.error}`); continue }
     process.stdout.write(`img${img.cached ? '·' : '✓'} `)
     const t0 = Date.now()
-    const mdl = await ensureModel(p.id)
+    const mdl = await ensureModel(p.id, opts)
     if (!mdl.ok) { console.log(`mdl✗ ${mdl.error}`); continue }
     console.log(`mdl${mdl.cached ? '·' : '✓'} (${((Date.now()-t0)/1000).toFixed(1)}s)`)
     await sleep(1000)
@@ -77,12 +81,14 @@ async function generateForRoom(roomId) {
 }
 
 ;(async () => {
-  let roomIds = process.argv.slice(2)
+  const args = process.argv.slice(2)
+  const force = args.includes('--force')
+  let roomIds = args.filter((a) => !a.startsWith('--'))
   if (!roomIds.length) {
     const r = await (await fetch(`${BRIDGE}/room-layouts`)).json()
     roomIds = r.rooms.filter((x) => x.id.startsWith('e2e-v3-') && x.propCount > 0).map((x) => x.id)
   }
-  console.log(`[glb] generating for ${roomIds.length} rooms`)
-  for (const id of roomIds) await generateForRoom(id)
+  console.log(`[glb] generating for ${roomIds.length} rooms (force=${force})`)
+  for (const id of roomIds) await generateForRoom(id, { force })
   console.log('\n[glb] done')
 })().catch((err) => { console.error('[glb] fatal:', err); process.exit(1) })

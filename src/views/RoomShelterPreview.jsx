@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { buildGrayBox, frameCamera } from '../lib/grayBoxBuilder.js'
 import {
   ROOM_LAYOUT_STATUS,
@@ -97,25 +98,94 @@ export default function RoomShelterPreview({ roomId, height = 480 }) {
       }
     }
 
-    // Avatar — sits on the floor near the front of the room, centred
-    // on x. Loaded async so the room renders immediately.
+    // ── Avatars walking around the room ─────────────────────────
+    // Spawn 1-3 avatars that wander between random waypoints so the
+    // room reads as inhabited space. Avoids touching the shelter's
+    // own avatar/animation systems — minimal local copy that just
+    // plays whatever clip the GLB ships with and lerps position.
     const draco = new DRACOLoader()
     draco.setDecoderPath('https://unpkg.com/three@0.184.0/examples/jsm/libs/draco/gltf/')
     const loader = new GLTFLoader().setDRACOLoader(draco)
-    let avatarRoot = null
+    const clock = new THREE.Clock()
+    const avatars = [] // { root, mixer, action, target, speed, baseY }
+
+    const dims = layout.dimensions
+    const margin = 0.5
+    function randomWaypoint() {
+      return new THREE.Vector3(
+        (Math.random() - 0.5) * (dims.width - margin * 2),
+        0,
+        (Math.random() - 0.5) * (dims.depth - margin * 2),
+      )
+    }
+
+    const AVATAR_COUNT = Math.min(3, Math.max(1, Math.floor(dims.width / 3)))
     loader.load('/avatar_animated.glb', (gltf) => {
-      const root = gltf.scene
-      const bbox = new THREE.Box3().setFromObject(root)
-      const size = bbox.getSize(new THREE.Vector3())
-      const scale = AVATAR_HEIGHT_M / Math.max(size.y, 0.01)
-      root.scale.setScalar(scale)
-      root.updateMatrixWorld(true)
-      const live = new THREE.Box3().setFromObject(root)
-      root.position.y = -live.min.y
-      root.position.z = layout.dimensions.depth / 2 - 0.8
-      avatarRoot = root
-      scene.add(root)
+      // Shared template — clone per avatar so each can move and animate
+      // independently. SkeletonUtils would be needed for true skinned
+      // duplicates; the existing avatar GLB happens to clone reasonably
+      // for our purposes since it's a simple rig.
+      // Compute scale + foot-offset from the template ONCE so each
+      // clone starts from the same reference. Computing per-clone
+      // makes scales compound when clones reuse shared transforms.
+      const tmplBbox = new THREE.Box3().setFromObject(gltf.scene)
+      const tmplSize = tmplBbox.getSize(new THREE.Vector3())
+      const tmplScale = AVATAR_HEIGHT_M / Math.max(tmplSize.y, 0.01)
+
+      for (let i = 0; i < AVATAR_COUNT; i += 1) {
+        // SkeletonUtils.clone correctly clones skinned mesh + skeleton
+        // so each avatar can move/animate independently. Plain
+        // .clone(true) shares the skeleton and locks every clone at the
+        // template's pose/position.
+        const root = SkeletonUtils.clone(gltf.scene)
+        root.scale.setScalar(tmplScale)
+        root.updateMatrixWorld(true)
+        const live = new THREE.Box3().setFromObject(root)
+        const baseY = -live.min.y
+        const start = randomWaypoint()
+        root.position.set(start.x, baseY, start.z)
+        scene.add(root)
+        // Animation mixer — play the first clip the GLB ships with
+        // (typically idle or walk-cycle). If there are multiple clips,
+        // prefer one whose name suggests motion.
+        let mixer = null, action = null
+        if (gltf.animations?.length) {
+          const clips = gltf.animations
+          const walkClip = clips.find((c) => /walk|run|move/i.test(c.name)) || clips[0]
+          mixer = new THREE.AnimationMixer(root)
+          action = mixer.clipAction(walkClip)
+          action.play()
+        }
+        avatars.push({
+          root, mixer, action,
+          target: randomWaypoint(),
+          speed: 0.45 + Math.random() * 0.25,
+          baseY,
+          waitUntil: 0,
+        })
+      }
     })
+
+    function tickAvatars(dt) {
+      const now = performance.now() / 1000
+      for (const a of avatars) {
+        if (a.mixer) a.mixer.update(dt)
+        if (a.waitUntil > now) continue
+        const dx = a.target.x - a.root.position.x
+        const dz = a.target.z - a.root.position.z
+        const dist = Math.sqrt(dx * dx + dz * dz)
+        if (dist < 0.15) {
+          // Reached waypoint — pause briefly, then pick a new one.
+          a.target = randomWaypoint()
+          a.waitUntil = now + 0.4 + Math.random() * 1.2
+          continue
+        }
+        const step = Math.min(dist, a.speed * dt)
+        a.root.position.x += (dx / dist) * step
+        a.root.position.z += (dz / dist) * step
+        a.root.rotation.y = Math.atan2(dx, dz)
+      }
+    }
 
     // GLB swap: reuse the same approach as RoomPreview3D — when an
     // asset becomes ready, parent its scene under the prop wrapper so
@@ -147,8 +217,10 @@ export default function RoomShelterPreview({ roomId, height = 480 }) {
 
     let rafId = 0
     function loop() {
+      const dt = clock.getDelta()
       controls.update()
       syncGlbs()
+      tickAvatars(dt)
       renderer.render(scene, camera)
       rafId = requestAnimationFrame(loop)
     }
