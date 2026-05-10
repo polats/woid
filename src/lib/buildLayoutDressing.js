@@ -62,11 +62,12 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
     const sy = h / Math.max(layout.dimensions.height, 0.01)
     const sz = depth / Math.max(layout.dimensions.depth, 0.01)
     dressing.scale.set(sx, sy, sz)
-    // Centre vertically: shelter rooms have y=0 at vertical centre,
-    // y in [-h/2, +h/2]. Layouts have y=0 at floor, y in [0, height].
-    // Translate down so the layout's floor lines up with the cell's
-    // floor (y = -h/2 / sy in pre-scale local space).
-    dressing.position.y = -h / 2 / sy
+    // Shelter rooms have y=0 at vertical centre, y in [-h/2, +h/2].
+    // Layouts have y=0 at floor, y in [0, height]. Translate the
+    // dressing origin down to the cell's floor so layout y=0 sits on
+    // the shelter floor. Translation is in PARENT (group) space —
+    // do NOT divide by sy; sy only scales the dressing's children.
+    dressing.position.y = -h / 2
     const loader = getLoader()
     for (const prop of layout.props) {
       const wrapper = new THREE.Group()
