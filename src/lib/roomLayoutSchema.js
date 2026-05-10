@@ -72,9 +72,14 @@ export function validateLayout(input) {
     // moodboard inspiration). Layouts get a fluxPrompt at generation
     // time; static / migrated rooms may lack one.
     fluxPrompt: typeof input.fluxPrompt === 'string' ? input.fluxPrompt : '',
-    // Canonical prop list emitted by the initial-room flow. The
-    // layout-from-prompt step uses this as reference when placing
-    // props in 3D — keeps mockup image and layout in sync.
+    // Status flag — 'draft' (rooms editor only) vs 'added' (also in
+    // the shelter build menu). Default 'draft' but PRESERVE explicit
+    // 'added' across saves so editing an added room doesn't bounce
+    // it back to drafts.
+    status: input.status === 'added' ? 'added' : 'draft',
+    // Canonical prop list emitted by the initial-room flow. zone,
+    // orientation, sizeHint are passed through so the deterministic
+    // placeFromZones path keeps working after a save.
     proposedProps: Array.isArray(input.proposedProps)
       ? input.proposedProps
           .filter((p) => p && typeof p === 'object' && typeof p.id === 'string')
@@ -82,6 +87,9 @@ export function validateLayout(input) {
             id: p.id,
             kind: typeof p.kind === 'string' ? p.kind : 'misc',
             prompt: typeof p.prompt === 'string' ? p.prompt : '',
+            ...(typeof p.zone === 'string' ? { zone: p.zone } : {}),
+            ...(typeof p.orientation === 'string' ? { orientation: p.orientation } : {}),
+            ...(p.sizeHint && typeof p.sizeHint === 'object' ? { sizeHint: p.sizeHint } : {}),
           }))
       : [],
     props: [],

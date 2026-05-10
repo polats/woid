@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import config from '../config.js'
 import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
 import { formatSimTime, simDay, tickAgents } from '../lib/shelterStore/index.js'
+import { invalidateAllLayoutDressing } from '../lib/buildLayoutDressing.js'
 import { useTutorialHost } from '../hooks/useTutorialHost.js'
 import tutorialScripts from '../lib/tutorial/scripts.json'
 
@@ -189,8 +190,24 @@ export default function ShelterDebug() {
   const remove = (id) => store.removeAgent(id)
   const fastForward = () => { store.fastForward(60); tickAgents(store) }
   const dump = () => console.log('[shelter] snapshot', store.getSnapshot())
-  const clearAll = () => {
-    if (confirm('Clear all Shelter state? This wipes localStorage.')) store.clear()
+  const reset = () => {
+    if (!confirm(
+      'Reset shelter? This wipes localStorage (cash, xp, agents, '
+      + 'sim time, built rooms) AND re-fetches every room layout from '
+      + 'the bridge so edits made in the rooms editor are picked up.'
+    )) return
+    // Drop the in-memory layout cache so any next fetch is fresh.
+    invalidateAllLayoutDressing()
+    // Wipe player + sim state — store.clear writes a blank snapshot
+    // (simMinutes, cash, playerXp, agents, builtRooms all back to zero).
+    store.clear()
+    // ShelterStage3D's main effect (which fetches /shelter-layout.json
+    // and runs addLayoutDressing for the bundled rooms) only fires on
+    // mount, so a state-only reset would leave the bundled rooms with
+    // their old dressing. Reload the page to force a clean rebuild —
+    // localStorage is already wiped above so the player lands in a
+    // pristine state.
+    window.location.reload()
   }
 
   // ── Tutorial host ─────────────────────────────────────────────────
@@ -360,7 +377,12 @@ export default function ShelterDebug() {
           <div className="shelter-debug-actions">
             <button type="button" onClick={fastForward}>Fast-forward 1h</button>
             <button type="button" onClick={dump}>Dump JSON</button>
-            <button type="button" onClick={clearAll}>Clear all</button>
+            <button
+              type="button" onClick={reset}
+              title="Wipe player state + sim time, refresh room layouts from bridge"
+            >
+              Reset
+            </button>
           </div>
         </div>
       )}

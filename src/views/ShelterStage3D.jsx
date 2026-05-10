@@ -114,6 +114,10 @@ function buildShell(w, h, color, palette) {
   const floor = new THREE.MeshStandardMaterial({ color: floorHex, metalness: 0, roughness: 0.9 })
   const trim = new THREE.MeshStandardMaterial({ color: trimHex, metalness: 0.05, roughness: 0.7 })
   const ceiling = new THREE.MeshStandardMaterial({ color: ceilingHex, metalness: 0, roughness: 0.95 })
+  // Stash so an async palette repaint (addLayoutDressing → onPalette)
+  // can re-color the shell once the bridge layout's palette arrives,
+  // covering edits the user made in the rooms editor.
+  g.userData.shellMaterials = { wall, floor, trim, ceiling }
 
   const add = (geom, material, x, y, z) => {
     const m = new THREE.Mesh(geom, material)
@@ -195,15 +199,22 @@ function buildRoom(room, cellW, cellH) {
   // Generated rooms carry their palette on the placed-room entry —
   // prefer it over the static-catalogue lookup, which won't find them.
   const palette = room.palette ?? roomType?.palette
-  group.add(buildShell(w, h, room.color, palette))
+  const shell = buildShell(w, h, room.color, palette)
+  // Lift the shell's stashed materials onto the parent room group so
+  // addLayoutDressing's async palette repaint (driven by the bridge
+  // layout's palette) can find them — buildShell only stashes on its
+  // own sub-group.
+  group.userData.shellMaterials = shell.userData.shellMaterials
+  group.add(shell)
 
-  // Generated rooms (kind: 'generated' with a layoutId) load their
-  // prop GLBs from the bridge instead of using the static dressing
-  // catalogue. Fire-and-forget — placeholders fill the footprint
-  // until each GLB resolves.
-  if (room.kind === 'generated' && room.layoutId) {
-    addLayoutDressing(group, room.layoutId, w, h, ROOM_DEPTH)
-  }
+  // All rooms — generated and tutorial-bundled — load their dressing
+  // through addLayoutDressing(layoutId). Generated rooms carry the id
+  // explicitly; static rooms map 1:1 between room.id and layoutId on
+  // the bridge (created via scripts/migrate-room-layouts.mjs). Calls
+  // are fire-and-forget and a no-op when no layout exists, so
+  // unmigrated rooms simply render as empty cells.
+  const layoutId = room.kind === 'generated' ? room.layoutId : (room.type ?? room.id)
+  if (layoutId) addLayoutDressing(group, layoutId, w, h, ROOM_DEPTH)
 
   const lampColor = LAMP_COLORS[room.category] ?? 0xffd9a8
   // Furniture temporarily disabled so agents stand out clearly while

@@ -4,8 +4,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
-import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { buildGrayBox, frameCamera } from '../lib/grayBoxBuilder.js'
+import {
+  createCharacterRegistry,
+  createAvatarFactory,
+} from '../lib/shelterWorld/index.js'
+import config from '../config.js'
 import {
   ROOM_LAYOUT_STATUS,
   fetchLayout,
@@ -20,20 +24,27 @@ import {
 } from '../lib/roomAssetStore.js'
 
 /**
- * Shelter-style preview of a generated room — same gray-box + GLB
- * pipeline as RoomPreview3D, but with a single human-scale avatar
- * standing inside the room so we can sanity-check scale.
- *
- * Avatar is loaded from /avatar_animated.glb (already in /public). It
- * is normalised to ~1.7 m tall (real human scale) to match the room's
- * real-world metres. No animation is required for this preview — we
- * just want to see "does the room feel the right size for a person?".
+ * Shelter-style preview of a generated room with avatars walking
+ * around. Avatars are spawned via the SAME avatarFactory + character
+ * registry the shelter game uses, so any kimodo rig / mapping the
+ * receptionist (Edi) has applied to him in shelter is applied here
+ * too — letting the user A/B-compare a generated room against the
+ * shelter's render fidelity.
  *
  * Read-only: no TransformControls, no drag-drop, no editing. Camera is
- * a fixed iso framing. Use this from a route like /shelter-room/:id
- * to give the user a "view in shelter" affordance from the room editor.
+ * a fixed iso framing.
  */
+// Edi Schmid — the shelter's receptionist NPC. Hard-coded here for
+// the preview because we want a deterministic, recognisable character
+// that the user can compare against the shelter render.
+const EDI_PUBKEY = '7a887ac2f1dc8d8d81e1d19ae0372d616f0eed5ba76afc57b4aa1135af6eb2df'
+// Real-meter human height used to scale Edi up from the shelter's
+// dollhouse target (~0.5m) to match the room's real-world metres.
+// avatarFactory clamps to its own TARGET_HEIGHT internally; this
+// outer scale lifts the result back to human size.
 const AVATAR_HEIGHT_M = 1.7
+const SHELTER_AVATAR_HEIGHT_M = 0.5
+const AVATAR_UPSCALE = AVATAR_HEIGHT_M / SHELTER_AVATAR_HEIGHT_M
 
 export default function RoomShelterPreview({ roomId, height = 480 }) {
   const containerRef = useRef(null)
@@ -107,16 +118,18 @@ export default function RoomShelterPreview({ roomId, height = 480 }) {
       }
     }
 
-    // ── Avatars walking around the room ─────────────────────────
-    // Spawn 1-3 avatars that wander between random waypoints so the
-    // room reads as inhabited space. Avoids touching the shelter's
-    // own avatar/animation systems — minimal local copy that just
-    // plays whatever clip the GLB ships with and lerps position.
+    // ── Avatar — Edi via the shelter's avatarFactory ────────────
+    // Use the same avatarFactory + characterRegistry the shelter does
+    // so the preview renders Edi with whatever rig / mapping / idle
+    // motion the shelter applies. Lets the user A/B-compare a
+    // generated room against the shelter's avatar fidelity.
     const draco = new DRACOLoader()
     draco.setDecoderPath('https://unpkg.com/three@0.184.0/examples/jsm/libs/draco/gltf/')
     const loader = new GLTFLoader().setDRACOLoader(draco)
     const clock = new THREE.Clock()
-    const avatars = [] // { root, mixer, action, target, speed, baseY }
+    const avatars = [] // { wrapper, target, speed, waitUntil }
+    const registry = createCharacterRegistry({ bridgeUrl: config.agentSandbox?.bridgeUrl })
+    const factory = createAvatarFactory({ registry })
 
     const dims = layout.dimensions
     const margin = 0.5
@@ -128,71 +141,42 @@ export default function RoomShelterPreview({ roomId, height = 480 }) {
       )
     }
 
-    const AVATAR_COUNT = Math.min(3, Math.max(1, Math.floor(dims.width / 3)))
-    loader.load('/avatar_animated.glb', (gltf) => {
-      // Shared template — clone per avatar so each can move and animate
-      // independently. SkeletonUtils would be needed for true skinned
-      // duplicates; the existing avatar GLB happens to clone reasonably
-      // for our purposes since it's a simple rig.
-      // Compute scale + foot-offset from the template ONCE so each
-      // clone starts from the same reference. Computing per-clone
-      // makes scales compound when clones reuse shared transforms.
-      const tmplBbox = new THREE.Box3().setFromObject(gltf.scene)
-      const tmplSize = tmplBbox.getSize(new THREE.Vector3())
-      const tmplScale = AVATAR_HEIGHT_M / Math.max(tmplSize.y, 0.01)
+    factory.spawn(EDI_PUBKEY).then((handle) => {
+      // avatarFactory targets shelter dollhouse scale. Wrap in an
+      // outer Group scaled up to human size so Edi reads at 1.7m in
+      // the room's real-metres space.
+      const wrapper = new THREE.Group()
+      wrapper.scale.setScalar(AVATAR_UPSCALE)
+      wrapper.add(handle.object3d)
+      const start = randomWaypoint()
+      wrapper.position.set(start.x, 0, start.z)
+      scene.add(wrapper)
+      avatars.push({
+        wrapper,
+        target: randomWaypoint(),
+        speed: 0.6,
+        waitUntil: 0,
+      })
+    }).catch((err) => console.warn('[RoomShelterPreview] Edi spawn:', err))
 
-      for (let i = 0; i < AVATAR_COUNT; i += 1) {
-        // SkeletonUtils.clone correctly clones skinned mesh + skeleton
-        // so each avatar can move/animate independently. Plain
-        // .clone(true) shares the skeleton and locks every clone at the
-        // template's pose/position.
-        const root = SkeletonUtils.clone(gltf.scene)
-        root.scale.setScalar(tmplScale)
-        root.updateMatrixWorld(true)
-        const live = new THREE.Box3().setFromObject(root)
-        const baseY = -live.min.y
-        const start = randomWaypoint()
-        root.position.set(start.x, baseY, start.z)
-        scene.add(root)
-        // Animation mixer — play the first clip the GLB ships with
-        // (typically idle or walk-cycle). If there are multiple clips,
-        // prefer one whose name suggests motion.
-        let mixer = null, action = null
-        if (gltf.animations?.length) {
-          const clips = gltf.animations
-          const walkClip = clips.find((c) => /walk|run|move/i.test(c.name)) || clips[0]
-          mixer = new THREE.AnimationMixer(root)
-          action = mixer.clipAction(walkClip)
-          action.play()
-        }
-        avatars.push({
-          root, mixer, action,
-          target: randomWaypoint(),
-          speed: 0.45 + Math.random() * 0.25,
-          baseY,
-          waitUntil: 0,
-        })
-      }
-    })
-
-    function tickAvatars(dt) {
+    function tickAvatars(_dt) {
       const now = performance.now() / 1000
+      // Tick factory animators (kimodo motion + AnimationMixer).
+      try { factory.tick?.() } catch {}
       for (const a of avatars) {
-        if (a.mixer) a.mixer.update(dt)
         if (a.waitUntil > now) continue
-        const dx = a.target.x - a.root.position.x
-        const dz = a.target.z - a.root.position.z
+        const dx = a.target.x - a.wrapper.position.x
+        const dz = a.target.z - a.wrapper.position.z
         const dist = Math.sqrt(dx * dx + dz * dz)
         if (dist < 0.15) {
-          // Reached waypoint — pause briefly, then pick a new one.
           a.target = randomWaypoint()
           a.waitUntil = now + 0.4 + Math.random() * 1.2
           continue
         }
-        const step = Math.min(dist, a.speed * dt)
-        a.root.position.x += (dx / dist) * step
-        a.root.position.z += (dz / dist) * step
-        a.root.rotation.y = Math.atan2(dx, dz)
+        const step = Math.min(dist, a.speed * _dt)
+        a.wrapper.position.x += (dx / dist) * step
+        a.wrapper.position.z += (dz / dist) * step
+        a.wrapper.rotation.y = Math.atan2(dx, dz)
       }
     }
 
@@ -247,6 +231,8 @@ export default function RoomShelterPreview({ roomId, height = 480 }) {
 
     return () => {
       cancelAnimationFrame(rafId)
+      try { for (const a of avatars) a.factoryHandle?.dispose?.() } catch {}
+      try { registry.dispose?.() } catch {}
       ro.disconnect()
       controls.dispose()
       try { pmrem.dispose() } catch {}

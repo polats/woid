@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import RoomPreview3D from './RoomPreview3D.jsx'
 import Lightbox from '../components/Lightbox.jsx'
 import {
@@ -199,7 +199,20 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
   // failed so a single bad re-roll doesn't make the whole room
   // inaccessible. The badge shows "invalid" so the user knows.
   const layoutForRender = layoutEntry?.layout || layoutEntry?.rawLayout || null
-  const room = staticRoom || (layoutForRender ? roomFromLayout(layoutForRender) : null)
+  // For static rooms the bridge layout is the source of truth once it
+  // exists — overlay its palette / name / dimensions on top of the
+  // catalogue entry so palette swatches reflect saved edits instead of
+  // re-rendering the original ROOM_TYPES palette every time.
+  const room = staticRoom
+    ? (layoutForRender
+        ? {
+            ...staticRoom,
+            name: layoutForRender.name || staticRoom.name,
+            palette: layoutForRender.palette || staticRoom.palette,
+            dimensions: layoutForRender.dimensions || staticRoom.dimensions,
+          }
+        : staticRoom)
+    : (layoutForRender ? roomFromLayout(layoutForRender) : null)
 
   const summary = useMemo(
     () => (room ? summarizeRoom(room.id) : null),
@@ -475,23 +488,39 @@ function paletteEntries(palette) {
   return entries
 }
 
-function PaletteSwatch({ label, hex, onChange }) {
-  // Native color picker. The <input type="color"> doubles as the chip
-  // — we strip the browser's frame via CSS so it reads as a flat
-  // colour square. onChange fires when the picker closes (commit).
+function PaletteSwatch({ label, hex, onChange, pickingLabel, onArmPick }) {
+  // Native color picker. The <input type="color"> doubles as the chip;
+  // CSS strips the browser frame so it reads as a flat color square.
+  // Eyedropper: arms a pick mode that the mockup image listens to —
+  // implemented via canvas pixel sampling so it works on every browser
+  // (the native window.EyeDropper API isn't widely available yet).
+  const armed = pickingLabel === label
   return (
-    <label className="room-palette-swatch" title={`${label} ${hex} — click to change`}>
-      <input
-        type="color"
-        className="room-palette-chip"
-        value={normaliseHex(hex)}
-        onChange={(e) => onChange?.(label, e.target.value)}
-        disabled={!onChange}
-        aria-label={`${label} colour`}
-      />
-      <small>{label}</small>
-      <code>{hex}</code>
-    </label>
+    <div className="room-palette-swatch-row">
+      <label className="room-palette-swatch" title={`${label} ${hex} — click to change`}>
+        <input
+          type="color"
+          className="room-palette-chip"
+          value={normaliseHex(hex)}
+          onChange={(e) => onChange?.(label, e.target.value)}
+          disabled={!onChange}
+          aria-label={`${label} colour`}
+        />
+        <small>{label}</small>
+        <code>{hex}</code>
+      </label>
+      <button
+        type="button"
+        className={`room-palette-eyedropper${armed ? ' armed' : ''}`}
+        onClick={() => onArmPick?.(armed ? null : label)}
+        disabled={!onChange || !onArmPick}
+        title={armed ? 'Click the mockup to pick — click again to cancel' : 'Pick a colour from the mockup'}
+        aria-label={`Pick ${label} colour from mockup`}
+        aria-pressed={armed}
+      >
+        💧
+      </button>
+    </div>
   )
 }
 
@@ -688,6 +717,40 @@ function LayoutBadge({ entry }) {
 // ─── Concept image section ───────────────────────────────────────
 
 function ConceptSection({ roomId, layoutEntry, palette, onPaletteChange, onApplyPalette, layoutProviders, layoutProviderId, onLayoutProviderChange }) {
+  // Eyedropper: which palette slot is awaiting a pick. While set, the
+  // mockup img's click handler samples the clicked pixel from a hidden
+  // canvas (img drawn at naturalWidth/Height) and commits it.
+  const [pickingLabel, setPickingLabel] = useState(null)
+  const mockupImgRef = useRef(null)
+  const pickFromMockup = (e) => {
+    if (!pickingLabel) return
+    const img = mockupImgRef.current
+    if (!img?.complete || !img.naturalWidth) return
+    const rect = img.getBoundingClientRect()
+    const xRel = (e.clientX - rect.left) / rect.width
+    const yRel = (e.clientY - rect.top) / rect.height
+    if (xRel < 0 || xRel > 1 || yRel < 0 || yRel > 1) return
+    const c = document.createElement('canvas')
+    c.width = img.naturalWidth
+    c.height = img.naturalHeight
+    const ctx = c.getContext('2d')
+    try {
+      ctx.drawImage(img, 0, 0)
+      const { data } = ctx.getImageData(
+        Math.floor(xRel * img.naturalWidth),
+        Math.floor(yRel * img.naturalHeight),
+        1, 1,
+      )
+      const hex = '#' + [data[0], data[1], data[2]]
+        .map((v) => v.toString(16).padStart(2, '0')).join('')
+      onPaletteChange?.(pickingLabel, hex)
+    } catch (err) {
+      // CORS taint — fall back to a status nudge. Bridge already
+      // sends Access-Control-Allow-Origin so this is rare.
+      console.warn('[eyedropper] canvas read failed:', err?.message || err)
+    }
+    setPickingLabel(null)
+  }
   const layout = layoutEntry?.layout
   const fluxPrompt = layout?.fluxPrompt || ''
   const [busy, setBusy] = useState(false)
@@ -815,6 +878,8 @@ function ConceptSection({ roomId, layoutEntry, palette, onPaletteChange, onApply
                     label={label}
                     hex={hex}
                     onChange={onPaletteChange}
+                    pickingLabel={pickingLabel}
+                    onArmPick={setPickingLabel}
                   />
                 ))}
               </div>
@@ -848,16 +913,23 @@ function ConceptSection({ roomId, layoutEntry, palette, onPaletteChange, onApply
             {fluxPrompt && imageUrl ? (
               <button
                 type="button"
-                className="room-mockup-image-btn"
-                onClick={() => setLightboxOpen(true)}
-                title="Click to view full-size"
-                aria-label="Open mockup full-size"
+                className={`room-mockup-image-btn${pickingLabel ? ' picking' : ''}`}
+                onClick={(e) => {
+                  if (pickingLabel) { pickFromMockup(e); return }
+                  setLightboxOpen(true)
+                }}
+                title={pickingLabel
+                  ? `Click anywhere on the mockup to sample ${pickingLabel}`
+                  : 'Click to view full-size'}
+                aria-label={pickingLabel ? `Pick ${pickingLabel} from mockup` : 'Open mockup full-size'}
               >
                 <img
                   key={imageUrl}
+                  ref={mockupImgRef}
                   src={imageUrl}
                   alt="mockup"
-                  className="room-mockup-image"
+                  className={`room-mockup-image${pickingLabel ? ' picking' : ''}`}
+                  crossOrigin="anonymous"
                   onError={(e) => { e.currentTarget.style.display = 'none' }}
                 />
               </button>

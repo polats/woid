@@ -30,6 +30,10 @@ function getLoader() {
 }
 
 const layoutCache = new Map() // layoutId → Promise<layout>
+// Active room groups keyed by layoutId so saveLayout-driven changes
+// can repaint mounted shelter shells without a reload.
+const activeGroups = new Map() // layoutId → Set<{ group, w, h, depth }>
+
 function fetchLayoutOnce(layoutId) {
   if (!BRIDGE_URL || !layoutId) return Promise.resolve(null)
   if (layoutCache.has(layoutId)) return layoutCache.get(layoutId)
@@ -39,6 +43,15 @@ function fetchLayoutOnce(layoutId) {
     .catch(() => null)
   layoutCache.set(layoutId, p)
   return p
+}
+
+function applyShellPalette(group, palette) {
+  const mats = group.userData?.shellMaterials
+  if (!mats || !palette) return
+  if (palette.wall && mats.wall?.color) mats.wall.color.set(palette.wall)
+  if (palette.floor && mats.floor?.color) mats.floor.color.set(palette.floor)
+  if (palette.trim && mats.trim?.color) mats.trim.color.set(palette.trim)
+  if (palette.ceiling && mats.ceiling?.color) mats.ceiling.color.set(palette.ceiling)
 }
 
 /**
@@ -54,20 +67,27 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
   const dressing = new THREE.Group()
   dressing.name = `layout-dressing:${layoutId}`
   group.add(dressing)
+  // Track this mount so a saveLayout-driven repaint can find it.
+  if (!activeGroups.has(layoutId)) activeGroups.set(layoutId, new Set())
+  const entry = { group, w, h, depth }
+  activeGroups.get(layoutId).add(entry)
   // Defer until the layout fetch resolves; meanwhile the room shell is
   // already rendered, so the cell looks empty but valid.
   fetchLayoutOnce(layoutId).then((layout) => {
-    if (!layout?.props?.length) return
-    // Isotropic scale: pick the smallest axis fit so proportions are
-    // preserved. Anisotropic stretching squashed props (a desk would
-    // become longer than tall when sy < sz). Trade-off is unused
-    // floor area at the cell edges, which reads cleanly in the
-    // dollhouse view.
+    if (!layout) return
+    applyShellPalette(group, layout.palette)
+    if (!layout.props?.length) return
+    // Iso-scale x and z together (preserves the floor-plan proportions
+    // a desk's w/d ratio is real) by the smaller of the two fits, so
+    // the room's footprint fills the shelter cell. y is scaled
+    // independently to match the dollhouse's vertically-compressed
+    // shell — props squash on y the same way the room itself does, so
+    // the result looks consistent with the cell's aspect.
     const sx = w / Math.max(layout.dimensions.width, 0.01)
     const sy = h / Math.max(layout.dimensions.height, 0.01)
     const sz = depth / Math.max(layout.dimensions.depth, 0.01)
-    const s = Math.min(sx, sy, sz)
-    dressing.scale.set(s, s, s)
+    const sFloor = Math.min(sx, sz)
+    dressing.scale.set(sFloor, sy, sFloor)
     // Shelter rooms have y=0 at vertical centre, y in [-h/2, +h/2].
     // Layouts have y=0 at floor, y in [0, height]. Translate the
     // dressing origin down to the cell's floor so layout y=0 sits on
@@ -129,4 +149,30 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
 /** Invalidate the cached layout so a refresh re-fetches. */
 export function invalidateLayoutDressing(layoutId) {
   layoutCache.delete(layoutId)
+}
+
+/** Drop every cached layout — used by the shelter reset so any edits
+ *  the user made in the rooms editor are picked up on the next render. */
+export function invalidateAllLayoutDressing() {
+  layoutCache.clear()
+}
+
+/**
+ * Re-fetch the named layout and repaint every mounted shelter shell
+ * that uses it. Called by saveLayout in roomLayoutStore so palette
+ * changes in the rooms editor surface live in the shelter view.
+ *
+ * Currently only the shell palette is hot-swapped; prop dressing is
+ * left in place (rebuilding GLBs would flicker the scene). A future
+ * pass can also reconcile props if positions changed.
+ */
+export function refreshLayoutDressing(layoutId) {
+  if (!layoutId) return
+  layoutCache.delete(layoutId)
+  const set = activeGroups.get(layoutId)
+  if (!set || set.size === 0) return
+  fetchLayoutOnce(layoutId).then((layout) => {
+    if (!layout) return
+    for (const { group } of set) applyShellPalette(group, layout.palette)
+  })
 }

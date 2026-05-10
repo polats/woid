@@ -8951,6 +8951,25 @@ body.tutorial-hud-hidden .shelter-currency-hud {
 .room-palette-swatch code {
   font-size: 9px; opacity: .65;
 }
+.room-palette-swatch-row {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.room-palette-eyedropper {
+  background: var(--paper-2); border: 1px solid var(--ink);
+  width: 22px; height: 22px;
+  padding: 0;
+  font-size: 12px; line-height: 1;
+  cursor: pointer; opacity: .8;
+}
+.room-palette-eyedropper:hover { opacity: 1; background: var(--paper-1); }
+.room-palette-eyedropper:disabled { opacity: .35; cursor: not-allowed; }
+.room-palette-eyedropper.armed {
+  background: var(--transmit); color: #fff;
+  opacity: 1; outline: 2px solid var(--transmit); outline-offset: 1px;
+}
+.room-mockup-image.picking, .room-mockup-image-btn.picking .room-mockup-image {
+  cursor: crosshair !important;
+}
 
 /* Prop list */
 .room-prop-list {

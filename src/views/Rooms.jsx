@@ -38,19 +38,24 @@ export default function Rooms() {
   }
   useEffect(() => { refreshLayouts() }, [])
 
-  // Tab filter — drafts (in editor only) vs added (also surfaces in
-  // the shelter build menu). Static catalogue rooms have no status,
-  // so they show under both tabs.
-  const [statusTab, setStatusTab] = useState('drafts')
+  // Tab filter — three buckets:
+  //   built-in : tutorial-bundled rooms from the static ROOM_TYPES
+  //              catalogue (lobby, pattern-sorting, break-room).
+  //   drafts   : LLM-generated rooms whose status is not 'added'.
+  //   added    : LLM-generated rooms flagged 'added' (also visible in
+  //              the shelter build menu).
+  const [statusTab, setStatusTab] = useState('built-in')
 
   // Merge: bridge listing first (newest mtime first), then any static
   // rooms not yet on disk. The bridge already lists migrated rooms, so
   // most cards come from the bridge; statics serve as the fallback.
   const allCards = mergeRoomCards(bridgeLayouts, staticTypes)
   const cards = allCards.filter((c) => {
-    if (!c.generated) return true // static rooms ignore the tab filter
-    return statusTab === 'added' ? c.status === 'added' : c.status !== 'added'
+    if (statusTab === 'built-in') return !c.generated
+    if (statusTab === 'added') return c.generated && c.status === 'added'
+    return c.generated && c.status !== 'added'
   })
+  const builtInCount = allCards.filter((c) => !c.generated).length
   const draftCount = allCards.filter((c) => c.generated && c.status !== 'added').length
   const addedCount = allCards.filter((c) => c.generated && c.status === 'added').length
 
@@ -92,6 +97,14 @@ export default function Rooms() {
           onCreated={(newId) => { setSelectedId(newId); refreshLayouts() }}
         />
         <nav className="rooms-status-tabs" role="tablist" aria-label="room status">
+          <button
+            type="button" role="tab"
+            aria-selected={statusTab === 'built-in'}
+            className={`rooms-status-tab${statusTab === 'built-in' ? ' active' : ''}`}
+            onClick={() => setStatusTab('built-in')}
+          >
+            Built-in <span className="rooms-status-tab-count">{builtInCount}</span>
+          </button>
           <button
             type="button" role="tab"
             aria-selected={statusTab === 'drafts'}

@@ -446,5 +446,11 @@ export async function saveLayout(layout) {
     errors: [],
     mtime: Date.now(),
   })
+  // Hot-swap the shell palette in any mounted shelter rooms using
+  // this layout. Lazy import to avoid a circular store dependency.
+  try {
+    const m = await import('./buildLayoutDressing.js')
+    m.refreshLayoutDressing?.(v.value.id)
+  } catch { /* dressing module optional in tests */ }
   return v.value
 }

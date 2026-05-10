@@ -1173,19 +1173,33 @@ function framePropForTrellis(prompt, palette) {
 function enrichPromptWithPalette(prompt, palette) {
   if (!prompt) return prompt;
   if (!palette || typeof palette !== "object") return prompt;
-  const lines = [];
-  const add = (role, hex) => { if (hex) lines.push(`${role}: ${hex} (${hueDescriptor(hex)})`); };
-  add("walls", palette.wall);
-  add("floor", palette.floor);
-  add("ceiling", palette.ceiling);
-  add("accent", palette.accent);
-  add("trim", palette.trim);
-  if (!lines.length) return prompt;
+  // Build a comma-joined inline lead-in like
+  //   "muted pale beige walls, deep brown carpet floor, ..."
+  // FLUX responds much better to natural-language colour adjectives
+  // baked into the prose than to a hex-bullet list at the top of the
+  // prompt. We also repeat the constraint at the END which empirically
+  // pulls the model towards the listed tones.
+  const parts = [];
+  const tail = [];
+  const add = (role, hex, noun) => {
+    if (!hex) return;
+    const tone = hueDescriptor(hex);
+    parts.push(`${tone} ${noun}`);
+    tail.push(`${role} ${tone} (${hex})`);
+  };
+  add("walls", palette.wall, "walls");
+  add("floor", palette.floor, "floor");
+  add("ceiling", palette.ceiling, "ceiling");
+  add("accent", palette.accent, "accent details and trim highlights");
+  add("trim", palette.trim, "trim and frames");
+  if (!parts.length) return prompt;
   return [
-    "Use this strict 5-color palette as the only colours in the image:",
-    ...lines.map((l) => `  - ${l}`),
-    "",
+    `Interior with ${parts.join(", ")}.`,
     prompt,
+    "",
+    `COLOR CONSTRAINT — use ONLY these tones for every surface and object:`,
+    ...tail.map((t) => `  · ${t}`),
+    `No other colours appear in the image.`,
   ].join("\n");
 }
 
@@ -7985,6 +7999,22 @@ app.post(
 
       const palette = (parsed.palette && typeof parsed.palette === "object") ? parsed.palette : {};
       const proposedProps = normalizeProposedProps(parsed.proposed_props || parsed.proposedProps);
+      // If every proposed prop has a zone we can place them straight
+      // away — placeFromZones is deterministic with no LLM call, so
+      // there's no reason to make the user click "Generate layout".
+      // Skipped only when the LLM returned no zones (legacy / failure
+      // mode); the editor's regenerate button still works to retry.
+      const allZoned = proposedProps.length > 0
+        && proposedProps.every((p) => typeof p.zone === "string" && p.zone.trim());
+      const propCount = proposedProps.length;
+      const dimensions = allZoned
+        ? {
+            width: clampNum(5 + Math.floor(propCount / 3) * 0.8, 4, 10, 6),
+            depth: clampNum(3 + Math.floor(propCount / 5) * 0.4, 3, 5, 3.5),
+            height: 2.7,
+          }
+        : { width: 6, depth: 3, height: 2.8 };
+      const placedProps = allZoned ? placeFromZones(proposedProps, dimensions) : [];
       const layout = {
         version: 1,
         id: roomId,
@@ -7992,11 +8022,7 @@ app.post(
         description: parsed.description || "",
         vibe: parsed.vibe || "",
         category: parsed.category || "work",
-        // Placeholder dimensions matching the shelter game's room
-        // grammar (wide side-scroller cells, ROOM_DEPTH = 3 m, ~2.8 m
-        // interior). Layout-from-prompt overwrites these with LLM
-        // values; this is just the empty-room shape until then.
-        dimensions: { width: 6, depth: 3, height: 2.8 },
+        dimensions,
         palette: {
           wall: palette.wall || "#d8cdb4",
           floor: palette.floor || "#a89878",
@@ -8010,12 +8036,14 @@ app.post(
           accent: { color: palette.accent || "#ffd8a0", intensity: 0.45, positions: [] },
         },
         fluxPrompt: parsed.flux_prompt || parsed.fluxPrompt || "",
-        // proposedProps is the canonical prop list. props[] stays empty
-        // until "Generate layout" runs the from-prompt flow which reads
-        // proposedProps and produces positioned props.
+        // proposedProps is the canonical prop list. props[] is filled
+        // immediately when zones are present (placement is deterministic
+        // — no second LLM call needed). Falls through to /layout/from-prompt
+        // for legacy inputs without zones.
         proposedProps,
-        props: [],
+        props: placedProps,
         seededFrom: "initial",
+        ...(allZoned ? { placedFrom: "zones" } : {}),
       };
 
       send("stage", { stage: "validating", message: "checking schema" });
