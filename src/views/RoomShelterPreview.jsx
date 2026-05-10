@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
@@ -75,6 +76,12 @@ export default function RoomShelterPreview({ roomId, height = 480 }) {
     const key = new THREE.DirectionalLight(0xffffff, 0.6)
     key.position.set(2, 4, 3)
     scene.add(key)
+    // PBR environment so TRELLIS / Hunyuan GLB materials read with the
+    // diffuse + specular response they were baked against, instead of
+    // collapsing to near-black under direct-light-only setups.
+    const pmrem = new THREE.PMREMGenerator(renderer)
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+    scene.environmentIntensity = 0.6
 
     const camera = new THREE.PerspectiveCamera(40, 1, 0.05, 200)
     const { position, target } = frameCamera(layout)
@@ -242,6 +249,8 @@ export default function RoomShelterPreview({ roomId, height = 480 }) {
       cancelAnimationFrame(rafId)
       ro.disconnect()
       controls.dispose()
+      try { pmrem.dispose() } catch {}
+      try { scene.environment?.dispose() } catch {}
       renderer.dispose()
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement)
     }
