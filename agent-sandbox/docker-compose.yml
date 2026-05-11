@@ -52,6 +52,13 @@ services:
       # From inside docker-compose, host.docker.internal resolves to the
       # host; from the host, use http://localhost:18080/v1.
       LOCAL_LLM_BASE_URL: "${LOCAL_LLM_BASE_URL:-}"
+      # OpenAI-compatible LLM used for room-layout generation. Defaults
+      # to the gemma-4 self-hosted Cloud Run deployment. The bridge
+      # surfaces these via /v1/llm/config and lets the frontend override
+      # them at runtime (saved to /workspace/llm-config.json).
+      LLM_BASE_URL: "${LLM_BASE_URL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-}"
       # Optional S3 store for avatar bytes. Leave all five blank for
       # the filesystem-only dev workflow; set to a Railway bucket /
       # MinIO / other S3-compat when testing that code path locally.

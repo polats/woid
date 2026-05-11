@@ -47,7 +47,9 @@ import { emit as emitFx } from '../lib/shelterFxBus.js'
  */
 const FRUSTUM_HEIGHT = 4
 const PAN_MARGIN = 1
-const TILT_MAX = 0.15  // rad — full dollhouse tilt at min zoom
+// Exported so the room editor (RoomPreview3D) can share the same
+// home-frame tilt — one source of truth for the dollhouse angle.
+export const TILT_MAX = 0.05  // rad — full dollhouse tilt at min zoom (flatter than before so the upper back wall reads taller)
 
 // Named camera framings used by the tutorial runtime so scripts.json
 // can reference 'room' / 'home' / 'closeup' instead of hand-tuned zoom

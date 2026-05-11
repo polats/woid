@@ -7011,22 +7011,27 @@ function placeFromZones(proposedProps, dimensions) {
       const sz = size(pp);
       let x = anchorX, z = anchorZ;
       if (axis === "x") x = anchorX + off; else z = anchorZ + off;
-      // Push thin wall-flush props against the wall: the prop's depth
-      // axis is its thickness, so the centre sits half-thickness away
-      // from the wall plane.
+      // Push thin wall-flush props against the wall. The LLM's
+      // orientation hint (e.g. faces-right for a side-wall-left prop)
+      // is what gets the prop facing into the room — after rotation
+      // its world-x extent is `sz.d` (the originally-depth axis), so
+      // side walls use `sz.d/2` for the wall offset, not `sz.w/2`.
       if (pp.zone === "back-wall-left" || pp.zone === "back-wall-center" || pp.zone === "back-wall-right") {
         z = -D / 2 + sz.d / 2;
       } else if (pp.zone === "side-wall-left") {
-        x = -W / 2 + sz.w / 2;
+        x = -W / 2 + sz.d / 2;
       } else if (pp.zone === "side-wall-right") {
-        x = W / 2 - sz.w / 2;
-      } else if (pp.zone === "ceiling-center") {
-        // y will be set below
+        x = W / 2 - sz.d / 2;
       }
       let y = 0;
-      if (pp.zone === "ceiling-center") y = H - sz.h;
-      // Wall-mounted high props (window, art, sign) raise off the floor
-      else if (pp.zone.startsWith("back-wall") && (pp.kind === "art" || pp.kind === "sign" || pp.kind === "window" || pp.kind === "fixture")) {
+      const isWallMounted = pp.kind === "art" || pp.kind === "sign"
+        || pp.kind === "window" || pp.kind === "fixture";
+      if (pp.zone === "ceiling-center") {
+        y = H - sz.h;
+      } else if (isWallMounted && (pp.zone.startsWith("back-wall") || pp.zone.startsWith("side-wall"))) {
+        // Eye-level lift so paintings / signs / clocks aren't on the
+        // floor. Applies to side walls too; back-wall-only previously
+        // left side-wall art at y=0.
         y = Math.max(0, Math.min(H - sz.h, 1.4));
       }
       const placed = {

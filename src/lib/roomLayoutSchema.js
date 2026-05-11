@@ -289,6 +289,14 @@ function prop(p, i, errors, warnings, dims) {
     warnings.push(`props[${i}] "${id}" extends outside room on Y`)
   }
 
+  // Optional pointer to another prop's asset record. Set when a prop
+  // is dropped as a duplicate of an existing one — the duplicate uses
+  // the source's GLB until it has its own generation.
+  const sourceAssetId = typeof p.sourceAssetId === 'string'
+    && /^[a-z0-9][a-z0-9_-]*$/.test(p.sourceAssetId)
+    && p.sourceAssetId !== id
+    ? p.sourceAssetId : null
+
   return {
     id,
     kind,
@@ -298,6 +306,7 @@ function prop(p, i, errors, warnings, dims) {
     size,
     materials: Array.isArray(p.materials) ? p.materials.filter((m) => typeof m === 'string') : [],
     count: Number.isInteger(p.count) && p.count > 1 ? p.count : 1,
+    ...(sourceAssetId ? { sourceAssetId } : {}),
   }
 }
 

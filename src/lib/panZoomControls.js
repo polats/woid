@@ -34,6 +34,10 @@ export function createPanZoomControls(camera, domElement, opts = {}) {
   let dragging = false
   let lastX = 0
   let lastY = 0
+  // Enable/disable flag so a parent caller (e.g. the rooms editor's
+  // TransformControls gizmo) can pause pan + zoom while another
+  // pointer gesture has authority over the scene.
+  let enabled = true
   // Pinch state
   let pinching = false
   let pinchStartDist = 0
@@ -78,6 +82,7 @@ export function createPanZoomControls(camera, domElement, opts = {}) {
   }
 
   const onPointerDown = (e) => {
+    if (!enabled) return
     if (e.pointerType === 'touch') return // touch handled separately
     dragging = true
     lastX = e.clientX
@@ -108,6 +113,7 @@ export function createPanZoomControls(camera, domElement, opts = {}) {
     domElement.releasePointerCapture?.(e.pointerId)
   }
   const onWheel = (e) => {
+    if (!enabled) return
     e.preventDefault()
     const factor = Math.exp(-e.deltaY * 0.0015)
     if (lockZoom) {
@@ -121,6 +127,7 @@ export function createPanZoomControls(camera, domElement, opts = {}) {
   // Touch — single finger pans, two fingers pinch-zoom.
   const touches = new Map()
   const onTouchStart = (e) => {
+    if (!enabled) return
     for (const t of e.changedTouches) {
       touches.set(t.identifier, { x: t.clientX, y: t.clientY })
     }
@@ -184,6 +191,10 @@ export function createPanZoomControls(camera, domElement, opts = {}) {
   domElement.addEventListener('touchcancel', onTouchEnd)
 
   return {
+    setEnabled(v) {
+      enabled = !!v
+      if (!enabled) dragging = false
+    },
     setBounds(next) { bounds = next; clamp() },
     setLimits({ minZoom: nMin, maxZoom: nMax } = {}) {
       if (typeof nMin === 'number') minZoom = nMin

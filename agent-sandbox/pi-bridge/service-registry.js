@@ -33,6 +33,12 @@ const PROBE_STRATEGIES = {
     path: "/v1/health/ready",
     isWarm: (res) => res.ok,
   },
+  // vLLM (Gemma-4 self-hosted) exposes /health, returning 200 once the
+  // model is loaded and accepting requests. 429 means warm-but-busy.
+  vllm: {
+    path: "/health",
+    isWarm: (res) => res.ok || res.status === 429,
+  },
 };
 
 export const SERVICES = {
@@ -102,6 +108,20 @@ export const SERVICES = {
     warmEtaSeconds: 5,
     coldEtaSeconds: 30,
     idleTimeoutMs: null,
+  },
+  "gemma-4-31b": {
+    label: "Gemma 4 31B",
+    description: "Self-hosted vLLM on Cloud Run. Drives room-layout generation.",
+    kind: "vllm",
+    // Reads LLM_BASE_URL from env. UI overrides via /workspace/llm-config.json
+    // are *not* reflected here — the service-status framework is meant to
+    // mirror the env-configured deployment. If you point LLM_BASE_URL at
+    // a different deployment, the warmup probe follows.
+    urlEnv: "LLM_BASE_URL",
+    coldBudgetMs: 18 * 60 * 1000,
+    warmEtaSeconds: 12,
+    coldEtaSeconds: 240,
+    idleTimeoutMs: 15 * 60 * 1000,
   },
 };
 

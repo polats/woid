@@ -44,6 +44,10 @@ export default function Sandbox() {
   // 'player-persona' system prompt that drives kind:'player' character
   // generation, with a one-click reset to the bridge default.
   const [showSettings, setShowSettings] = useState(false)
+  // Sidebar tab — Agents vs Pets. Pets is a placeholder slot for a
+  // future feature; the layout shape is reused from when this tab held
+  // the Rooms catalogue (now lives at /rooms as its own page).
+  const [sidebarTab, setSidebarTab] = useState('agents')
   const [promptText, setPromptText] = useState('')
   const [promptDefault, setPromptDefault] = useState('')
   const [promptOverridden, setPromptOverridden] = useState(false)
@@ -312,6 +316,28 @@ export default function Sandbox() {
   return (
     <div className="sandbox3">
       <aside className="sandbox3-cards">
+        <nav className="sandbox3-sidebar-tabs" role="tablist" aria-label="sidebar">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sidebarTab === 'agents'}
+            className={`sandbox3-sidebar-tab${sidebarTab === 'agents' ? ' active' : ''}`}
+            onClick={() => setSidebarTab('agents')}
+          >
+            Agents
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sidebarTab === 'pets'}
+            className={`sandbox3-sidebar-tab${sidebarTab === 'pets' ? ' active' : ''}`}
+            onClick={() => setSidebarTab('pets')}
+          >
+            Pets
+          </button>
+        </nav>
+        {sidebarTab === 'agents' ? (
+        <>
         <header>
           <h2>Agents</h2>
           <div className="npcs-header-actions">
@@ -506,6 +532,10 @@ export default function Sandbox() {
             })}
           </ul>
         )}
+        </>
+        ) : (
+          <PetsPlaceholder />
+        )}
       </aside>
 
       <section className="sandbox3-stage">
@@ -623,7 +653,7 @@ export default function Sandbox() {
       {/* Drawer is anchored to the right edge of the cards column and
           slides out from behind them; the stage shrinks via grid-
           template-columns to make room. */}
-      {inspectedId && (
+      {inspectedId && sidebarTab === 'agents' && (
         <AgentDrawer
           bridgeUrl={cfg.bridgeUrl}
           character={inspectedCharacter}
@@ -638,6 +668,24 @@ export default function Sandbox() {
     </div>
   )
 }
+
+function PetsPlaceholder() {
+  return (
+    <>
+      <header>
+        <h2>Pets</h2>
+        <small className="muted">coming soon</small>
+      </header>
+      <div className="sandbox3-pets-placeholder">
+        <p className="muted">
+          A spot reserved for a future companions / familiars feature.
+          Cards will live here.
+        </p>
+      </div>
+    </>
+  )
+}
+
 
 function SandboxIconSettings() {
   return (

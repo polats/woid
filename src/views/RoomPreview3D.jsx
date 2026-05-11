@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
+import { createPanZoomControls } from '../lib/panZoomControls.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { buildGrayBox, frameCamera } from '../lib/grayBoxBuilder.js'
+import { wallSnapLocalPos } from '../lib/buildLayoutDressing.js'
+import { ROOM_DEPTH } from '../lib/shelterDressing.js'
+import { TILT_MAX as SHELTER_TILT } from './ShelterStage3D.jsx'
+
+// Shelter cell dimensions (gridW=2 × cellWidth=2, gridH=1 × cellHeight=1.1).
+// The room editor renders the layout pre-scaled into this cell so it
+// matches what the shelter game shows. Two sources of truth would
+// drift; pulling the same constants the shelter uses keeps them lined
+// up. Future: read from shelter-layout.json at runtime.
+const SHELTER_CELL_W = 4
+const SHELTER_CELL_H = 1.1
+const SHELTER_CELL_D = ROOM_DEPTH
 import {
   ROOM_LAYOUT_STATUS,
   fetchLayout,
@@ -48,6 +60,10 @@ export default function RoomPreview3D({
   const selectedRef = useRef(null)
   const tcRef = useRef(null)
   const propsRef = useRef(null)             // Map(propId → propData) — for size lookup on commit
+  // Camera state preserved across rebuilds — moving a prop bumps
+  // structureKey and re-runs the scene effect, but the user's pan/zoom
+  // /tilt frame should survive that.
+  const cameraStateRef = useRef(null)
   const [, setTick] = useState(0)
   const id = roomId || room?.id
 
@@ -111,23 +127,120 @@ export default function RoomPreview3D({
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
     scene.environmentIntensity = 0.6
 
-    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 200)
-    const { position, target } = frameCamera(layout)
-    camera.position.copy(position)
-    camera.lookAt(target)
-
-    const controls = interactive ? new OrbitControls(camera, renderer.domElement) : null
-    if (controls) {
-      controls.enableDamping = true
-      controls.target.copy(target)
-      controls.minDistance = 1.5
-      controls.maxDistance = Math.max(layout.dimensions.width, layout.dimensions.depth) * 3
-      controls.maxPolarAngle = Math.PI / 2 - 0.05
+    // ORTHO camera matching the shelter's dollhouse render — same
+    // tilt, same projection, so WYSIWYG between editor and game. Free
+    // orbit is still available via ctrl+click (handler further below
+    // applies a different camera frame on demand). Frustum height
+    // chosen so a single cell + a bit of margin fills the viewport.
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100)
+    // Position camera in front of the cell, tilt the scene world root
+    // instead of the camera so the visible projection matches the
+    // shelter exactly.
+    const sceneRoot = new THREE.Group()
+    sceneRoot.name = 'editor-scene-root'
+    sceneRoot.rotation.x = SHELTER_TILT
+    scene.add(sceneRoot)
+    camera.position.set(0, SHELTER_CELL_H / 2, SHELTER_CELL_D * 1.5 + 2)
+    camera.lookAt(0, SHELTER_CELL_H / 2, 0)
+    const target = new THREE.Vector3(0, SHELTER_CELL_H / 2, 0)
+    // Restore camera + tilt from prior mount if present so prop edits
+    // (which rebuild the scene via structureKey) don't yank the view
+    // back to defaults.
+    if (cameraStateRef.current) {
+      const s = cameraStateRef.current
+      camera.position.set(s.pos.x, s.pos.y, s.pos.z)
+      camera.zoom = s.zoom
+      camera.updateProjectionMatrix()
+      sceneRoot.rotation.set(s.tilt.x, s.tilt.y, s.tilt.z)
     }
+    // Same controls as shelter (panZoomControls):
+    //   plain drag → pan camera in XY
+    //   wheel      → zoom toward cursor
+    //   ctrl/cmd-drag → rotate sceneRoot (orbit around the cell)
+    // Quick clicks (no-drag) still go to the raycaster for prop pick.
+    const pan = interactive ? createPanZoomControls(camera, renderer.domElement, {
+      minZoom: 0.4, maxZoom: 6,
+      bounds: { minX: -SHELTER_CELL_W, maxX: SHELTER_CELL_W, minY: -SHELTER_CELL_H, maxY: SHELTER_CELL_H * 2 },
+      onModifierDrag: (dx, dy) => {
+        sceneRoot.rotation.y += dx * 0.006
+        sceneRoot.rotation.x = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, sceneRoot.rotation.x + dy * 0.006))
+      },
+    }) : null
+    function resizeOrtho() {
+      const w = renderer.domElement.clientWidth
+      const h = renderer.domElement.clientHeight
+      const aspect = w / Math.max(h, 1)
+      // Fit the whole cell (4 × 1.1) in the viewport with margin.
+      // Frustum height needs to cover both cell height directly AND
+      // cell width / aspect — pick the larger so neither axis clips.
+      const margin = 1.2
+      const frustumH = Math.max(SHELTER_CELL_H, SHELTER_CELL_W / aspect) * margin
+      camera.left = -frustumH * aspect / 2
+      camera.right = frustumH * aspect / 2
+      camera.top = frustumH / 2
+      camera.bottom = -frustumH / 2
+      camera.updateProjectionMatrix()
+    }
+    resizeOrtho()
 
     // Build gray-box and stash refs for selection / GLB swap.
     let built = buildGrayBox(layout)
-    scene.add(built.group)
+    // Render at shelter scale via TWO separate transforms — mirrors
+    // exactly what ShelterStage3D + addLayoutDressing do, so a prop's
+    // size/position relative to the room walls is identical in both
+    // views:
+    //   shellGroup    : anisotropic   → walls/ceiling stretch to fit
+    //                   the dollhouse cell (4 × 1.1 × 3 m).
+    //   dressingGroup : isotropic     → props keep correct w/h/d ratio,
+    //                   so a 1.2 m desk in the layout doesn't reach
+    //                   the side wall in either view.
+    const dims = layout.dimensions || {}
+    const sx = SHELTER_CELL_W / Math.max(dims.width || 1, 0.01)
+    const sy = SHELTER_CELL_H / Math.max(dims.height || 1, 0.01)
+    const sz = SHELTER_CELL_D / Math.max(dims.depth || 1, 0.01)
+    const sIso = Math.min(sx, sy, sz)
+    const shellGroup = new THREE.Group()
+    shellGroup.name = 'shelter-cell-shell'
+    shellGroup.scale.set(sx, sy, sz)
+    shellGroup.add(built.group)
+    sceneRoot.add(shellGroup)
+    // Reparent every prop wrapper out of built.group into the dressing
+    // group, which is at scene root with the isotropic scale. Layout-
+    // local positions are preserved (group.add keeps the child's local
+    // transform), so transform handles still operate on layout metres.
+    const dressingGroup = new THREE.Group()
+    dressingGroup.name = 'shelter-cell-dressing'
+    dressingGroup.scale.setScalar(sIso)
+    sceneRoot.add(dressingGroup)
+    // Build a zone lookup so we can snap wall-attached props to the
+    // cell interior the same way addLayoutDressing does in shelter.
+    const zoneById = new Map(
+      (layout.proposedProps || []).map((p) => [p.id, p.zone || null]),
+    )
+    const propsById = new Map((layout.props || []).map((p) => [p.id, p]))
+    for (const [propId, wrapper] of built.props.entries()) {
+      dressingGroup.add(wrapper)
+      const prop = propsById.get(propId)
+      const zone = zoneById.get(propId)
+      if (!prop || !zone) continue
+      // Editor's gray-box walls live OUTSIDE the layout volume (wallT=0
+      // for the snap math); dressing is at world origin so there's no
+      // dressingOriginY offset. Shelter uses different insets — that's
+      // why the helper takes them as parameters.
+      const snapped = wallSnapLocalPos({
+        prop, zone,
+        layoutHeight: layout.dimensions.height,
+        cellW: SHELTER_CELL_W, cellH: SHELTER_CELL_H, cellDepth: SHELTER_CELL_D,
+        wallT: 0, floorT: 0,
+        dressingOriginY: 0, s: sIso,
+      })
+      if (snapped) wrapper.position.set(snapped.x, snapped.y, snapped.z)
+    }
+    // TEMP probe — exposes the dressing group so we can verify world
+    // positions match the shelter render via the dev console.
+    if (typeof window !== 'undefined') {
+      window.__woidEditorProbe = { dressingGroup, shellGroup, sx, sy, sz, sIso }
+    }
     propMeshesRef.current = new Map(built.props)  // map propId → wrapper Group
     propMaterialsRef.current = new Map()
     propsRef.current = new Map((layout.props || []).map((p) => [p.id, p]))
@@ -151,7 +264,9 @@ export default function RoomPreview3D({
     if (typeof tc.getHelper === 'function') scene.add(tc.getHelper())
     else scene.add(tc)
     tc.addEventListener('dragging-changed', (e) => {
-      if (controls) controls.enabled = !e.value
+      // Pause pan/zoom while the gizmo owns the pointer so a handle
+      // drag isn't double-handled as a camera pan.
+      pan?.setEnabled?.(!e.value)
       if (!e.value) commitTransform(tc.object)
     })
     tcRef.current = tc
@@ -192,30 +307,16 @@ export default function RoomPreview3D({
       const dx = Math.abs(e.clientX - downX)
       const dy = Math.abs(e.clientY - downY)
       const dt = Date.now() - downAt
-      if (dx > 5 || dy > 5 || dt > 400) return  // dragged or held — orbit gesture
-      // Ctrl/Cmd-click: snap the camera to a shelter-style head-on
-      // dollhouse frame so the user can compare against the shelter
-      // game view without leaving the editor. No raycast; just camera.
+      if (dx > 5 || dy > 5 || dt > 400) return  // dragged or held — pan/orbit gesture
+      // Ctrl/Cmd-click (without drag): snap the camera + sceneRoot tilt
+      // back to the shelter-default frame. Ctrl/Cmd-drag is reserved by
+      // panZoomControls for rotating the room, so a click-with-modifier
+      // is the natural "reset" gesture.
       if (e.ctrlKey || e.metaKey) {
-        const dims = layout.dimensions || {}
-        const w = dims.width || 4
-        const h = dims.height || 1.1
-        const d = dims.depth || 3
-        // Shelter renders rooms in a front-facing dollhouse cross-
-        // section. Pull the camera back along +z far enough to fit
-        // the cell horizontally + vertically, looking at room centre.
-        const aspect = renderer.domElement.clientWidth / Math.max(renderer.domElement.clientHeight, 1)
-        const fov = camera.fov * Math.PI / 180
-        const distH = (h / 2) / Math.tan(fov / 2)
-        const distW = (w / 2) / (Math.tan(fov / 2) * aspect)
-        const distance = Math.max(distH, distW) * 1.15 + d / 2
-        camera.position.set(0, h / 2, distance)
-        if (controls) {
-          controls.target.set(0, h / 2, 0)
-          controls.update()
-        } else {
-          camera.lookAt(0, h / 2, 0)
-        }
+        camera.position.set(0, SHELTER_CELL_H / 2, SHELTER_CELL_D * 1.5 + 2)
+        camera.zoom = 1
+        camera.updateProjectionMatrix()
+        sceneRoot.rotation.set(SHELTER_TILT, 0, 0)
         return
       }
       const rect = renderer.domElement.getBoundingClientRect()
@@ -224,7 +325,10 @@ export default function RoomPreview3D({
       raycaster.setFromCamera(ndc, camera)
       // Cast against everything under built.group; any hit's userData
       // chain lets us recover the propId we tagged in grayBoxBuilder.
-      const hits = raycaster.intersectObjects(built.group.children, true)
+      // Props live in dressingGroup now (reparented out of built.group
+      // so they can iso-scale separately from the shell). Cast against
+      // the dressing only — clicking the shell shouldn't select a prop.
+      const hits = raycaster.intersectObjects(dressingGroup.children, true)
       let hitId = null
       for (const h of hits) {
         let o = h.object
@@ -237,7 +341,13 @@ export default function RoomPreview3D({
     renderer.domElement.addEventListener('pointerup', onPointerUp)
 
     // ── Drag-drop from prop library onto the floor plane ───────
+    // Floor plane is local y=0 inside sceneRoot. The ortho camera
+    // looks along world -Z, so a world-space y=0 plane is parallel to
+    // the ray and never hits — we have to raycast in sceneRoot local
+    // space (which the tilt rotation lives in).
     const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+    const invSceneRoot = new THREE.Matrix4()
+    const localRay = new THREE.Ray()
     function onDragOver(e) {
       // Only handle our prop drops; let other drags pass.
       const types = e.dataTransfer?.types
@@ -254,18 +364,26 @@ export default function RoomPreview3D({
       ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
       raycaster.setFromCamera(ndc, camera)
+      sceneRoot.updateWorldMatrix(true, false)
+      invSceneRoot.copy(sceneRoot.matrixWorld).invert()
+      localRay.copy(raycaster.ray).applyMatrix4(invSceneRoot)
       const hit = new THREE.Vector3()
-      const hitOk = raycaster.ray.intersectPlane(floorPlane, hit)
+      const hitOk = localRay.intersectPlane(floorPlane, hit)
       if (!hitOk) return
-      // Clamp into the room bounds so dropped props don't end up
-      // outside the walls.
-      const w = layout.dimensions.width / 2 - 0.3
-      const d = layout.dimensions.depth / 2 - 0.3
-      hit.x = Math.max(-w, Math.min(w, hit.x))
-      hit.z = Math.max(-d, Math.min(d, hit.z))
+      // Hit is in sceneRoot-local coords; dressingGroup iso-scales
+      // children into the cell so invert by sIso to recover
+      // layout-metres before clamping + saving.
+      const lx = hit.x / sIso
+      const lz = hit.z / sIso
+      const halfW = (layout.dimensions.width || 1) / 2 - 0.3
+      const halfD = (layout.dimensions.depth || 1) / 2 - 0.3
       onPropDrop?.({
         propId,
-        position: { x: round3(hit.x), y: 0, z: round3(hit.z) },
+        position: {
+          x: round3(Math.max(-halfW, Math.min(halfW, lx))),
+          y: 0,
+          z: round3(Math.max(-halfD, Math.min(halfD, lz))),
+        },
       })
       function round3(n) { return Math.round(n * 1000) / 1000 }
     }
@@ -283,10 +401,16 @@ export default function RoomPreview3D({
     function syncGlbs() {
       for (const [propId, wrapper] of built.props.entries()) {
         if (loadedMeshes.has(propId)) continue
-        const status = getAssetStatus(propId)
-        if (status?.status !== ROOM_ASSET_STATUS.ready || !status.modelUrl) continue
         const propData = layout.props.find((p) => p.id === propId)
         if (!propData) continue
+        // Prefer the prop's own asset; fall back to its source so
+        // freshly-dropped duplicates display the original's GLB until
+        // the user generates their own.
+        let status = getAssetStatus(propId)
+        if ((status?.status !== ROOM_ASSET_STATUS.ready || !status.modelUrl) && propData.sourceAssetId) {
+          status = getAssetStatus(propData.sourceAssetId)
+        }
+        if (status?.status !== ROOM_ASSET_STATUS.ready || !status.modelUrl) continue
         loader.load(
           status.modelUrl,
           (gltf) => {
@@ -322,7 +446,7 @@ export default function RoomPreview3D({
     function tick() {
       if (!running) return
       requestAnimationFrame(tick)
-      controls?.update()
+      /* panZoom updates on input */
       if (!interactive) {
         scene.rotation.y += clock.getDelta() * 0.15
       }
@@ -334,13 +458,17 @@ export default function RoomPreview3D({
       const { clientWidth, clientHeight } = container
       if (!clientWidth || !clientHeight) return
       renderer.setSize(clientWidth, clientHeight, false)
-      camera.aspect = clientWidth / clientHeight
-      camera.updateProjectionMatrix()
+      resizeOrtho()
     })
     ro.observe(container)
 
     return () => {
       running = false
+      cameraStateRef.current = {
+        pos: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+        zoom: camera.zoom,
+        tilt: { x: sceneRoot.rotation.x, y: sceneRoot.rotation.y, z: sceneRoot.rotation.z },
+      }
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       container.removeEventListener('dragover', onDragOver)
@@ -351,7 +479,7 @@ export default function RoomPreview3D({
       tc.detach()
       tc.dispose?.()
       tcRef.current = null
-      controls?.dispose?.()
+      pan?.dispose?.()
       try { pmrem.dispose() } catch {}
       try { scene.environment?.dispose() } catch {}
       built.group.traverse((o) => {

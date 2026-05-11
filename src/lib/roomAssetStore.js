@@ -270,19 +270,28 @@ export async function refreshFromBridge(propId) {
  *  use the catalogue; LLM-generated rooms (not in ROOM_TYPES) fall
  *  back to the bridge layout's prop list. */
 export async function refreshRoomFromBridge(roomId) {
-  const room = ROOM_TYPES[roomId]
-  if (room?.props) {
-    for (const prop of room.props) refreshFromBridge(prop.id)
-    return
+  if (!roomId) return
+  // Always prefer the bridge layout's prop list as the source of truth.
+  // For built-in rooms the migrated layout's props can diverge from the
+  // static ROOM_TYPES catalogue (counts and ids both differ after
+  // edits), and the shelter renders against the bridge layout — so the
+  // editor's asset summary should too. Fall back to the static
+  // catalogue only when the bridge has no layout for this room.
+  if (BRIDGE_URL) {
+    try {
+      const r = await fetch(`${BRIDGE_URL}/rooms/${encodeURIComponent(roomId)}/layout`)
+      if (r.ok) {
+        const j = await r.json()
+        const props = j.layout?.props || []
+        if (props.length) {
+          for (const p of props) refreshFromBridge(p.id)
+          return
+        }
+      }
+    } catch { /* offline → catalogue fallback */ }
   }
-  if (!BRIDGE_URL || !roomId) return
-  try {
-    const r = await fetch(`${BRIDGE_URL}/rooms/${encodeURIComponent(roomId)}/layout`)
-    if (!r.ok) return
-    const j = await r.json()
-    const props = j.layout?.props || []
-    for (const p of props) refreshFromBridge(p.id)
-  } catch { /* offline ok */ }
+  const room = ROOM_TYPES[roomId]
+  if (room?.props) for (const prop of room.props) refreshFromBridge(prop.id)
 }
 
 export function reset(propId) {
@@ -335,9 +344,16 @@ export function generateRoom(roomId, opts = {}) {
  */
 export function summarizeRoom(roomId) {
   const room = ROOM_TYPES[roomId]
-  if (!room?.props) return { total: 0, ready: 0, inFlight: 0, failed: 0 }
+  return summarizeProps(room?.props || [])
+}
+
+/** Same shape as summarizeRoom but operates on any explicit prop list
+ *  — useful for built-in rooms whose bridge layout's props differ from
+ *  the static catalogue, and for generated rooms (not in ROOM_TYPES). */
+export function summarizeProps(props) {
+  if (!props?.length) return { total: 0, ready: 0, inFlight: 0, failed: 0 }
   let ready = 0, inFlight = 0, failed = 0
-  for (const prop of room.props) {
+  for (const prop of props) {
     const s = state[prop.id]?.status
     if (s === STATUS.ready) ready += 1
     else if (s === STATUS.failed) failed += 1
@@ -345,7 +361,7 @@ export function summarizeRoom(roomId) {
              || s === STATUS.generatingImage
              || s === STATUS.generatingModel) inFlight += 1
   }
-  return { total: room.props.length, ready, inFlight, failed }
+  return { total: props.length, ready, inFlight, failed }
 }
 
 /**

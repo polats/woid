@@ -45,6 +45,62 @@ function fetchLayoutOnce(layoutId) {
   return p
 }
 
+/**
+ * Compute the dressing-local position for a wall-attached prop so its
+ * iso-scaled bbox edge touches the *interior* surface of the cell wall.
+ *
+ * Two views call this:
+ *  - shelter cells, whose walls sit INSIDE the cell volume (wallT~5cm),
+ *    so the visible inner wall surface is at ±cellW/2 ∓ wallT.
+ *  - the rooms editor, whose gray-box walls are OUTSIDE the layout
+ *    volume, so wallT/floorT = 0.
+ *
+ * The dressing group's own origin (`dressingOriginY`) and iso scale
+ * (`s`) are folded in so the caller can use the returned position
+ * verbatim on the wrapper.
+ */
+export function wallSnapLocalPos({
+  prop, zone, layoutHeight,
+  cellW, cellH, cellDepth,
+  wallT = 0, floorT = 0,
+  dressingOriginY = 0, s = 1,
+}) {
+  if (!zone) return null
+  const isBack = zone === 'back-wall-left' || zone === 'back-wall-center' || zone === 'back-wall-right'
+  const isLeft = zone === 'side-wall-left'
+  const isRight = zone === 'side-wall-right'
+  const isCeiling = zone === 'ceiling-center'
+  if (!isBack && !isLeft && !isRight && !isCeiling) return null
+  let localX = prop.position.x
+  let localY = prop.position.y
+  let localZ = prop.position.z
+  const thickness = prop.size.d * s
+  if (isBack) {
+    const worldZ = -cellDepth / 2 + wallT + thickness / 2
+    localZ = worldZ / s
+  } else if (isLeft) {
+    const worldX = -cellW / 2 + wallT + thickness / 2
+    localX = worldX / s
+  } else if (isRight) {
+    const worldX = cellW / 2 - wallT - thickness / 2
+    localX = worldX / s
+  } else if (isCeiling) {
+    const worldY = cellH / 2 - wallT - (prop.size.h * s) / 2
+    localY = (worldY - dressingOriginY) / s
+    return { x: localX, y: localY, z: localZ }
+  }
+  // Wall props: map layout-y fraction onto the cell's interior y range
+  // so eye-level art lands mid-cell instead of near the floor.
+  const layoutH = Math.max(layoutHeight || 1, 0.01)
+  const interiorFloor = -cellH / 2 + floorT
+  const interiorCeil = cellH / 2 - wallT
+  const interiorRange = interiorCeil - interiorFloor
+  const yFrac = Math.max(0, Math.min(1, prop.position.y / layoutH))
+  const worldY = interiorFloor + yFrac * interiorRange
+  localY = (worldY - dressingOriginY) / s
+  return { x: localX, y: localY, z: localZ }
+}
+
 function applyShellPalette(group, palette) {
   const mats = group.userData?.shellMaterials
   if (palette && mats) {
@@ -99,17 +155,28 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
       }
     }
     if (!layout.props?.length) return
-    // Iso-scale x and z together (preserves the floor-plan proportions
-    // a desk's w/d ratio is real) by the smaller of the two fits, so
-    // the room's footprint fills the shelter cell. y is scaled
-    // independently to match the dollhouse's vertically-compressed
-    // shell — props squash on y the same way the room itself does, so
-    // the result looks consistent with the cell's aspect.
+    // Isotropic size scale so props read at consistent w/h/d ratios.
+    // Iso alone leaves wall-attached props "floating" inside the cell
+    // because layout x=-W/2 maps to world x=-W/2 * s, not -cell/2.
+    // Below, wall-zoned wrappers get their position overridden so
+    // their iso-scaled bbox edge touches the cell wall.
     const sx = w / Math.max(layout.dimensions.width, 0.01)
     const sy = h / Math.max(layout.dimensions.height, 0.01)
     const sz = depth / Math.max(layout.dimensions.depth, 0.01)
-    const sFloor = Math.min(sx, sz)
-    dressing.scale.set(sFloor, sy, sFloor)
+    const s = Math.min(sx, sy, sz)
+    dressing.scale.set(s, s, s)
+    // TEMP probe — register every dressing on a global so the test
+    // harness can compare prop world positions against the editor.
+    if (typeof window !== 'undefined') {
+      window.__woidShelterProbe ??= {}
+      window.__woidShelterProbe[layoutId] = { dressing, sx, sy, sz, s }
+    }
+    // Lookup zones from proposedProps so the wrapper code below can
+    // recognise wall-attached props and snap their wrapper position
+    // to the cell wall regardless of layout dimensions.
+    const zoneById = new Map(
+      (layout.proposedProps || []).map((p) => [p.id, p.zone || null]),
+    )
     // Shelter rooms have y=0 at vertical centre, y in [-h/2, +h/2].
     // Layouts have y=0 at floor, y in [0, height]. Translate the
     // dressing origin down to the cell's floor so layout y=0 sits on
@@ -123,7 +190,19 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
     for (const prop of layout.props) {
       const wrapper = new THREE.Group()
       wrapper.name = `prop:${prop.id}`
-      wrapper.position.set(prop.position.x, prop.position.y, prop.position.z)
+      // Snap wall-attached props to the cell interior so they don't
+      // float / sink. wallT/floorT are the shelter cell's mesh
+      // thicknesses (walls live inside the cell volume here, unlike
+      // the gray-box editor where they sit outside).
+      const snapped = wallSnapLocalPos({
+        prop, zone: zoneById.get(prop.id),
+        layoutHeight: layout.dimensions.height,
+        cellW: w, cellH: h, cellDepth: depth,
+        wallT: 0.05, floorT: 0.08,
+        dressingOriginY: -h / 2, s,
+      })
+      const pos = snapped ?? prop.position
+      wrapper.position.set(pos.x, pos.y, pos.z)
       wrapper.rotation.y = prop.rotation_y || 0
       dressing.add(wrapper)
 
@@ -142,28 +221,34 @@ export function addLayoutDressing(group, layoutId, w, h, depth) {
       box.userData.isPlaceholder = true
       wrapper.add(box)
 
-      const url = `${BRIDGE_URL}/props/${encodeURIComponent(prop.id)}/model`
-      loader.load(
-        url,
-        (gltf) => {
-          const obj = gltf.scene
-          obj.updateMatrixWorld(true)
-          const bb = new THREE.Box3().setFromObject(obj)
-          const sz2 = bb.getSize(new THREE.Vector3())
-          obj.scale.x *= prop.size.w / Math.max(sz2.x, 0.001)
-          obj.scale.y *= prop.size.h / Math.max(sz2.y, 0.001)
-          obj.scale.z *= prop.size.d / Math.max(sz2.z, 0.001)
-          obj.updateMatrixWorld(true)
-          const after = new THREE.Box3().setFromObject(obj)
-          obj.position.y -= after.min.y
-          wrapper.add(obj)
-          // Hide placeholder once GLB lands (kept around so toggling
-          // visibility for debug works).
-          box.visible = false
-        },
-        undefined,
-        () => { /* GLB not generated yet — placeholder stays */ },
-      )
+      const tryUrls = [prop.id]
+      // Duplicates inherit their source asset until they get their own
+      // generation — try the prop's own GLB first, fall back to source.
+      if (prop.sourceAssetId && prop.sourceAssetId !== prop.id) tryUrls.push(prop.sourceAssetId)
+      const onLoaded = (gltf) => {
+        const obj = gltf.scene
+        obj.updateMatrixWorld(true)
+        const bb = new THREE.Box3().setFromObject(obj)
+        const sz2 = bb.getSize(new THREE.Vector3())
+        obj.scale.x *= prop.size.w / Math.max(sz2.x, 0.001)
+        obj.scale.y *= prop.size.h / Math.max(sz2.y, 0.001)
+        obj.scale.z *= prop.size.d / Math.max(sz2.z, 0.001)
+        obj.updateMatrixWorld(true)
+        const after = new THREE.Box3().setFromObject(obj)
+        obj.position.y -= after.min.y
+        wrapper.add(obj)
+        box.visible = false
+      }
+      const loadNext = (idx) => {
+        if (idx >= tryUrls.length) return
+        loader.load(
+          `${BRIDGE_URL}/props/${encodeURIComponent(tryUrls[idx])}/model`,
+          onLoaded,
+          undefined,
+          () => loadNext(idx + 1),
+        )
+      }
+      loadNext(0)
     }
   })
 }

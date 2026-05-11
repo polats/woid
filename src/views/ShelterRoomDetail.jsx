@@ -87,6 +87,10 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
     // layout to inherit size + prompt + kind. Otherwise use defaults.
     const seed = (layout.props || []).find((p) => p.id === propId || p.id.startsWith(`${propId}-`))
     const sourceAsset = assets[propId]
+    // Resolve the asset to share until this duplicate gets its own
+    // generation. Follow any existing chain so duplicates of duplicates
+    // still point back at the original asset record.
+    const sourceAssetId = seed?.sourceAssetId || propId
     const next = {
       id: newId,
       kind: seed?.kind || sourceAsset?.sourceKind || 'misc',
@@ -95,6 +99,9 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
       rotation_y: 0,
       size: seed?.size || { w: 0.6, h: 0.7, d: 0.6 },
       materials: [],
+      // Only set when this is actually a duplicate — if the propId
+      // was free, the prop owns its own asset slot from the start.
+      ...(newId !== propId ? { sourceAssetId } : {}),
     }
     try {
       await saveLayout({ ...layout, props: [...(layout.props || []), next] })
@@ -206,6 +213,11 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
   // exists — overlay its palette / name / dimensions on top of the
   // catalogue entry so palette swatches reflect saved edits instead of
   // re-rendering the original ROOM_TYPES palette every time.
+  // For built-in rooms the bridge layout is the source of truth once
+  // it exists — overlay its palette / name / dimensions / props on top
+  // of the catalogue entry so the editor reflects saved edits and
+  // matches what the shelter renders (which also reads from the
+  // bridge layout via addLayoutDressing).
   const room = staticRoom
     ? (layoutForRender
         ? {
@@ -213,6 +225,13 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
             name: layoutForRender.name || staticRoom.name,
             palette: layoutForRender.palette || staticRoom.palette,
             dimensions: layoutForRender.dimensions || staticRoom.dimensions,
+            // Prefer the placed props (what shelter actually renders);
+            // fall back to proposedProps then the static catalogue.
+            props: layoutForRender.props?.length
+              ? layoutForRender.props
+              : (layoutForRender.proposedProps?.length
+                  ? layoutForRender.proposedProps
+                  : staticRoom.props),
           }
         : staticRoom)
     : (layoutForRender ? roomFromLayout(layoutForRender) : null)
@@ -1331,7 +1350,7 @@ function PropsSidebar({
             key={prop.id}
             prop={prop}
             room={room}
-            asset={assets?.[prop.id]}
+            asset={assets?.[prop.id] || (prop.sourceAssetId ? assets?.[prop.sourceAssetId] : null)}
             selected={prop.id === selectedPropId}
             onSelect={onSelect}
             onRemove={onRemoveProp}
