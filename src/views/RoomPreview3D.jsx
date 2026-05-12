@@ -9,6 +9,23 @@ import { wallSnapLocalPos } from '../lib/buildLayoutDressing.js'
 import { ROOM_DEPTH } from '../lib/shelterDressing.js'
 import { TILT_MAX as SHELTER_TILT } from './ShelterStage3D.jsx'
 
+// Soft radial blob, painted to a canvas once per room rebuild. Cheaper
+// than a real shadow map for the editor's dollhouse-scale preview.
+function makePropShadowTexture() {
+  const c = document.createElement('canvas')
+  c.width = 128; c.height = 128
+  const ctx = c.getContext('2d')
+  const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 62)
+  grad.addColorStop(0, 'rgba(0,0,0,0.55)')
+  grad.addColorStop(0.6, 'rgba(0,0,0,0.18)')
+  grad.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, 128, 128)
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
 // Shelter cell dimensions (gridW=2 × cellWidth=2, gridH=1 × cellHeight=1.1).
 // The room editor renders the layout pre-scaled into this cell so it
 // matches what the shelter game shows. Two sources of truth would
@@ -154,18 +171,69 @@ export default function RoomPreview3D({
       sceneRoot.rotation.set(s.tilt.x, s.tilt.y, s.tilt.z)
     }
     // Same controls as shelter (panZoomControls):
-    //   plain drag → pan camera in XY
-    //   wheel      → zoom toward cursor
-    //   ctrl/cmd-drag → rotate sceneRoot (orbit around the cell)
-    // Quick clicks (no-drag) still go to the raycaster for prop pick.
+    //   plain drag           → pan camera in XY
+    //   wheel                → zoom toward cursor
+    //   ctrl/cmd-drag        → rotate sceneRoot (orbit around the cell)
+    //                          UNLESS a prop is selected, in which case
+    //                          ctrl=X, shift=Y, alt=Z axis-constrained
+    //                          move of the prop (gizmo handles hide for
+    //                          the inactive axes; commit fires on
+    //                          pointer-up). Quick clicks (no-drag) go
+    //                          to the raycaster for prop pick.
+    let modifierMoveActive = false
     const pan = interactive ? createPanZoomControls(camera, renderer.domElement, {
       minZoom: 0.4, maxZoom: 6,
       bounds: { minX: -SHELTER_CELL_W, maxX: SHELTER_CELL_W, minY: -SHELTER_CELL_H, maxY: SHELTER_CELL_H * 2 },
-      onModifierDrag: (dx, dy) => {
-        sceneRoot.rotation.y += dx * 0.006
-        sceneRoot.rotation.x = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, sceneRoot.rotation.x + dy * 0.006))
+      onModifierDrag: (dx, dy, mods) => {
+        const sel = selectedRef.current
+        const wrapper = sel ? propMeshesRef.current?.get(sel) : null
+        if (wrapper && (mods.ctrl || mods.shift || mods.alt)) {
+          // Pixel→world delta. The dressingGroup is iso-scaled by sIso
+          // so divide by it to recover layout-metre coordinates.
+          const w = renderer.domElement.clientWidth
+          const h = renderer.domElement.clientHeight
+          const worldPerPxX = (camera.right - camera.left) / camera.zoom / w
+          const worldPerPxY = (camera.top - camera.bottom) / camera.zoom / h
+          if (mods.ctrl)  wrapper.position.x += (dx * worldPerPxX) / sIso
+          if (mods.shift) wrapper.position.y -= (dy * worldPerPxY) / sIso
+          if (mods.alt)   wrapper.position.z -= (dy * worldPerPxY) / sIso
+          modifierMoveActive = true
+          return
+        }
+        // Default: ctrl-drag rotates the world root (shelter parity).
+        if (mods.ctrl) {
+          sceneRoot.rotation.y += dx * 0.006
+          sceneRoot.rotation.x = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, sceneRoot.rotation.x + dy * 0.006))
+        }
       },
     }) : null
+    // Hide axis handles for non-active axes while a modifier is held,
+    // so the user sees which axis the constrained drag will move on.
+    function updateGizmoAxisVisibility(mods) {
+      const t = tcRef.current
+      if (!t || !selectedRef.current) return
+      const any = mods.ctrl || mods.shift || mods.alt
+      if (!any) { t.showX = true; t.showY = true; t.showZ = true; return }
+      t.showX = !!mods.ctrl
+      t.showY = !!mods.shift
+      t.showZ = !!mods.alt
+    }
+    function readMods(e) {
+      return { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey }
+    }
+    function onModKey(e) { updateGizmoAxisVisibility(readMods(e)) }
+    window.addEventListener('keydown', onModKey)
+    window.addEventListener('keyup', onModKey)
+    // Commit the modifier-drag result when the pointer is released.
+    function onModifierPointerUp() {
+      if (!modifierMoveActive) return
+      modifierMoveActive = false
+      const sel = selectedRef.current
+      const wrapper = sel ? propMeshesRef.current?.get(sel) : null
+      if (wrapper) commitTransform(wrapper)
+    }
+    renderer.domElement.addEventListener('pointerup', onModifierPointerUp)
+    renderer.domElement.addEventListener('pointercancel', onModifierPointerUp)
     function resizeOrtho() {
       const w = renderer.domElement.clientWidth
       const h = renderer.domElement.clientHeight
@@ -218,10 +286,34 @@ export default function RoomPreview3D({
       (layout.proposedProps || []).map((p) => [p.id, p.zone || null]),
     )
     const propsById = new Map((layout.props || []).map((p) => [p.id, p]))
+    // One shared shadow texture for all props in this room. A soft
+    // radial gradient on a flat plane reads as a contact shadow at
+    // dollhouse scale without needing real shadow maps.
+    const shadowTex = makePropShadowTexture()
+    const shadowMat = new THREE.MeshBasicMaterial({
+      map: shadowTex, transparent: true, depthWrite: false,
+    })
     for (const [propId, wrapper] of built.props.entries()) {
       dressingGroup.add(wrapper)
       const prop = propsById.get(propId)
       const zone = zoneById.get(propId)
+      // Add a contact shadow under floor-standing props only. Wall-
+      // mounted and stacked props (back-wall, on:<id>, etc.) have no
+      // visual relationship to the floor, so shadows would feel wrong.
+      const isFloorProp = !zone
+        || zone === 'floor-left' || zone === 'floor-center' || zone === 'floor-right'
+      if (prop && isFloorProp) {
+        const r = Math.max(prop.size.w, prop.size.d) * 0.65
+        const shadow = new THREE.Mesh(
+          new THREE.PlaneGeometry(r * 2, r * 2),
+          shadowMat,
+        )
+        shadow.rotation.x = -Math.PI / 2
+        // Just above the floor so it doesn't z-fight with the gray-box.
+        shadow.position.y = 0.002
+        shadow.userData.isPropShadow = true
+        wrapper.add(shadow)
+      }
       if (!prop || !zone) continue
       // Editor's gray-box walls live OUTSIDE the layout volume (wallT=0
       // for the snap math); dressing is at world origin so there's no
@@ -232,6 +324,9 @@ export default function RoomPreview3D({
         layoutHeight: layout.dimensions.height,
         cellW: SHELTER_CELL_W, cellH: SHELTER_CELL_H, cellDepth: SHELTER_CELL_D,
         wallT: 0, floorT: 0,
+        // Editor's gray-box floor sits at world y=0 (not y=-cellH/2 like
+        // the shelter cell), so wall-attached props snap relative to 0.
+        floorYWorld: 0,
         dressingOriginY: 0, s: sIso,
       })
       if (snapped) wrapper.position.set(snapped.x, snapped.y, snapped.z)
@@ -261,8 +356,44 @@ export default function RoomPreview3D({
     tc.size = 0.7
     // r144+ requires accessing the helper; older versions add to the
     // scene directly. Try both for compatibility.
-    if (typeof tc.getHelper === 'function') scene.add(tc.getHelper())
-    else scene.add(tc)
+    const tcHelper = typeof tc.getHelper === 'function' ? tc.getHelper() : tc
+    scene.add(tcHelper)
+    // The default translate gizmo has three plane handles (XY/YZ/XZ
+    // squares). Under our ortho-straight-down-Z camera the real Z
+    // arrow foreshortens to invisibility while the XZ plane handle
+    // sits diagonally where the user expects a Z arrow — which is
+    // what caused the "diagonal blue square" bug. Hide every plane
+    // handle (and the central XYZ free-move) so only the three axis
+    // arrows remain.
+    const PLANE_NAMES = new Set(['XY', 'YZ', 'XZ', 'XYZ'])
+    tcHelper.traverse((o) => { if (PLANE_NAMES.has(o.name)) o.visible = false })
+    // Custom visible Z arrow tilted up-and-back so it actually reads
+    // under the editor camera. The TransformControls Z arrow is still
+    // active (just collapsed-to-a-dot visually) — this is a hint
+    // overlay, not a replacement; the real drag is via Alt-drag
+    // (modifier-axis) or by dragging the (invisible-but-present)
+    // built-in Z arrow region.
+    const zHint = new THREE.Group()
+    zHint.name = 'editor-z-hint'
+    {
+      const len = 0.4
+      const headLen = 0.12
+      const headRad = 0.05
+      const shaftMat = new THREE.MeshBasicMaterial({ color: 0x2266ff, transparent: true, opacity: 0.9, depthTest: false })
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, len - headLen, 12), shaftMat)
+      shaft.position.z = -(len - headLen) / 2
+      shaft.rotation.x = Math.PI / 2
+      const head = new THREE.Mesh(new THREE.ConeGeometry(headRad, headLen, 16), shaftMat)
+      head.position.z = -(len - headLen / 2)
+      head.rotation.x = -Math.PI / 2
+      // Tilt the whole arrow ~25° up so it pokes above the floor plane
+      // instead of pointing straight away from the camera.
+      zHint.rotation.x = -Math.PI / 8
+      zHint.add(shaft); zHint.add(head)
+      shaft.renderOrder = 999; head.renderOrder = 999
+    }
+    zHint.visible = false
+    scene.add(zHint)
     tc.addEventListener('dragging-changed', (e) => {
       // Pause pan/zoom while the gizmo owns the pointer so a handle
       // drag isn't double-handled as a camera pan.
@@ -450,6 +581,19 @@ export default function RoomPreview3D({
       if (!interactive) {
         scene.rotation.y += clock.getDelta() * 0.15
       }
+      // Sync the Z-axis hint arrow to the selected prop's world pos
+      // (lives outside dressingGroup so the iso-scale + tilt don't
+      // double-apply). Hide when nothing is selected.
+      const sel = selectedRef.current
+      const selWrapper = sel ? propMeshesRef.current?.get(sel) : null
+      if (selWrapper) {
+        selWrapper.updateWorldMatrix(true, false)
+        zHint.position.setFromMatrixPosition(selWrapper.matrixWorld)
+        zHint.quaternion.copy(sceneRoot.quaternion)
+        zHint.visible = true
+      } else {
+        zHint.visible = false
+      }
       renderer.render(scene, camera)
     }
     tick()
@@ -471,6 +615,10 @@ export default function RoomPreview3D({
       }
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
+      renderer.domElement.removeEventListener('pointerup', onModifierPointerUp)
+      renderer.domElement.removeEventListener('pointercancel', onModifierPointerUp)
+      window.removeEventListener('keydown', onModKey)
+      window.removeEventListener('keyup', onModKey)
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
       unsubAssets()
@@ -479,6 +627,12 @@ export default function RoomPreview3D({
       tc.detach()
       tc.dispose?.()
       tcRef.current = null
+      // Dispose the custom Z-axis hint we added next to TC.
+      zHint.traverse((o) => {
+        if (o.geometry) o.geometry.dispose?.()
+        if (o.material) o.material.dispose?.()
+      })
+      scene.remove(zHint)
       pan?.dispose?.()
       try { pmrem.dispose() } catch {}
       try { scene.environment?.dispose() } catch {}

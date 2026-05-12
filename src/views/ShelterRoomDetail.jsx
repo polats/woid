@@ -111,7 +111,22 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
   // Clear prop selection when switching rooms.
   useEffect(() => { setSelectedPropId(null) }, [roomId])
 
-  // Keyboard shortcuts (Unity / Maya convention): W=move, E=rotate, R=scale.
+  // Shared delete path — used by the props-list "X" button and by the
+  // Delete keyboard shortcut.
+  async function removePropFromLayout(propId) {
+    const layout = getLayout(roomId)?.layout
+    if (!layout) return
+    try {
+      await saveLayout({
+        ...layout,
+        props: (layout.props || []).filter((p) => p.id !== propId),
+      })
+      if (selectedPropId === propId) setSelectedPropId(null)
+    } catch (err) { console.error('[saveLayout removeProp]', err) }
+  }
+
+  // Keyboard shortcuts (Unity / Maya convention): W=move, E=rotate, R=scale,
+  // Delete/Backspace=remove.
   useEffect(() => {
     if (!selectedPropId) return
     function onKey(e) {
@@ -121,10 +136,15 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
       else if (e.key === 'e' || e.key === 'E') setTransformMode('rotate')
       else if (e.key === 'r' || e.key === 'R') setTransformMode('scale')
       else if (e.key === 'Escape') setSelectedPropId(null)
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        removePropFromLayout(selectedPropId)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedPropId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPropId, roomId])
 
   // Commit a transform from the 3D gizmo to the layout JSON. Reads
   // the freshest layout from the store (not the captured one) so
@@ -225,9 +245,11 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
             name: layoutForRender.name || staticRoom.name,
             palette: layoutForRender.palette || staticRoom.palette,
             dimensions: layoutForRender.dimensions || staticRoom.dimensions,
-            // Prefer the placed props (what shelter actually renders);
-            // fall back to proposedProps then the static catalogue.
-            props: layoutForRender.props?.length
+            // Prefer the placed props (what shelter actually renders).
+            // An empty `props` array is a real state ("user deleted
+            // them all"), not a fallback signal — only fall back to
+            // proposedProps / static when the field is missing entirely.
+            props: Array.isArray(layoutForRender.props)
               ? layoutForRender.props
               : (layoutForRender.proposedProps?.length
                   ? layoutForRender.proposedProps
@@ -350,17 +372,7 @@ export default function ShelterRoomDetail({ roomId, onSelectRoom }) {
             props: room.props,
             palette: room.palette,
           })}
-          onRemoveProp={async (propId) => {
-            const layout = getLayout(roomId)?.layout
-            if (!layout) return
-            try {
-              await saveLayout({
-                ...layout,
-                props: (layout.props || []).filter((p) => p.id !== propId),
-              })
-              if (selectedPropId === propId) setSelectedPropId(null)
-            } catch (err) { console.error('[saveLayout removeProp]', err) }
-          }}
+          onRemoveProp={removePropFromLayout}
           onPropRename={async (oldId, rawNewId) => {
             const layout = getLayout(roomId)?.layout
             if (!layout) return
@@ -1714,6 +1726,12 @@ function PropListItem({ prop, room, asset, selected, onSelect, onRemove, onRenam
       </div>
       <div className="room-props-item-meta">
         <span className="room-props-item-kind">{prop.kind || 'misc'}</span>
+        <span
+          className={`room-props-item-tier room-props-item-tier-${prop.tier || 'decor'}`}
+          title={prop.tier === 'interactable'
+            ? 'Interactable — agents and players may operate this prop'
+            : 'Decor — atmospheric filler, often shared across rooms'}
+        >{prop.tier || 'decor'}</span>
         {editPrompt ? (
           <textarea
             className="room-props-item-input"

@@ -33,6 +33,7 @@ import {
   getState as getTutorialState,
 } from '../lib/tutorial/runtime.js'
 import { emit as emitFx } from '../lib/shelterFxBus.js'
+import { createBackgroundLayer } from '../lib/shelterWorld/backgroundLayer.js'
 
 /**
  * Shelter diorama renderer.
@@ -296,6 +297,114 @@ function computeBounds(rooms, cellW, cellH) {
 
 const easeInOutCubic = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 
+/**
+ * Window-grid CanvasTexture for the decorative tower above the ground
+ * row. One "tile" = one (cellW × cellH) cell — two tall windows in
+ * portrait orientation, separated by a wall strip. The texture is set
+ * to RepeatWrapping; per-tower repeat scales to width/height in metres.
+ */
+function makeTowerWindowTexture() {
+  const w = 128, h = 64
+  const c = document.createElement('canvas')
+  c.width = w; c.height = h
+  const ctx = c.getContext('2d')
+  // Wall: warm beige-grey institutional concrete.
+  ctx.fillStyle = '#9a9285'
+  ctx.fillRect(0, 0, w, h)
+  // Two side-by-side window frames per tile.
+  const winW = 38, winH = 44
+  const cy = (h - winH) / 2
+  const offsets = [w * 0.25 - winW / 2, w * 0.75 - winW / 2]
+  for (const x of offsets) {
+    // Window frame (lighter inset)
+    ctx.fillStyle = '#3a3530'
+    ctx.fillRect(x - 2, cy - 2, winW + 4, winH + 4)
+    // Glass — mostly dark, occasionally lit.
+    ctx.fillStyle = '#2b343c'
+    ctx.fillRect(x, cy, winW, winH)
+    // Horizontal sash bar.
+    ctx.fillStyle = '#3a3530'
+    ctx.fillRect(x, cy + winH / 2 - 1, winW, 2)
+    // Vertical sash bar.
+    ctx.fillRect(x + winW / 2 - 1, cy, 2, winH)
+  }
+  const tex = new THREE.CanvasTexture(c)
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
+/**
+ * Decorative non-playable tower stacked above the ground row. Each
+ * "floor" is a BoxGeometry one cell tall, with a window-grid texture
+ * on its X-facing walls and a flat trim band between floors. Sits
+ * behind the cell plane so real rooms the player eventually builds
+ * up into this space render on top of it.
+ */
+/**
+ * Build slot — one cell of the upward expansion grid. Each slot has
+ * a mesh that LOOKS like an unbuilt building floor (window-grid
+ * texture); when the player builds a real room at the slot's gridX/
+ * gridY, the mesh is hidden so the room contents show through.
+ *
+ * The single-mesh-per-slot design means the row of unbuilt floors
+ * above the ground reads as "this is the building, you can fill in
+ * any of these floors." Upgrades that unlock more building space
+ * just append more slot entries.
+ */
+function buildSlotMesh({ slot, cellW, cellH, wallTex, tint }) {
+  const g = new THREE.Group()
+  g.name = `slot:${slot.gridX},${slot.gridY}`
+  const width = slot.gridW * cellW
+  const height = slot.gridH * cellH
+  const centreX = (slot.gridX + slot.gridW / 2) * cellW
+  const centreY = (slot.gridY + slot.gridH / 2) * cellH
+
+  const wallMat = new THREE.MeshLambertMaterial({ map: wallTex, color: tint })
+  const trimMat = new THREE.MeshLambertMaterial({ color: '#403a32' })
+  // Box one cell tall minus a small gap that the divider trim fills.
+  const floorH = height * 0.94
+  const geo = new THREE.BoxGeometry(width, floorH, 0.35)
+  // Face order: +x, -x, +y, -y, +z, -z. Walls + front get the window
+  // texture; top, bottom and back are flat trim.
+  const mats = [wallMat, wallMat, trimMat, trimMat, wallMat, trimMat]
+  const wall = new THREE.Mesh(geo, mats)
+  wall.position.set(centreX, centreY - (height - floorH) / 2, 0)
+  g.add(wall)
+  // Top divider trim — sits where the next slot's bottom would begin,
+  // so a column of slots reads as visually stacked floors.
+  const trim = new THREE.Mesh(
+    new THREE.BoxGeometry(width + 0.06, height - floorH, 0.4),
+    trimMat,
+  )
+  trim.position.set(centreX, centreY + floorH / 2 + (height - floorH) / 2, 0)
+  g.add(trim)
+  return g
+}
+
+/**
+ * Default slots for the starter shelter: five slots stacked directly
+ * above each ground-row room, matching that room's width. Upgrades
+ * will extend this list (more floors, wider footprint) — for now
+ * it's hardcoded to the "5 stories above each ground-row column"
+ * rule the original decorative tower visualised.
+ */
+function deriveDefaultSlots(rooms, { floorsAbove = 5 } = {}) {
+  const slots = []
+  for (const r of rooms.filter((rm) => rm.gridY === 0)) {
+    for (let y = 1; y <= floorsAbove; y++) {
+      slots.push({
+        gridX: r.gridX,
+        gridY: y,
+        gridW: r.gridW,
+        gridH: r.gridH,
+      })
+    }
+  }
+  return slots
+}
+
 export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChange = null } = {}) {
   const hostRef = useRef(null)
   const onFocusChangeRef = useRef(onFocusChange)
@@ -347,7 +456,9 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     renderer.domElement.style.touchAction = 'none'
 
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x202327)
+    // Backdrop scene paints the background — leave the main scene's
+    // background transparent so the perspective diorama shows through.
+    scene.background = null
 
     // PBR environment lighting — same setup as the Sims stage.
     // The PMREM-baked RoomEnvironment carries the diffuse + specular
@@ -361,11 +472,71 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     worldRoot.rotation.x = TILT_MAX
     scene.add(worldRoot)
 
+    // ── Ground surface + underground fill ──────────────────────────
+    // Anchors the shelter to a visible floor instead of having the
+    // cells float over the perspective backdrop. Two pieces:
+    //
+    //   * surface strip — thin concrete-coloured band centred on y=0,
+    //     visible BESIDE ground-floor cells where there's no room.
+    //   * dirt fill — wide tall plane from y=0 downward filling the
+    //     underground volume. Cells at gridY < 0 (basement, archive)
+    //     render in front of it, so they look carved out of dirt.
+    //     A vertex-color gradient runs from topsoil at the surface
+    //     to near-black at depth, so deeper digging visibly darkens.
+    //
+    // Both sit slightly behind the cell plane in -z so cell walls
+    // overdraw them where appropriate. Width is generous so panning
+    // doesn't expose the edge.
+    {
+      const GROUND_WIDTH = 200
+      const FILL_DEPTH = 100   // metres below surface
+      // Surface strip — covers a tiny band around y=0.
+      const surfaceGeo = new THREE.PlaneGeometry(GROUND_WIDTH, 0.18)
+      const surfaceMat = new THREE.MeshBasicMaterial({ color: '#5e564a' })
+      const surface = new THREE.Mesh(surfaceGeo, surfaceMat)
+      surface.position.set(0, -0.05, -0.55)
+      surface.name = 'shelter:ground-surface'
+      worldRoot.add(surface)
+
+      // Underground dirt fill — gradient from topsoil → deep earth.
+      const fillGeo = new THREE.PlaneGeometry(GROUND_WIDTH, FILL_DEPTH)
+      const topsoil = new THREE.Color('#4a3528')
+      const deep = new THREE.Color('#15100a')
+      const cols = new Float32Array(12)
+      // PlaneGeometry verts after construction: 0=top-left, 1=top-right,
+      // 2=bottom-left, 3=bottom-right (in pre-rotation local coords).
+      cols[0]  = topsoil.r; cols[1]  = topsoil.g; cols[2]  = topsoil.b
+      cols[3]  = topsoil.r; cols[4]  = topsoil.g; cols[5]  = topsoil.b
+      cols[6]  = deep.r;    cols[7]  = deep.g;    cols[8]  = deep.b
+      cols[9]  = deep.r;    cols[10] = deep.g;    cols[11] = deep.b
+      fillGeo.setAttribute('color', new THREE.BufferAttribute(cols, 3))
+      const fillMat = new THREE.MeshBasicMaterial({ vertexColors: true })
+      const fill = new THREE.Mesh(fillGeo, fillMat)
+      // Top edge of the plane sits at y=0; centre at y=-FILL_DEPTH/2.
+      // Sit a hair behind the surface strip so the surface line stays
+      // visible at the seam.
+      fill.position.set(0, -FILL_DEPTH / 2, -0.6)
+      fill.name = 'shelter:underground-fill'
+      worldRoot.add(fill)
+    }
+
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100)
     camera.position.set(0, 0, 10)
     camera.lookAt(0, 0, 0)
 
     let layoutBounds = null  // set by the fetch handler below
+    // The starter "5 floors above each ground-row room" slot list. Set
+    // by the layout fetch handler; consumed by computeValidPlacements
+    // (which only returns positions from this list, never the
+    // adjacency-driven candidates the previous version generated).
+    let buildSlots = []
+    // 3D backdrop scene — its own perspective camera + scene rendered
+    // before the main ortho pass, so the dollhouse cells composite on
+    // top of a real-3D Castles-style diorama (sky dome, ground plane,
+    // hills, distant buildings) with actual depth cues.
+    const backdrop = createBackgroundLayer({
+      aspect: (host.clientWidth || 1) / (host.clientHeight || 1),
+    })
     const resize = () => {
       const w = host.clientWidth || 1
       const h = host.clientHeight || 1
@@ -378,6 +549,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       camera.top = halfH
       camera.bottom = -halfH
       camera.updateProjectionMatrix()
+      backdrop.setAspect(aspect)
       refit(false)
     }
 
@@ -1149,6 +1321,10 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         if (cancelled) return
         const cellW = layout.cellWidth ?? 2
         const cellH = layout.cellHeight ?? 1
+        // Vertical-tier backdrop. Sits inside worldRoot so it inherits
+        // the tilt; covers the full gridY range with flat hex plates
+        // until FLUX textures land via the environment bridge endpoint.
+        disposers.push(() => { try { backdrop?.dispose() } catch {} })
         const renderedRoomIds = new Set()
 
         const addRoomToScene = (room) => {
@@ -1183,6 +1359,54 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
 
         for (const room of layout.rooms ?? []) addRoomToScene(room)
 
+        // ── Build slots above the ground row ──────────────────────
+        // The shelter is part of a larger building; the player can
+        // only construct in pre-allocated slots (visualised as
+        // unbuilt floors). When a real room exists at a slot's grid
+        // position, the slot mesh hides so the room contents show
+        // through without z-fight.
+        const slotsGroup = new THREE.Group()
+        slotsGroup.name = 'shelter:slots'
+        slotsGroup.position.z = -0.45  // sit behind the cell plane
+        worldRoot.add(slotsGroup)
+        const slotMeshes = new Map()  // "gx,gy" → mesh
+        {
+          buildSlots = deriveDefaultSlots(layout.rooms ?? [], { floorsAbove: 5 })
+          const sharedTex = makeTowerWindowTexture()
+          // One window-tile per cell in width; one per cell in height.
+          // All slots in the starter set share the same (gridW=2, gridH=1)
+          // size so a single shared texture + repeat config is fine.
+          sharedTex.repeat.set(2, 1)
+          for (const slot of buildSlots) {
+            // Slight darken with height so a tall stack reads as
+            // receding into shade.
+            const tint = new THREE.Color().lerpColors(
+              new THREE.Color('#ffffff'),
+              new THREE.Color('#88817b'),
+              Math.min(slot.gridY / 6, 1),
+            )
+            const mesh = buildSlotMesh({ slot, cellW, cellH, wallTex: sharedTex, tint })
+            slotMeshes.set(`${slot.gridX},${slot.gridY}`, mesh)
+            slotsGroup.add(mesh)
+          }
+          const syncSlotVisibility = () => {
+            const built = shelterStore.getSnapshot().builtRooms ?? []
+            const filled = new Set(built.map((r) => `${r.gridX},${r.gridY}`))
+            for (const [key, mesh] of slotMeshes) mesh.visible = !filled.has(key)
+          }
+          syncSlotVisibility()
+          const unsubSlots = shelterStore.subscribe(syncSlotVisibility)
+          disposers.push(unsubSlots)
+          disposers.push(() => {
+            slotsGroup.traverse((o) => {
+              if (o.geometry) o.geometry.dispose?.()
+              if (Array.isArray(o.material)) o.material.forEach((m) => { m.map?.dispose?.(); m.dispose?.() })
+              else if (o.material) { o.material.map?.dispose?.(); o.material.dispose?.() }
+            })
+            worldRoot.remove(slotsGroup)
+          })
+        }
+
         // Stash these so the dynamic builtRooms subscriber + ghost
         // computation can read them without re-fetching the layout.
         layoutCellW = cellW
@@ -1196,6 +1420,9 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           homeBounds = { minX: bb.minX, maxX: bb.maxX, minY: bb.minY, maxY: bb.maxY }
           controls.setBounds(homeBounds)
           layoutBounds = bb
+          // Backdrop renders its own scene with a perspective camera —
+          // no width tracking needed. Kept the hook for future use.
+          backdrop?.setWidth?.(bb.width)
           // Recompute homeFrame so cameraTo home reflects the new
           // shelter footprint after a build.
           refit(true)
@@ -1675,6 +1902,13 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       ghostGroups.length = 0
       ghostMaterials.length = 0
     }
+    // Placement policy: rooms can only be built in pre-allocated
+    // slots above the ground row (visualised by the unbuilt-floor
+    // meshes in `slotsGroup`), AND a slot is only valid when at
+    // least one of its cells shares an edge with an existing room.
+    // That keeps the shelter a single connected mass — no orphan
+    // rooms floating two floors above the highest built room.
+    // The footprint must also match the slot's gridW × gridH.
     const computeValidPlacements = (footprint) => {
       const allRooms = [
         ...baseLayoutRooms,
@@ -1688,29 +1922,36 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           }
         }
       }
-      const seen = new Set()
-      const out = []
-      for (const r of allRooms) {
-        const candidates = [
-          { gx: r.gridX + r.gridW, gy: r.gridY },          // right
-          { gx: r.gridX - footprint.w, gy: r.gridY },      // left
-          { gx: r.gridX, gy: r.gridY + r.gridH },          // above
-          { gx: r.gridX, gy: r.gridY - footprint.h },      // below
-        ]
-        for (const c of candidates) {
-          // Footprint fits without overlapping any existing room.
-          let fits = true
-          for (let dx = 0; dx < footprint.w && fits; dx++) {
-            for (let dy = 0; dy < footprint.h && fits; dy++) {
-              if (occupied.has(`${c.gx + dx},${c.gy + dy}`)) fits = false
-            }
+      const touchesExistingRoom = (slot) => {
+        for (let dx = 0; dx < slot.gridW; dx++) {
+          for (let dy = 0; dy < slot.gridH; dy++) {
+            const cx = slot.gridX + dx
+            const cy = slot.gridY + dy
+            if (
+              occupied.has(`${cx - 1},${cy}`)
+              || occupied.has(`${cx + 1},${cy}`)
+              || occupied.has(`${cx},${cy - 1}`)
+              || occupied.has(`${cx},${cy + 1}`)
+            ) return true
           }
-          if (!fits) continue
-          const k = `${c.gx},${c.gy}`
-          if (seen.has(k)) continue
-          seen.add(k)
-          out.push({ gridX: c.gx, gridY: c.gy, gridW: footprint.w, gridH: footprint.h })
         }
+        return false
+      }
+      const out = []
+      for (const slot of buildSlots) {
+        if (slot.gridW !== footprint.w || slot.gridH !== footprint.h) continue
+        let fits = true
+        for (let dx = 0; dx < slot.gridW && fits; dx++) {
+          for (let dy = 0; dy < slot.gridH && fits; dy++) {
+            if (occupied.has(`${slot.gridX + dx},${slot.gridY + dy}`)) fits = false
+          }
+        }
+        if (!fits) continue
+        if (!touchesExistingRoom(slot)) continue
+        out.push({
+          gridX: slot.gridX, gridY: slot.gridY,
+          gridW: slot.gridW, gridH: slot.gridH,
+        })
       }
       return out
     }
@@ -1956,6 +2197,15 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       worldRoot.rotation.x = TILT_MAX + (TILT_MIN - TILT_MAX) * k + debugRX
       worldRoot.rotation.y = debugRY
 
+      // Two-pass render: perspective backdrop first, then the ortho
+      // shelter on top. The backdrop owns its own scene + camera; we
+      // just hand the renderer between passes and clear depth so the
+      // cells composite cleanly without z-fighting the distant geo.
+      renderer.autoClear = false
+      renderer.setClearColor(0x000000, 0)
+      renderer.clear(true, true, true)
+      backdrop.render(renderer, camera)
+      renderer.clearDepth()
       renderer.render(scene, camera)
     }
     tick()
@@ -2115,10 +2365,23 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         continue
       }
       if (existing?.pending) continue
-      live.set(a.id, { pending: true })
+      // Identity token so the async resolver can detect whether this
+      // attempt was superseded (cleanup ran, then a fresh effect run
+      // set a new pending or a real handle). Without the identity
+      // check the cancel path would leave a stale `{pending:true}` in
+      // `live` forever — and the next effect run would `continue`
+      // past this id, so Edi (or anyone caught by a registry-change
+      // mid-spawn) never re-spawns.
+      const pendingToken = { pending: true }
+      live.set(a.id, pendingToken)
       const lookupKey = a.pubkey ?? a.id
       factory.spawn(lookupKey).then((handle) => {
-        if (cancelled) { handle.dispose(); return }
+        const stillOurs = live.get(a.id) === pendingToken
+        if (cancelled || !stillOurs) {
+          handle.dispose()
+          if (stillOurs) live.delete(a.id)
+          return
+        }
         // Tag the wrapper with the agent id so the click raycast can
         // walk parents from a mesh hit back to the owning agent.
         handle.object3d.userData.agentId = a.id
@@ -2139,7 +2402,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         handle.object3d.visible = true
         live.set(a.id, handle)
       }).catch((err) => {
-        live.delete(a.id)
+        if (live.get(a.id) === pendingToken) live.delete(a.id)
         console.warn('[shelter] avatar spawn failed for', a.id, err?.message || err)
       })
     }

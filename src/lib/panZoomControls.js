@@ -96,8 +96,12 @@ export function createPanZoomControls(camera, domElement, opts = {}) {
     const dy = e.clientY - lastY
     lastX = e.clientX
     lastY = e.clientY
-    if (onModifierDrag && (e.ctrlKey || e.metaKey)) {
-      onModifierDrag(dx, dy)
+    if (onModifierDrag && (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)) {
+      onModifierDrag(dx, dy, {
+        ctrl: e.ctrlKey || e.metaKey,
+        shift: e.shiftKey,
+        alt: e.altKey,
+      })
       return
     }
     // Convert pixel delta to world delta using current zoom.

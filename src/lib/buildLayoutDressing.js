@@ -63,6 +63,10 @@ export function wallSnapLocalPos({
   prop, zone, layoutHeight,
   cellW, cellH, cellDepth,
   wallT = 0, floorT = 0,
+  // World-Y of the visible floor surface. Shelter cells are centred on
+  // y=0 so the floor sits at -cellH/2; the rooms editor's gray-box has
+  // its floor at y=0. Defaulting preserves shelter behaviour.
+  floorYWorld = -cellH / 2,
   dressingOriginY = 0, s = 1,
 }) {
   if (!zone) return null
@@ -85,15 +89,15 @@ export function wallSnapLocalPos({
     const worldX = cellW / 2 - wallT - thickness / 2
     localX = worldX / s
   } else if (isCeiling) {
-    const worldY = cellH / 2 - wallT - (prop.size.h * s) / 2
+    const worldY = floorYWorld + cellH - wallT - (prop.size.h * s) / 2
     localY = (worldY - dressingOriginY) / s
     return { x: localX, y: localY, z: localZ }
   }
   // Wall props: map layout-y fraction onto the cell's interior y range
   // so eye-level art lands mid-cell instead of near the floor.
   const layoutH = Math.max(layoutHeight || 1, 0.01)
-  const interiorFloor = -cellH / 2 + floorT
-  const interiorCeil = cellH / 2 - wallT
+  const interiorFloor = floorYWorld + floorT
+  const interiorCeil = floorYWorld + cellH - wallT
   const interiorRange = interiorCeil - interiorFloor
   const yFrac = Math.max(0, Math.min(1, prop.position.y / layoutH))
   const worldY = interiorFloor + yFrac * interiorRange

@@ -16,8 +16,8 @@
       "id": "pattern-sorting",
       "name": "Pattern Sorting",
       "category": "work",
-      "gridX": 0,
-      "gridY": -1,
+      "gridX": 2,
+      "gridY": 0,
       "gridW": 2,
       "gridH": 1,
       "color": "#9c8d6a"

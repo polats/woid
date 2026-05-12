@@ -51,7 +51,7 @@
         {
           "type": "dialog",
           "speakerRole": "receptionist",
-          "text": "Good choice. Let's welcome them to <ominous>The Company</ominous>.",
+          "text": "Interesting choice. Let's see how they last at <ominous>The Agency</ominous>.",
           "tapToAdvance": true
         },
         { "type": "cameraTo", "state": "room", "ms": 1400 },

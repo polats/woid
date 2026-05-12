@@ -6910,9 +6910,20 @@ const KNOWN_ZONES = new Set([
   "ceiling-center",
 ]);
 
+// Camera no longer shows side walls or ceiling — remap any LLM-emitted
+// zones that target those surfaces to a visible equivalent on the back
+// wall so the prop still reads in the rendered cell. Older layouts on
+// disk go through this path too, so existing rooms self-heal.
+const HIDDEN_ZONE_REMAP = {
+  "side-wall-left": "back-wall-left",
+  "side-wall-right": "back-wall-right",
+  "ceiling-center": "back-wall-center",
+};
+
 function normalizeZone(zone) {
   if (typeof zone !== "string") return null;
-  const z = zone.trim().toLowerCase();
+  let z = zone.trim().toLowerCase();
+  if (HIDDEN_ZONE_REMAP[z]) z = HIDDEN_ZONE_REMAP[z];
   if (KNOWN_ZONES.has(z)) return z;
   if (z.startsWith("on:") || z.startsWith("tucked-under:")) {
     const targetId = slugifyPropId(z.split(":")[1]);
@@ -6950,7 +6961,16 @@ function normalizeProposedProps(raw) {
           d: clampNum(sh.d, 0.02, 10, null),
         }
       : null;
-    const entry = { id, kind, prompt };
+    // Two-tier prop model: 'interactable' props affect gameplay (agents
+    // or the player operate them) and are the headline beats per room;
+    // 'decor' props are atmospheric/visual filler. The LLM picks. If the
+    // field is missing we lean conservative — wall-mounted/static kinds
+    // default to decor, larger floor objects to interactable.
+    const rawTier = typeof p.tier === "string" ? p.tier.trim().toLowerCase() : null;
+    const tier = rawTier === "interactable" || rawTier === "decor"
+      ? rawTier
+      : inferTier(kind);
+    const entry = { id, kind, prompt, tier };
     if (zone) entry.zone = zone;
     if (orientation) entry.orientation = orientation;
     if (sizeHint && sizeHint.w && sizeHint.h && sizeHint.d) entry.sizeHint = sizeHint;
@@ -7038,6 +7058,7 @@ function placeFromZones(proposedProps, dimensions) {
         id: pp.id,
         kind: pp.kind,
         prompt: pp.prompt,
+        tier: pp.tier || inferTier(pp.kind),
         position: { x: round3(x), y: round3(y), z: round3(z) },
         rotation_y: round3(rotateForOrient(pp)),
         size: sz,
@@ -7084,6 +7105,7 @@ function placeFromZones(proposedProps, dimensions) {
         id: pp.id,
         kind: pp.kind,
         prompt: pp.prompt,
+        tier: pp.tier || inferTier(pp.kind),
         position: {
           x: round3(base.position.x + off),
           y: isUnder ? 0 : round3(baseTop),
@@ -7194,6 +7216,15 @@ const KIND_DEFAULT_SIZE = {
 };
 function kindDefaultSize(kind) {
   return KIND_DEFAULT_SIZE[kind] || KIND_DEFAULT_SIZE.misc;
+}
+
+// Fallback tier inference when the LLM omits the field. Atmospheric /
+// flat / fixture-class kinds become decor; the rest are gameplay-ish
+// objects an agent or player might plausibly operate. The LLM is asked
+// to set this explicitly — this just keeps legacy data sane.
+const DECOR_KINDS = new Set(["art", "sign", "rug", "lamp", "plant", "fixture", "window"]);
+function inferTier(kind) {
+  return DECOR_KINDS.has(kind) ? "decor" : "interactable";
 }
 
 function normalizeLayoutOutput(parsed, baseLayout) {
@@ -7814,11 +7845,23 @@ app.post("/rooms/:roomId/layout/generate", apiQuota.middleware, async (req, res)
 // then POST /rooms/:id/layout/from-prompt to populate geometry.
 
 const INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT = [
-  "You are creating the initial concept for a 1980s corporate office",
-  "room (Severance / Stanley Parable aesthetic). Given a user brief,",
-  "produce a single JSON object describing the room, its palette, the",
-  "FLUX prompt, AND the canonical list of props (without spatial",
-  "positions yet — those come in a later layout step).",
+  "You are creating the initial concept for an interior in a liminal",
+  "corporate / institutional vein. Treat these as the aesthetic floor:",
+  "  · Severance (Lumon) — sterile mid-century corporate, fluorescent",
+  "    drop-ceilings, mint/oat palettes, ritualised office work.",
+  "  · The Stanley Parable — empty cubicle warrens, beige carpet,",
+  "    flat-fluorescent offices that feel slightly off.",
+  "  · The Backrooms — fluorescent-lit empty spaces, mono-yellow",
+  "    wallpaper, damp carpet, depopulated and uncanny.",
+  "  · The Amazing Digital Circus — flat candy-coloured corridors,",
+  "    cartoon-vector signage, retro-CRT amenities.",
+  "Compose the room from those four reference moods (mix freely or pick",
+  "one); avoid outdoorsy / naturalistic content (no foliage, gardens,",
+  "real windows to the outside, sunlight) unless the user brief asks for",
+  "it explicitly.",
+  "Given a user brief, produce a single JSON object describing the room,",
+  "its palette, the FLUX prompt, AND the canonical list of props",
+  "(without spatial positions yet — those come in a later layout step).",
   "",
   "Schema:",
   "{",
@@ -7832,8 +7875,9 @@ const INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT = [
   '    {',
   '      "id": "<slug>",',
   '      "kind": "desk"|"chair"|"table"|"cabinet"|"shelf"|"monitor"|"lamp"|"plant"|"art"|"sign"|"rug"|"door"|"window"|"partition"|"machine"|"fixture"|"misc",',
+  '      "tier": "interactable" | "decor",',
   '      "prompt": "<concise visual description, 6-15 words>",',
-  '      "zone": "<one of: back-wall-left, back-wall-center, back-wall-right, side-wall-left, side-wall-right, floor-left, floor-center, floor-right, ceiling-center, on:<otherPropId>, tucked-under:<otherPropId>>",',
+  '      "zone": "<one of: back-wall-left, back-wall-center, back-wall-right, floor-left, floor-center, floor-right, on:<otherPropId>, tucked-under:<otherPropId>>",',
   '      "orientation": "<one of: faces-front, faces-back, faces-left, faces-right>",',
   '      "size_hint": { "w": <metres>, "h": <metres>, "d": <metres> }',
   '    }',
@@ -7870,19 +7914,29 @@ const INITIAL_ROOM_SYSTEM_PROMPT_DEFAULT = [
   "  layout step turns zones into precise 3D coordinates — there is no",
   "  second LLM pass for placement. Choose the zone that best matches",
   "  what the flux_prompt describes for that prop.",
-  "- Zone semantics:",
+  "- Zone semantics (the camera only sees the back wall + floor — there",
+  "  is no usable side-wall or ceiling surface, so don't place anything",
+  "  there):",
   "    · back-wall-left / -center / -right: prop sits against the back",
   "      wall (z = -depth/2). Use for desks lined up against the back,",
-  "      counters, credenzas, mailboxes, art on the back wall.",
-  "    · side-wall-left / -right: prop against the left or right wall.",
+  "      counters, credenzas, mailboxes, art on the back wall, signage,",
+  "      mounted machines.",
   "    · floor-left / -center / -right: free-standing on the floor away",
-  "      from walls (chair pulled into the centre, plant in the middle,",
-  "      central pedestal, rug).",
-  "    · ceiling-center: ceiling fixture (fluorescent panel, pendant).",
+  "      from walls (chair pulled into the centre, central pedestal,",
+  "      rug, machine).",
   "    · on:<otherId>: prop sits ON another prop (monitor on desk,",
   "      microwave on counter, bell on counter, lamp on table).",
   "    · tucked-under:<otherId>: prop tucks UNDER another (chair under",
   "      desk).",
+  "- tier — two tiers, set per prop:",
+  "    · interactable: the prop is gameplay-relevant. An agent or the",
+  "      player could plausibly use it: terminals, desks, machines,",
+  "      doors, chairs, vending machines, phones, switches, levers,",
+  "      file cabinets the player opens, anything triggerable.",
+  "    · decor: atmospheric / visual filler. Posters, art, signs, rugs,",
+  "      ceiling-style fixtures, decorative plants, mounted clocks,",
+  "      passive shelving. Decor props are likely reused across rooms.",
+  "  Aim for 1-3 interactable beats per room and the rest decor.",
   "- The flux_prompt MUST verbally describe the same arrangement the",
   "  zones encode (left to right, what's on the back wall, what's on",
   "  what). The image and the layout will then describe ONE room.",
@@ -8504,11 +8558,19 @@ app.get("/room-layouts", (_req, res) => {
       try {
         const layout = JSON.parse(readFileSync(path, "utf8"));
         const status = layout.status === "added" ? "added" : "draft";
+        const props = Array.isArray(layout.props) ? layout.props : [];
+        let interactable = 0, decor = 0;
+        for (const p of props) {
+          if (p?.tier === "interactable") interactable += 1;
+          else decor += 1;
+        }
         out.push({
           id: dirent.name,
           name: layout.name || dirent.name,
           mtime: statSync(path).mtimeMs,
-          propCount: Array.isArray(layout.props) ? layout.props.length : 0,
+          propCount: props.length,
+          interactableCount: interactable,
+          decorCount: decor,
           status,
         });
       } catch { /* skip corrupt */ }
@@ -8682,6 +8744,99 @@ app.get("/props/:propId/model", (req, res) => {
     res.setHeader("Content-Type", "model/gltf-binary");
     res.setHeader("Cache-Control", "no-cache");
     return createReadStream(path).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ─── Environment backdrop tiers ──────────────────────────────────────
+//
+// Vertical "what's outside" panoramas behind the shelter cells. One
+// FLUX render per tier (sky / upper-floors / mid-floors / ground /
+// basement / archive / deep). Prompts + bands are owned by the client
+// (src/lib/environmentTiers.js); the bridge just renders the supplied
+// prompt and serves the PNG. Same shape as /props/:id/image so the
+// client's runStream helper can drive it unchanged.
+const ENVIRONMENTS_DIR = join(WORKSPACE, "environments");
+mkdirSync(ENVIRONMENTS_DIR, { recursive: true });
+
+function getEnvironmentDir(tierId) {
+  const safe = String(tierId).replace(/[^a-z0-9_-]/gi, "");
+  if (!safe) throw new Error("invalid tierId");
+  return join(ENVIRONMENTS_DIR, safe);
+}
+
+// Generate the FLUX panorama for a tier. Body: { prompt, imageProviderId? }.
+// Writes WORKSPACE/environments/<tierId>/plate.png.
+app.post(
+  "/v1/environment/:tierId/image/generate/stream",
+  express.json({ limit: "8kb" }),
+  apiQuota.middleware,
+  async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    const tierId = req.params.tierId;
+    const { prompt = "", imageProviderId } = req.body || {};
+    try {
+      if (!prompt || prompt.length < 5) throw new Error("prompt is required");
+      send("stage", { stage: "generating", message: `FLUX environment:${tierId}` });
+      // No palette enrichment — these are full panoramas, not props,
+      // and the tier prompts already specify the mood + colours.
+      const { buffer } = await generateImageBytes({ prompt, imageProviderId });
+      const dir = getEnvironmentDir(tierId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "plate.png"), buffer);
+      const url = `${PUBLIC_BRIDGE_URL}/environments/${tierId}/plate?t=${Date.now()}`;
+      apiQuota.recordSuccess();
+      send("done", { url, bytes: buffer.length });
+      res.end();
+    } catch (err) {
+      console.error("[environment:image]", err);
+      apiQuota.refund();
+      send("error", { error: err.message || String(err) });
+      res.end();
+    }
+  },
+);
+
+app.get("/environments/:tierId/plate", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const path = join(getEnvironmentDir(req.params.tierId), "plate.png");
+    if (!existsSync(path)) return res.status(404).json({ error: "not found" });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-cache");
+    return createReadStream(path).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Inventory endpoint: which tiers currently have a generated plate on
+// disk + when they were written. The client uses this to skip already-
+// generated tiers and to invalidate textures when mtime changes.
+app.get("/v1/environment", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const out = [];
+    if (existsSync(ENVIRONMENTS_DIR)) {
+      for (const dirent of readdirSync(ENVIRONMENTS_DIR, { withFileTypes: true })) {
+        if (!dirent.isDirectory()) continue;
+        const path = join(ENVIRONMENTS_DIR, dirent.name, "plate.png");
+        if (!existsSync(path)) continue;
+        out.push({
+          tierId: dirent.name,
+          mtime: statSync(path).mtimeMs,
+          url: `${PUBLIC_BRIDGE_URL}/environments/${dirent.name}/plate?t=${Date.now()}`,
+        });
+      }
+    }
+    res.json({ tiers: out });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

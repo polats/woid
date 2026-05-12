@@ -25,6 +25,7 @@ testing/sessions/
 # Local e2e pipeline outputs (intermediates: avatar/tpose/model/rig per
 # character, plus report.json). Trivially regenerable; large GLBs.
 /scripts/e2e-runs/
+/e2e-runs/
 
 # Python bytecode
 __pycache__/

@@ -9907,6 +9907,29 @@ body.tutorial-hud-hidden .shelter-currency-hud {
   flex-shrink: 0;
   opacity: .85;
 }
+.room-props-item-tier {
+  font-family: ui-monospace, monospace;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  padding: 0 4px;
+  border: 1px solid var(--ink);
+  flex-shrink: 0;
+}
+.room-props-item-tier-interactable {
+  background: var(--ink);
+  color: var(--paper, #fff);
+}
+.room-props-item-tier-decor {
+  opacity: 0.6;
+}
+.room-card-tier-split {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: ui-monospace, monospace;
+}
+.room-card-tier-int { font-weight: 600; }
+.room-card-tier-dec { opacity: 0.6; }
+.room-card-tier-sep { opacity: 0.4; }
 .room-props-item-prompt {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   min-width: 0;

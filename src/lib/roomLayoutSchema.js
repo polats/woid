@@ -297,9 +297,14 @@ function prop(p, i, errors, warnings, dims) {
     && p.sourceAssetId !== id
     ? p.sourceAssetId : null
 
+  // 'interactable' = gameplay-relevant (agents/players operate it);
+  // 'decor' = atmospheric filler, often reused across rooms.
+  const tier = p.tier === 'interactable' || p.tier === 'decor' ? p.tier : 'decor'
+
   return {
     id,
     kind,
+    tier,
     prompt,
     position,
     rotation_y,

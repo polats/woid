@@ -149,6 +149,16 @@ export default function Rooms() {
                   <div className="sandbox3-card-tags">
                     <span className="sandbox3-card-tag">{rt.category}</span>
                     <span className="sandbox3-card-tag" title="Tier">t{rt.tier}</span>
+                    {(rt.interactableCount != null || rt.decorCount != null) && (
+                      <span
+                        className="sandbox3-card-tag room-card-tier-split"
+                        title={`${rt.interactableCount || 0} interactable · ${rt.decorCount || 0} decor`}
+                      >
+                        <span className="room-card-tier-int">{rt.interactableCount || 0}i</span>
+                        <span className="room-card-tier-sep">·</span>
+                        <span className="room-card-tier-dec">{rt.decorCount || 0}d</span>
+                      </span>
+                    )}
                     {summary.total > 0 && (
                       <span
                         className={`sandbox3-card-tag room-card-progress${
@@ -294,7 +304,12 @@ function mergeRoomCards(bridgeLayouts, staticTypes) {
   for (const b of bridgeLayouts) {
     seen.add(b.id)
     const stat = byId.get(b.id)
-    cards.push(stat ? { ...stat } : {
+    cards.push(stat ? {
+      ...stat,
+      interactableCount: b.interactableCount,
+      decorCount: b.decorCount,
+      propCount: b.propCount,
+    } : {
       id: b.id,
       name: b.name || b.id,
       vibe: 'generated',
@@ -305,6 +320,9 @@ function mergeRoomCards(bridgeLayouts, staticTypes) {
       generated: true,
       mtime: b.mtime,
       status: b.status || 'draft',
+      interactableCount: b.interactableCount,
+      decorCount: b.decorCount,
+      propCount: b.propCount,
     })
   }
   for (const rt of staticTypes) {
