@@ -983,17 +983,21 @@ const PERSONA_SYSTEM = [
   "  produced a name in this format before, choose a different one — vary",
   "  given name, surname, AND cultural background each time.",
   "",
-  "Respond ONLY with valid JSON. Both fields REQUIRED. No markdown, no",
-  "code fences, no trailing text.",
+  "Respond ONLY with valid JSON. All FOUR fields REQUIRED. No markdown,",
+  "no code fences, no trailing text.",
   "{",
   '  "name": "Formal full name, 2-40 chars.",',
-  '  "about": "Three short sentences in the format above. 30-80 words total."',
+  '  "about": "Three short sentences in the format above. 30-80 words total.",',
+  '  "specialty": "The role / job title in 1-4 words. Pulled from the roles list above. Title-case.",',
+  '  "personality": "Short personality tag, 2-4 words. Title-case or sentence-case. NO trailing period."',
   "}",
   "",
   "EXAMPLE structure (DO NOT COPY the name or details — produce a wholly",
   "different character of the same shape):",
   '  { "name": "[your fresh full name here]",',
-  '    "about": "[age]-year-old [role from list above]. [Three to five concrete visible details: clothing, hair, accessories, build]. [Three-to-seven word personality tag]." }',
+  '    "about": "[age]-year-old [role from list above]. [Three to five concrete visible details: clothing, hair, accessories, build]. [Three-to-seven word personality tag].",',
+  '    "specialty": "[Role from list above]",',
+  '    "personality": "[2-4 word personality tag, matches the one in the about field]" }',
   "",
   "Vary across generations: different ages (20s to 70s), different builds,",
   "different ethnicities, different roles from the list above, different",
@@ -1057,17 +1061,25 @@ function parsePersonaJson(raw) {
   const parsed = extractFirstJsonObject(candidate);
   if (!parsed) throw new Error("model did not return a parseable JSON object");
   const name = sanitizeName(parsed.name ?? parsed.callSign ?? "");
-  // Fold any lingering style_prompt / personality fields into `about` — the
-  // schema is name + about only, but older models sometimes split the bio.
-  const aboutParts = [
-    parsed.about, parsed.personality, parsed.bio,
-    parsed.stylePrompt, parsed.style_prompt,
-  ]
-    .map((v) => (typeof v === "string" ? v.trim() : ""))
-    .filter(Boolean);
-  const about = aboutParts.join("\n\n").slice(0, 1000);
+  // `about` is still the canonical bio. `specialty` + `personality` are
+  // optional structured tags — if a model returns them as separate
+  // fields, capture them; otherwise leave null and let downstream
+  // backfill extract them from the bio. Older models that nested the
+  // personality inside `about` continue to work (we don't fold those
+  // into the bio anymore, but we also don't reject them).
+  const about = (typeof parsed.about === "string" ? parsed.about.trim() : "")
+    .slice(0, 1000);
   if (!about) throw new Error("model did not return an about");
-  return { name: name || null, about };
+  const specialty = trimTag(parsed.specialty ?? parsed.role ?? parsed.job ?? null);
+  const personality = trimTag(parsed.personality ?? parsed.personalityTag ?? null);
+  return { name: name || null, about, specialty, personality };
+}
+
+function trimTag(raw) {
+  if (typeof raw !== "string") return null;
+  const s = raw.trim().replace(/\.\s*$/, "");
+  if (!s) return null;
+  return s.length > 48 ? s.slice(0, 46).trim() + "…" : s;
 }
 
 async function nimChatJson({ model, systemPrompt, userPrompt }) {
@@ -4160,6 +4172,8 @@ app.post("/v1/personas/generate", apiQuota.middleware, async (req, res) => {
     createdPubkey = c.pubkey;
     saveCharacterManifest(c.pubkey, {
       about: persona.about ?? null,
+      specialty: persona.specialty ?? null,
+      personality: persona.personality ?? null,
       profileSource: "ai",
       profileModel: persona._model ?? null,
     });
@@ -4615,6 +4629,8 @@ app.get("/characters/:pubkey", (req, res) => {
     npub: npubEncode(c.pubkey),
     name: c.name,
     about: c.about ?? null,
+    specialty: c.specialty ?? null,
+    personality: c.personality ?? null,
     state: c.state ?? null,
     avatarUrl: c.avatarUrl ?? null,
     model: c.model ?? null,
@@ -4942,6 +4958,142 @@ app.get("/characters/:pubkey/rig-mapping", async (req, res) => {
     return createReadStream(path).pipe(res);
   }
   res.status(404).json({ error: "no rig mapping" });
+});
+
+// ── Character notes — quest-log style page chain ─────────────────
+//
+// Each character carries an ever-growing chain of journal pages. The
+// player sees all unlocked pages plus one "locked-next" page whose
+// condition is visible (but not yet met). The storyteller LLM writes
+// each new locked-next page in response to gameplay; the engine
+// promotes it to the unlocked list when its condition fires.
+//
+// Disk shape (characters/<npub>/notes.json):
+//   { pages: [{ id, title, body, unlockedAt }],
+//     next:  { id, title, condition, conditionText } | null }
+//
+// Page 0 is special — its body is *not* persisted. It's always
+// derived from `c.about` at read time so edits to the bio flow
+// through. The storyteller never overwrites it.
+const NOTES_FILE = "notes.json";
+
+function readNotesFile(pubkey) {
+  const path = join(getCharDir(pubkey), NOTES_FILE);
+  if (!existsSync(path)) return null;
+  try { return JSON.parse(readFileSync(path, "utf-8")); }
+  catch (err) {
+    console.error(`[notes] parse ${pubkey.slice(0, 12)}: ${err.message}`);
+    return null;
+  }
+}
+
+function writeNotesFile(pubkey, notes) {
+  const dir = getCharDir(pubkey);
+  if (!existsSync(dir)) return false;
+  writeFileSync(join(dir, NOTES_FILE), JSON.stringify(notes, null, 2), "utf-8");
+  return true;
+}
+
+function emptyNotesFor() {
+  // pages[0] is the seeded About page — we persist its envelope
+  // (id, title, unlockedAt) but read its body from c.about at GET time.
+  return {
+    pages: [
+      { id: "p0", title: "About", unlockedAt: new Date().toISOString() },
+    ],
+    next: null,
+  };
+}
+
+function nextPageId(notes) {
+  const idx = notes.pages.length;
+  return `p${idx}`;
+}
+
+// Build the GET response — inlines page 0 body from c.about and
+// guarantees notes exist (auto-seeds on first read).
+function buildNotesResponse(c) {
+  const stored = readNotesFile(c.pubkey) ?? emptyNotesFor();
+  if (!readNotesFile(c.pubkey)) writeNotesFile(c.pubkey, stored);
+  const pages = stored.pages.map((p, i) =>
+    i === 0
+      ? { ...p, body: c.about ?? "" }
+      : p,
+  );
+  return { pages, next: stored.next ?? null };
+}
+
+app.get("/characters/:pubkey/notes", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  res.json(buildNotesResponse(c));
+});
+
+// Storyteller writes the locked-next page here once it has generated
+// title + condition + conditionText. Body shape:
+//   { title: string, condition: object, conditionText: string,
+//     body?: string }
+// `body` is optional at lock time — the storyteller can defer the
+// page's prose to the unlock animation. The engine call below
+// (`/notes/unlock`) accepts a `body` to seal it in at unlock time.
+app.put("/characters/:pubkey/notes/next", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  const { title, condition, conditionText, body } = req.body || {};
+  if (typeof title !== "string" || !title.trim()) {
+    return res.status(400).json({ error: "title required" });
+  }
+  if (!condition || typeof condition !== "object") {
+    return res.status(400).json({ error: "condition object required" });
+  }
+  if (typeof conditionText !== "string" || !conditionText.trim()) {
+    return res.status(400).json({ error: "conditionText required" });
+  }
+  const notes = readNotesFile(pubkey) ?? emptyNotesFor();
+  notes.next = {
+    id: nextPageId(notes),
+    title: String(title).slice(0, 80),
+    body: typeof body === "string" ? String(body).slice(0, 2000) : null,
+    condition,
+    conditionText: String(conditionText).slice(0, 240),
+  };
+  writeNotesFile(pubkey, notes);
+  res.json(buildNotesResponse(c));
+});
+
+// Engine fires this when the locked-next page's condition is met.
+// Promotes `next` to `pages` and records the unlock time. Accepts an
+// optional `body` so the storyteller can stream prose into the page
+// at the exact unlock moment (covers the lazy-generation case).
+app.post("/characters/:pubkey/notes/unlock", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  const notes = readNotesFile(pubkey) ?? emptyNotesFor();
+  if (!notes.next) return res.status(409).json({ error: "no locked-next page to unlock" });
+  const bodyOverride = typeof req.body?.body === "string" ? req.body.body : null;
+  const unlocked = {
+    id: notes.next.id,
+    title: notes.next.title,
+    body: (bodyOverride ?? notes.next.body ?? "").slice(0, 2000),
+    unlockedAt: new Date().toISOString(),
+  };
+  notes.pages.push(unlocked);
+  notes.next = null;
+  writeNotesFile(pubkey, notes);
+  res.json(buildNotesResponse(c));
+});
+
+// Reset — wipes the chain back to just page 0 (About). Useful for
+// testing the storyteller without re-minting characters.
+app.delete("/characters/:pubkey/notes", async (req, res) => {
+  const pubkey = req.params.pubkey;
+  const c = loadCharacter(pubkey);
+  if (!c) return res.status(404).json({ error: "not found" });
+  writeNotesFile(pubkey, emptyNotesFor());
+  res.json(buildNotesResponse(c));
 });
 
 // Kimodo motion-JSON serving — proxy from S3 so the prod frontend
@@ -6026,12 +6178,14 @@ app.patch("/characters/:pubkey", async (req, res) => {
   const c = loadCharacter(pubkey);
   if (!c) return res.status(404).json({ error: "not found" });
   const {
-    name, about, state, avatarUrl, model, harness, promptStyle, mood, needs,
+    name, about, specialty, personality, state, avatarUrl, model, harness, promptStyle, mood, needs,
     npc_role, npc_default_pos, shift_start, shift_end, starter, added,
   } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = String(name).trim() || c.name;
   if (about !== undefined) patch.about = about ? String(about) : null;
+  if (specialty !== undefined) patch.specialty = specialty ? String(specialty).slice(0, 48) : null;
+  if (personality !== undefined) patch.personality = personality ? String(personality).slice(0, 48) : null;
   if (state !== undefined) patch.state = state ? String(state).slice(0, 2000) : null;
   if (avatarUrl !== undefined) patch.avatarUrl = avatarUrl ? String(avatarUrl) : null;
   if (model !== undefined) {

@@ -5288,6 +5288,7 @@ body {
   z-index: 10;
 }
 .game-phone-screen {
+  position: relative;  /* anchor for in-phone portals (notes modal) */
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -5844,6 +5845,90 @@ body {
   opacity: 1;
   transform: translate(-50%, 0);
 }
+/* Top-of-stage room info card — mirrors the player card (paper body,
+   ink header strip with the room name, hard 2px border + 4px shadow).
+   Sized to fit the name without truncation; meta chips + progress bar
+   live in the paper body. */
+.shelter-room-card {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  min-width: 280px;
+  max-width: min(520px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  font-family: var(--font-mono);
+  color: var(--ink);
+  pointer-events: none;
+  animation: shelter-room-card-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes shelter-room-card-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.shelter-room-card-head {
+  padding: 8px 14px;
+  background: var(--ink);
+  color: var(--paper);
+  border-bottom: 2px solid var(--ink);
+}
+.shelter-room-card-name {
+  display: block;
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+  color: var(--paper);
+  line-height: 1.15;
+  /* No truncation — let the card grow to fit. */
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.shelter-room-card-body {
+  padding: 8px 12px 10px;
+}
+.shelter-room-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.shelter-room-card-tier,
+.shelter-room-card-lvl {
+  padding: 2px 6px;
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 700;
+  border: 1.5px solid var(--ink);
+}
+.shelter-room-card-cat {
+  opacity: 0.7;
+}
+.shelter-room-card-mult {
+  margin-left: auto;
+  opacity: 0.85;
+}
+.shelter-room-card-bar {
+  margin-top: 8px;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.08);
+  border: 1.5px solid var(--ink);
+}
+.shelter-room-card-bar-fill {
+  height: 100%;
+  background: var(--ink);
+  transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
 
 /* Single-tap selection info card — small floater anchored at the
    tap point, shown when a room or character is selected but not yet
@@ -5956,12 +6041,17 @@ body {
 
 .shelter-card-head {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   padding: 8px 12px;
   background: var(--ink);
   color: var(--paper);
   border-bottom: 2px solid var(--ink);
+}
+.shelter-card-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .shelter-card-avatar {
   flex: 0 0 96px;
@@ -6017,10 +6107,10 @@ body {
   background: var(--paper);
   padding: 8px 12px;
   /* Fixed height — the card shouldn't change size between tabs.
-     Long bios scroll inside; the schedule transposes to 4 horizontal
-     columns to fit comfortably in this height. */
+     Overflow clipped (no scroll) — Profile content is sized to fit
+     this height exactly. */
   height: 96px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 .shelter-card-bio {
   font-family: var(--font-sans, system-ui);
@@ -6088,6 +6178,380 @@ body {
   max-width: 100%;
   align-self: end;
   margin-top: 2px;
+}
+
+/* Notes tab — staged folder fold-open (Path B).
+   - Strip of chip-folders, swipable horizontally.
+   - On tap of an unlocked chip: chip lifts (~140 ms), then a
+     separately-mounted open card grows from the chip's measured
+     rect to fill the body (spring), then the page slides UP from
+     `translateY(100%)` inside the open card. Reversed on close.
+   - Locked chips show only a padlock icon and shake on tap. */
+.shelter-card-notes {
+  position: relative;
+  height: 100%;
+  margin: -8px -12px;
+  overflow: hidden;  /* clip the page slide-up + open-card grow */
+}
+.shelter-card-notes-empty {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink, #1a1a1a);
+  opacity: 0.55;
+  text-align: center;
+  padding: 28px 12px;
+}
+.shelter-card-notes-strip {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  height: 100%;
+  width: max-content;
+  /* framer-motion's drag="x" owns horizontal pointer events. Block
+     native horizontal scroll/zoom on touch so the gesture is clean,
+     but keep pan-y so the page can still scroll vertically. */
+  touch-action: pan-y;
+  cursor: grab;
+}
+.shelter-card-notes-strip:active { cursor: grabbing; }
+/* Manilla-folder chip — a miniature of the open folder cover. Same
+   gradient + tab + diagonal hatched stripe at the bottom so the
+   open animation reads as one continuous element (chip → cover →
+   chip) instead of two different visuals trading places. */
+.shelter-card-notes-chip {
+  appearance: none;
+  flex: 0 0 150px;
+  height: 100%;
+  padding: 14px 10px 20px;  /* extra bottom room for the hatched stripe */
+  background: linear-gradient(180deg, #d4be78 0%, #c2ac5e 100%);
+  color: #1a140a;
+  border: 1.5px solid #4a3a1e;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-family: var(--font-mono);
+  position: relative;
+  scroll-snap-align: start;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+/* Diagonal hatched stripe at the chip's bottom edge — same pattern
+   as the open folder cover so the chip reads as a mini-cover. */
+.shelter-card-notes-chip-stripe {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 10px;
+  background: repeating-linear-gradient(
+    -45deg,
+    #4a3a1e 0 6px,
+    #6a5630 6px 12px
+  );
+  pointer-events: none;
+}
+.shelter-card-notes-chip::before {
+  /* Index tab sticking up at the top-right with the file number. */
+  content: attr(data-num);
+  position: absolute;
+  top: -8px;
+  right: 10px;
+  padding: 1px 6px 2px;
+  background: #6a5630;
+  color: #e8d8a0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  border-radius: 2px 2px 0 0;
+  border: 1.5px solid #6a5630;
+  border-bottom: none;
+}
+.shelter-card-notes-chip:nth-child(odd) { transform: rotate(-0.6deg); }
+.shelter-card-notes-chip:nth-child(even) { transform: rotate(0.6deg); }
+.shelter-card-notes-chip:hover {
+  transform: translateY(-2px) rotate(0deg);
+  box-shadow: 0 6px 10px rgba(0, 0, 0, 0.22);
+}
+.shelter-card-notes-chip.is-active {
+  background: linear-gradient(180deg, #d4be78 0%, #c7ae5e 100%);
+  border-color: #4a3a1e;
+  color: #1a140a;
+}
+.shelter-card-notes-chip.is-locked {
+  cursor: not-allowed;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 8px 10px;
+}
+.shelter-card-notes-chip.is-locked::after {
+  /* CLASSIFIED stamp — smaller and tucked at the top so it doesn't
+     overlap the condition text. */
+  content: 'CLASSIFIED';
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-8deg);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  color: rgba(180, 30, 30, 0.7);
+  border: 1.5px solid rgba(180, 30, 30, 0.6);
+  padding: 1px 5px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 2;
+}
+.shelter-card-notes-chip.is-placeholder::after {
+  display: none;  /* placeholders skip the CLASSIFIED stamp */
+}
+.shelter-card-notes-chip.is-placeholder {
+  opacity: 0.55;
+}
+.shelter-card-notes-chip.is-shaking {
+  animation: shelter-card-notes-chip-shake 360ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes shelter-card-notes-chip-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-3px); }
+  40%, 60% { transform: translateX(3px); }
+}
+.shelter-card-notes-chip-title {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 100%;
+}
+/* Locked chip — padlock is now a faint watermark BEHIND the
+   condition text so the player can read the requirement without
+   the lock icon blocking. Placeholder chips have only the lock
+   (no condition text). */
+.shelter-card-notes-chip-lock {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 52px;
+  /* Darker than before so the watermark reads at a glance without
+     competing with the condition text in the foreground. */
+  opacity: 0.28;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 0;
+  filter: saturate(0.6);
+}
+.shelter-card-notes-chip.is-placeholder .shelter-card-notes-chip-lock {
+  /* No condition text on placeholders — lock acts as the focal
+     element, not a background. */
+  font-size: 28px;
+  opacity: 0.55;
+}
+.shelter-card-notes-chip-cond {
+  position: relative;
+  z-index: 1;
+  margin-top: 12px;  /* room for the CLASSIFIED stamp at the top */
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  line-height: 1.3;
+  color: #2a2418;
+  font-weight: 600;
+  max-width: 100%;
+  /* No line clamp — let the text wrap as many lines as needed
+     within the chip's height. Overflow handled by the chip's
+     own height/padding. */
+}
+
+/* ── Folder modal ────────────────────────────────────────────────
+   Portalled to document.body. Fullscreen overlay + a manilla folder
+   that opens via 3D cover flip. The closed front cover rotates
+   around its top edge to reveal the inside (page contents).
+*/
+.folder-modal-root {
+  /* Absolute — anchored to the .game-phone-screen container so the
+     modal stays inside the phone mock instead of the browser viewport. */
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+.folder-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.55);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+.folder-modal {
+  position: absolute;
+  top: 0; left: 0;
+  pointer-events: auto;
+  will-change: transform, width, height;
+}
+.folder-modal-3d {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+}
+.folder-modal-inside,
+.folder-modal-cover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Inside — page contents (revealed when cover flips). */
+.folder-modal-inside {
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0 22px,
+      rgba(0, 0, 0, 0.04) 22px 23px
+    ),
+    linear-gradient(180deg, #fbf3df 0%, #f1e6c4 100%);
+  color: #1a140a;
+  border: 1.5px solid #6a5630;
+  /* Smaller / tighter shadow so it doesn't reach past the phone
+     screen edge on narrow viewports. */
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+.folder-modal-header {
+  flex: 0 0 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  background: #2a2418;
+  color: #e8d8a0;
+  font-family: var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.folder-modal-header-title {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+}
+.folder-modal-close {
+  appearance: none;
+  background: transparent;
+  border: 1.5px solid #e8d8a0;
+  color: #e8d8a0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.folder-modal-close:hover {
+  background: #e8d8a0;
+  color: #2a2418;
+}
+.folder-modal-page {
+  flex: 1;
+  padding: 20px 28px 24px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  color: #1a140a;
+  overflow-y: auto;
+  will-change: transform, opacity;
+  position: relative;
+}
+.folder-modal-page-stamp {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  font-weight: 700;
+  color: rgba(180, 30, 30, 0.55);
+  border: 2px solid rgba(180, 30, 30, 0.45);
+  padding: 3px 8px;
+  transform: rotate(-3deg);
+}
+.folder-modal-page-body {
+  white-space: pre-wrap;
+}
+/* Cover — folder's front face. Hinges on top edge (rotateX). */
+.folder-modal-cover {
+  background: linear-gradient(180deg, #d4be78 0%, #c2ac5e 100%);
+  border: 1.5px solid #4a3a1e;
+  color: #1a140a;
+  transform-origin: top center;
+  backface-visibility: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 28px;
+  /* Smaller shadow — see .folder-modal-inside note. */
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  z-index: 2;  /* sits above inside until flipped */
+}
+.folder-modal-cover-tab {
+  position: absolute;
+  top: -16px;
+  right: 28px;
+  padding: 4px 14px 6px;
+  background: #6a5630;
+  color: #e8d8a0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  border: 1.5px solid #4a3a1e;
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+}
+.folder-modal-cover-title {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  color: #1a140a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+  will-change: opacity;
+}
+.folder-modal-cover-stripe {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 16px;
+  background: repeating-linear-gradient(
+    -45deg,
+    #4a3a1e 0 8px,
+    #6a5630 8px 16px
+  );
 }
 
 .shelter-card-tabs {
@@ -6246,6 +6710,259 @@ body {
 .shelter-card-reassign-btn:hover {
   background: var(--ink, #1a1a1a);
   color: var(--paper, #f5f1e6);
+}
+/* Block variant — used inside the Profile tab so the action takes
+   the full card width and reads as the primary CTA, not an inline
+   chip. */
+.shelter-card-reassign-btn.is-block {
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 6px 0 2px;
+  padding: 10px 14px;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  background: var(--ink, #1a1a1a);
+  color: var(--paper, #f5f1e6);
+  border: 1.5px solid var(--ink, #1a1a1a);
+  box-shadow: 3px 3px 0 var(--ink, #1a1a1a);
+  overflow: hidden;
+}
+/* Progress-bar variant — the button itself fills with production
+   progress. Fill sits underneath the centred label. */
+.shelter-card-reassign-btn-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(245, 241, 230, 0.18);
+  transition: width 320ms ease;
+  z-index: 0;
+}
+.shelter-card-reassign-btn.is-progress.is-collect .shelter-card-reassign-btn-fill {
+  background: rgba(255, 255, 255, 0.22);
+}
+.shelter-card-reassign-btn-label {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  line-height: 1.05;
+  gap: 2px;
+}
+.shelter-card-reassign-btn-primary {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+}
+.shelter-card-reassign-btn-sub {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  font-weight: 500;
+  text-transform: uppercase;
+  opacity: 0.78;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shelter-card-reassign-btn.is-block:hover {
+  transform: translate(1px, 1px);
+  box-shadow: 2px 2px 0 var(--ink, #1a1a1a);
+}
+.shelter-card-reassign-btn.is-block:active {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 var(--ink, #1a1a1a);
+}
+.shelter-card-reassign-btn.is-block:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: 3px 3px 0 var(--ink, #1a1a1a);
+}
+
+/* Character-card stars — five-star rating row above the name. Filled
+   stars use the ink-on-paper aesthetic; unfilled are low-opacity. */
+/* Top row of the character title block — stars on the left, level XP
+   bar on the right. Sits above the name. */
+.shelter-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.shelter-card-top .shelter-card-stars {
+  margin-bottom: 0;
+}
+.shelter-card-top .shelter-card-xp-bar {
+  flex: 1;
+  min-width: 80px;
+}
+.shelter-card-stars {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 4px;
+  line-height: 1;
+}
+.shelter-card-star {
+  font-size: 22px;
+  color: var(--paper, #f5f1e6);
+  opacity: 0.22;
+  letter-spacing: 0;
+  line-height: 1;
+}
+.shelter-card-star.is-filled {
+  color: #ffd84a;
+  opacity: 1;
+  text-shadow: 0 0 6px rgba(255, 216, 74, 0.55);
+}
+
+/* Tag row below the name — single row, compact. Each chip truncates
+   with ellipsis if its content is too long. */
+.shelter-card-tags {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  margin-top: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.shelter-card-tag {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* Specialty — what the character DOES. Cool blue, paper text. */
+.shelter-card-tag.is-specialty {
+  background: #5a78c0;
+  color: var(--paper, #f5f1e6);
+  border-color: #80a8ff;
+}
+/* Personality — how the character BEHAVES. Warm amber, ink text. */
+.shelter-card-tag.is-personality {
+  background: #d8a13a;
+  color: var(--ink, #1a1a1a);
+  border-color: #ffd06a;
+}
+
+/* Row holding the Energy + Social bars side-by-side so the profile
+   panel stays one screen tall (no scroll). */
+.shelter-card-needs-row {
+  display: flex;
+  gap: 6px;
+}
+.shelter-card-needs-row .shelter-card-need-bar {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Per-character need bars (Energy, Social) — paper-on-ink slot in the
+   Profile tab body. Label sits flush-left, value flush-right; fill
+   colours differ per kind so they're distinguishable at a glance. */
+.shelter-card-need-bar {
+  position: relative;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.08);
+  border: 1.5px solid var(--ink, #1a1a1a);
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+.shelter-card-need-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  transition: width 240ms ease;
+}
+.shelter-card-need-energy .shelter-card-need-bar-fill {
+  background: linear-gradient(90deg, #6fb37a, #9be0a6);
+}
+.shelter-card-need-social .shelter-card-need-bar-fill {
+  background: linear-gradient(90deg, #c46a8f, #e8a9c0);
+}
+.shelter-card-need-bar-label,
+.shelter-card-need-bar-value {
+  position: relative;
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 18px;
+  color: var(--ink, #1a1a1a);
+  padding: 0 8px;
+}
+.shelter-card-need-bar-value {
+  float: right;
+  font-weight: 700;
+}
+
+/* Caption above the Reassign / Collect button — names the assigned
+   room so the action button doesn't have to. */
+.shelter-card-assigned-room {
+  margin-top: 4px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink, #1a1a1a);
+  opacity: 0.7;
+}
+
+/* Collect variant of the Reassign button — fires when the assigned
+   room's production is ready. Same shape, attention-grabbing colour
+   so the player can't miss it. */
+.shelter-card-reassign-btn.is-block.is-collect {
+  background: #c41a3a;
+  color: #fff5e6;
+  border-color: #c41a3a;
+  box-shadow: 3px 3px 0 #1a1a1a;
+  animation: shelter-card-collect-pulse 1.2s ease-in-out infinite;
+}
+@keyframes shelter-card-collect-pulse {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.18); }
+}
+.shelter-card-reassign-btn.is-block.is-collect:hover {
+  transform: translate(1px, 1px);
+  box-shadow: 2px 2px 0 #1a1a1a;
+}
+
+/* Character-card level XP bar — same overlay pattern as the bottom
+   playerXp bar (.shelter-xp-bar). Sits in the Profile tab body. */
+.shelter-card-xp-bar {
+  position: relative;
+  height: 16px;
+  /* Empty-state needs visible contrast against the dark header — a
+     low-opacity paper tint reads as a hollow slot. */
+  background: rgba(245, 241, 230, 0.16);
+  border: 1.5px solid rgba(245, 241, 230, 0.7);
+  overflow: hidden;
+}
+.shelter-card-xp-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #5a78c0, #80a8ff);
+  transition: width 240ms ease;
+}
+.shelter-card-xp-bar-label {
+  position: relative;
+  display: block;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 16px;
+  color: #f5f1e6;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.7);
 }
 
 /* ── NPCs view ───────────────────────────── */

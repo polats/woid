@@ -128,18 +128,35 @@ function ModelSection({ bridgeUrl, pubkey, onView }) {
   const [now, setNow] = useState(Date.now())
 
   // Probe: does this character have a saved GLB? Avoids the GlbViewer
-  // attempting to load a 404 on first mount.
+  // attempting to load a 404 on first mount. Re-probes every 4s while
+  // either artefact is still missing so an offline batch (e.g. the
+  // generate-{tposes,meshes} CLI scripts writing into the bridge
+  // volume) lights up the UI without a manual reload.
   useEffect(() => {
     if (!pubkey || !bridgeUrl) return
     let cancelled = false
-    fetch(`${bridgeUrl}/characters/${pubkey}/model`, { method: 'HEAD' })
-      .then((r) => { if (!cancelled) setHasModel(r.ok) })
-      .catch(() => { if (!cancelled) setHasModel(false) })
-    fetch(`${bridgeUrl}/characters/${pubkey}/tpose`, { method: 'HEAD' })
-      .then((r) => { if (!cancelled) setTposeReady(r.ok) })
-      .catch(() => { if (!cancelled) setTposeReady(false) })
-    return () => { cancelled = true }
-  }, [bridgeUrl, pubkey])
+    let pending = { model: !hasModel, tpose: !tposeReady }
+    const probe = () => {
+      if (cancelled) return
+      if (pending.model) {
+        fetch(`${bridgeUrl}/characters/${pubkey}/model`, { method: 'HEAD' })
+          .then((r) => {
+            if (cancelled) return
+            if (r.ok) { setHasModel(true); pending.model = false }
+          }).catch(() => {})
+      }
+      if (pending.tpose) {
+        fetch(`${bridgeUrl}/characters/${pubkey}/tpose`, { method: 'HEAD' })
+          .then((r) => {
+            if (cancelled) return
+            if (r.ok) { setTposeReady(true); pending.tpose = false }
+          }).catch(() => {})
+      }
+    }
+    probe()
+    const id = setInterval(probe, 4000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [bridgeUrl, pubkey, hasModel, tposeReady])
 
   useEffect(() => {
     if (!state.loading) return

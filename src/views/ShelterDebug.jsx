@@ -148,20 +148,27 @@ export default function ShelterDebug() {
     },
   })), [npcChars, cfg.bridgeUrl])
 
-  const playerItems = useMemo(() => playerChars.map((c) => ({
-    kind: 'player',
-    id: `bridge-${c.pubkey.slice(0, 12)}`,
-    name: c.name ?? c.pubkey.slice(0, 8),
-    avatarUrl: cfg.bridgeUrl ? `${cfg.bridgeUrl}/characters/${c.pubkey}/avatar` : null,
-    pubkey: c.pubkey,
-    addPayload: {
+  const playerItems = useMemo(() => playerChars
+    // Curator gate — only characters marked `added` show up in the
+    // dev roster. Keeps the list short and consistent with the live
+    // demo pool, so what you spawn here matches what the Demo button
+    // would draw from.
+    .filter((c) => !!c.added)
+    .map((c) => ({
+      kind: 'player',
       id: `bridge-${c.pubkey.slice(0, 12)}`,
-      name: c.name ?? 'Unnamed',
+      name: c.name ?? c.pubkey.slice(0, 8),
+      avatarUrl: cfg.bridgeUrl ? `${cfg.bridgeUrl}/characters/${c.pubkey}/avatar` : null,
       pubkey: c.pubkey,
-      scheduleId: 'worker',
-      llmEnabled: false,
-    },
-  })), [playerChars, cfg.bridgeUrl])
+      starter: !!c.starter,
+      addPayload: {
+        id: `bridge-${c.pubkey.slice(0, 12)}`,
+        name: c.name ?? 'Unnamed',
+        pubkey: c.pubkey,
+        scheduleId: 'worker',
+        llmEnabled: false,
+      },
+    })), [playerChars, cfg.bridgeUrl])
 
   const agentsById = snapshot?.agents ?? {}
   const agentsByPubkey = useMemo(() => {
@@ -177,9 +184,14 @@ export default function ShelterDebug() {
     return agentsById[item.id] ?? null
   }
   const sortRoster = (items) => {
-    const active = items.filter((it) => resolveAgent(it))
-    const inactive = items.filter((it) => !resolveAgent(it))
-    return [...active, ...inactive]
+    // Active (already-spawned) characters go first, then starters,
+    // then the rest. Inside each band, preserve fetch order.
+    const score = (it) => {
+      if (resolveAgent(it)) return 0
+      if (it.starter) return 1
+      return 2
+    }
+    return [...items].sort((a, b) => score(a) - score(b))
   }
   const sortedNpcs = useMemo(() => sortRoster(npcItems), [npcItems, agentsById])
   const sortedPlayers = useMemo(() => sortRoster(playerItems), [playerItems, agentsById])

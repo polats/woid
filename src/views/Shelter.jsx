@@ -4,12 +4,14 @@ import ShelterDebug from './ShelterDebug.jsx'
 import ShelterAgentList from './ShelterAgentList.jsx'
 import ShelterCharacterCard from './ShelterCharacterCard.jsx'
 import ShelterSelectionPortrait from './ShelterSelectionPortrait.jsx'
+import ShelterRoomCard from './ShelterRoomCard.jsx'
 import ShelterBuildCarousel from './ShelterBuildCarousel.jsx'
 import TutorialOverlay from './TutorialOverlay.jsx'
 import ShelterFxLayer from './ShelterFxLayer.jsx'
 import { subscribe as subTutorial, getState as getTutorial } from '../lib/tutorial/runtime.js'
 import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
-import { levelForXp } from '../lib/shelterStore/index.js'
+import { attachNotesEngineToStore } from '../lib/notesEngine.js'
+import { levelForXp, xpAtLevel } from '../lib/shelterStore/index.js'
 import {
   start as startBuildMode,
   cancel as cancelBuildMode,
@@ -52,10 +54,13 @@ export default function Shelter() {
   const cash = snap?.cash ?? 0
   const playerXp = snap?.playerXp ?? 0
   const playerLevel = levelForXp(playerXp)
-  // 100xp per level (curve in shelterStore/store.js). The fill % is
-  // the fraction of the current level's XP earned so far.
-  const xpInLevel = playerXp - (playerLevel - 1) * 100
-  const xpPct = Math.max(0, Math.min(100, xpInLevel))
+  // Quadratic curve (shelterStore/store.js): leveling cost grows by
+  // 100xp each level. Fill bar = position inside current level's range.
+  const xpFloor = xpAtLevel(playerLevel)
+  const xpCeil = xpAtLevel(playerLevel + 1)
+  const xpInLevel = playerXp - xpFloor
+  const xpNeeded = xpCeil - xpFloor
+  const xpPct = Math.max(0, Math.min(100, (xpInLevel / xpNeeded) * 100))
 
   // Build-mode state — when active, the Build tab reads as "selected"
   // and the carousel renders. Build is an overlay on the Stage view,
@@ -104,6 +109,11 @@ export default function Shelter() {
     setTab(id)
   }
 
+  // Notes engine — evaluates per-character quest conditions and posts
+  // unlocks against the bridge whenever the store mutates. One-shot
+  // attach + return the unsubscribe.
+  useEffect(() => attachNotesEngineToStore(storeApi), [storeApi])
+
   // ESC key cancels build mode (third cancel path alongside the X
   // on the carousel and re-tapping the Build tab).
   useEffect(() => {
@@ -131,9 +141,14 @@ export default function Shelter() {
                   onAgentFocusChange={setFocusedAgent}
                   onSelectionChange={setSelection}
                 />
-                <div className={`shelter-room-label${(focused || selection?.kind === 'room') ? ' visible' : ''}`}>
-                  {focused?.name ?? (selection?.kind === 'room' ? selection.name : '')}
-                </div>
+                {/* Room info card at the top — name, tier, level,
+                    multiplier, progress bar. Replaces the previous
+                    bottom-center label. */}
+                {(() => {
+                  const id = focused?.id ?? (selection?.kind === 'room' ? selection.id : null)
+                  const name = focused?.name ?? (selection?.kind === 'room' ? selection.name : null)
+                  return <ShelterRoomCard roomId={id} name={name} />
+                })()}
                 <ShelterCharacterCard agent={cardAgent} />
                 <ShelterSelectionPortrait pubkey={portraitPubkey} />
                 {/* Dev panel — hidden behind a backtick toggle (or the
@@ -167,7 +182,7 @@ export default function Shelter() {
           {/* Player XP bar — sits between the screen body and the
               tab nav so it's always visible regardless of which tab
               is active. Caps at 100% within the current level. */}
-          <div className="shelter-xp-bar" title={`Level ${playerLevel} — ${xpInLevel}/100 xp`}>
+          <div className="shelter-xp-bar" title={`Level ${playerLevel} — ${xpInLevel}/${xpNeeded} xp`}>
             <div
               className="shelter-xp-bar-fill"
               style={{ width: `${xpPct}%` }}

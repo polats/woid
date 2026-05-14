@@ -60,9 +60,86 @@ const blankSnapshot = () => ({
   columns: columnsForTier(1),
 })
 
-/** XP curve — level N requires (N-1) * 100 cumulative xp. Level 1 starts. */
+/**
+ * XP curve — triangular / quadratic.
+ *
+ * Level N requires `(N-1) * N / 2 * 100` cumulative xp:
+ *   L1: 0      L2: 100    L3: 300    L4: 600
+ *   L5: 1000   L6: 1500   L10: 4500  L20: 19000
+ *
+ * Each level costs +100 xp more than the previous one — i.e. with the
+ * pattern-sorting reward of 100 xp per collection, leveling takes 1,
+ * 2, 3, 4, … collections. Tutorial still gets its "first collect =
+ * first level-up" beat for free.
+ *
+ * Inverse closed-form: solve `(N-1)·N/2·100 ≤ xp` for the largest N.
+ */
 export function levelForXp(xp) {
-  return 1 + Math.floor(Math.max(0, xp) / 100)
+  const x = Math.max(0, xp)
+  // Discriminant of (N-1)·N/2·100 = x → N² - N - x/50 = 0
+  //   N = (1 + sqrt(1 + 4·x/50)) / 2
+  return Math.max(1, Math.floor((1 + Math.sqrt(1 + (4 * x) / 50)) / 2))
+}
+
+/** Cumulative xp required to *reach* level N. xpAtLevel(1) = 0. */
+export function xpAtLevel(level) {
+  const n = Math.max(1, Math.floor(level))
+  return ((n - 1) * n / 2) * 100
+}
+
+// ── Room progression ─────────────────────────────────────────────────
+// Rooms have their own level (1-10) that grows with use. Each
+// collection bumps the room's xp by 1; the room's level then sets a
+// multiplier on the *player* xp reward, alongside a static tier
+// multiplier from the catalogue. Higher tiers level slower but pay
+// better when matured.
+
+const ROOM_LEVEL_CAP = 10
+
+/** Static reward multiplier by tier. Tier 1 = canonical, +0.5 per tier. */
+export function tierMultiplier(tier) {
+  const t = Math.max(1, Math.floor(tier ?? 1))
+  return 0.5 + t * 0.5  // 1→1.0, 2→1.5, 3→2.0, 4→2.5
+}
+
+/** Collections required per room level, scaled by tier. */
+export function roomXpPerLevel(tier) {
+  const t = Math.max(1, Math.floor(tier ?? 1))
+  return ({ 1: 5, 2: 8, 3: 12, 4: 18 })[t] ?? 5 + (t - 1) * 4
+}
+
+/** Room level from its xp counter. Capped at ROOM_LEVEL_CAP. */
+export function roomLevelForXp(roomXp, tier) {
+  const x = Math.max(0, roomXp ?? 0)
+  const per = roomXpPerLevel(tier)
+  return Math.min(ROOM_LEVEL_CAP, 1 + Math.floor(x / per))
+}
+
+/** Room xp required to *reach* room level L (xp counter, not the player one). */
+export function roomXpAtLevel(level, tier) {
+  const n = Math.min(ROOM_LEVEL_CAP, Math.max(1, Math.floor(level)))
+  return (n - 1) * roomXpPerLevel(tier)
+}
+
+/** Bonus multiplier from the room's current level. Level 1 = base. */
+export function roomLevelMultiplier(level) {
+  const n = Math.max(1, Math.floor(level ?? 1))
+  return 1 + 0.25 * (n - 1)  // L1=1.0, L5=2.0, L10=3.25
+}
+
+/**
+ * Player xp paid out by one collection.
+ *   playerRewardXp = baseXp · tierMultiplier(tier) · roomLevelMultiplier(level)
+ *
+ * Caller passes the catalogue's base xp + tier; the store fetches the
+ * room's current level from its snapshot.
+ */
+export function playerRewardXpFor(baseXp, tier, level) {
+  return Math.round(
+    Math.max(0, Number(baseXp) || 0)
+    * tierMultiplier(tier)
+    * roomLevelMultiplier(level),
+  )
 }
 
 /**
@@ -94,6 +171,15 @@ function makeAgentRecord(partial, simMinutes) {
     assignment: partial.assignment ?? null,
     manualAssignment: partial.manualAssignment ?? null,
     xp: partial.xp ?? 0,
+    // Per-room collection counter — bumped on every collectRoom for
+    // an assigned worker. Keyed by roomType (the catalogue id, e.g.
+    // "pattern-sorting"), not room instance id. Used by the notes
+    // engine to evaluate `collectionsAtRoom` quest conditions.
+    collectionsByRoom: partial.collectionsByRoom ?? {},
+    // Sim-time when this character's manualAssignment was set.
+    // Cleared when assignment changes. Used by the notes engine to
+    // evaluate `assignedToRoomFor` quest conditions.
+    assignedSinceSimMin: partial.assignedSinceSimMin ?? null,
     state: partial.state ?? 'idle',
     stateSince: partial.stateSince ?? simMinutes,
     pos: partial.pos ?? null,
@@ -344,9 +430,13 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
   function setAssignment(agentId, roomId) {
     const a = snapshot.agents[agentId]
     if (!a) return null
+    // Only reset `assignedSinceSimMin` when the room actually changes —
+    // re-assigning to the same room shouldn't restart the dwell clock.
+    const sameRoom = a.manualAssignment?.roomId === roomId
     const next = {
       ...a,
       manualAssignment: { roomId },
+      assignedSinceSimMin: sameRoom ? (a.assignedSinceSimMin ?? snapshot.simMinutes) : snapshot.simMinutes,
       // Reset walk/pace state so the next tick re-routes them
       // toward the new room cleanly.
       walkFrom: null, walkTo: null,
@@ -368,14 +458,22 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
    * outcomes and should persist unless explicitly reset elsewhere.
    */
   function resetPlayerProgress() {
-    if (!snapshot.playerXp) return
-    commit({ ...snapshot, playerXp: 0 })
+    const hasPlayerXp = !!snapshot.playerXp
+    const hasRoomProgress = Object.values(snapshot.rooms ?? {}).some(
+      (r) => (r?.xp ?? 0) > 0 || (r?.level ?? 1) > 1,
+    )
+    if (!hasPlayerXp && !hasRoomProgress) return
+    const nextRooms = {}
+    for (const [id, r] of Object.entries(snapshot.rooms ?? {})) {
+      nextRooms[id] = { ...r, xp: 0, level: 1 }
+    }
+    commit({ ...snapshot, playerXp: 0, rooms: nextRooms })
   }
 
   function clearAssignment(agentId) {
     const a = snapshot.agents[agentId]
     if (!a) return null
-    const next = { ...a, manualAssignment: null }
+    const next = { ...a, manualAssignment: null, assignedSinceSimMin: null }
     commit({ ...snapshot, agents: { ...snapshot.agents, [agentId]: next } })
     return next
   }
@@ -390,21 +488,52 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
    * amounts — passed in by the caller so the store stays decoupled
    * from `roomTypes.js`.
    */
-  function collectRoom(roomId, { rewardCash = 0, rewardXp = 0 } = {}) {
+  function collectRoom(roomId, { rewardCash = 0, rewardXp = 0, tier = 1 } = {}) {
     const room = snapshot.rooms[roomId]
     if (!room || !room.productionReady) return null
     const assigned = Object.values(snapshot.agents).filter(
       (a) => a.manualAssignment?.roomId === roomId
     )
+
+    // Room progression — +1 to the room's xp counter on every collect.
+    // The level is derived from the counter using the tier-scaled
+    // threshold (5/8/12/18 collections per level).
+    const prevRoomXp = room.xp ?? 0
+    const prevRoomLevel = roomLevelForXp(prevRoomXp, tier)
+    const nextRoomXp = prevRoomXp + 1
+    const nextRoomLevel = roomLevelForXp(nextRoomXp, tier)
+    const roomLeveledUp = nextRoomLevel > prevRoomLevel
+
+    // Per-worker xp — scaled the same way the player's xp is, so
+    // worker xp keeps tracking the player's curve. Also bumps the
+    // worker's `collectionsByRoom[roomType]` so the notes engine can
+    // evaluate `collectionsAtRoom` quest conditions.
+    const playerXpPerWorker = playerRewardXpFor(rewardXp, tier, prevRoomLevel)
+    const roomType = room.type ?? roomId
     const nextAgents = { ...snapshot.agents }
     for (const a of assigned) {
-      nextAgents[a.id] = { ...a, xp: (a.xp ?? 0) + rewardXp }
+      const prevByRoom = a.collectionsByRoom ?? {}
+      nextAgents[a.id] = {
+        ...a,
+        xp: (a.xp ?? 0) + playerXpPerWorker,
+        collectionsByRoom: {
+          ...prevByRoom,
+          [roomType]: (prevByRoom[roomType] ?? 0) + 1,
+        },
+      }
     }
+
     const nextRooms = {
       ...snapshot.rooms,
-      [roomId]: { ...room, productionTimer: 0, productionReady: false },
+      [roomId]: {
+        ...room,
+        productionTimer: 0,
+        productionReady: false,
+        xp: nextRoomXp,
+        level: nextRoomLevel,
+      },
     }
-    const totalXp = rewardXp * Math.max(1, assigned.length)
+    const totalXp = playerXpPerWorker * Math.max(1, assigned.length)
     commit({
       ...snapshot,
       cash: (snapshot.cash ?? 0) + rewardCash,
@@ -415,9 +544,13 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
       rooms: nextRooms,
     })
     return {
-      rewardCash, rewardXp, totalXp,
+      rewardCash,
+      rewardXp: playerXpPerWorker,
+      totalXp,
       roomId,
       workerIds: assigned.map((a) => a.id),
+      roomLevel: nextRoomLevel,
+      roomLeveledUp,
     }
   }
 

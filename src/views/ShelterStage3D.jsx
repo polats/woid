@@ -1632,10 +1632,32 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           }
         }
         rebuildSlots()
+        // Pre-compute the layout-room cells once — they don't change
+        // after the layout JSON loads. Built rooms get folded in
+        // per-tick (they can move/appear).
+        const layoutRoomCells = new Set()
+        for (const r of layout.rooms ?? []) {
+          const w = r.gridW ?? 1
+          const h = r.gridH ?? 1
+          for (let dx = 0; dx < w; dx++) {
+            for (let dy = 0; dy < h; dy++) {
+              layoutRoomCells.add(`${r.gridX + dx},${r.gridY + dy}`)
+            }
+          }
+        }
         const syncSlotVisibility = () => {
           rebuildSlots()
           const built = shelterStore.getSnapshot().builtRooms ?? []
-          const filled = new Set(built.map((r) => `${r.gridX},${r.gridY}`))
+          const filled = new Set(layoutRoomCells)
+          for (const r of built) {
+            const w = r.gridW ?? 1
+            const h = r.gridH ?? 1
+            for (let dx = 0; dx < w; dx++) {
+              for (let dy = 0; dy < h; dy++) {
+                filled.add(`${r.gridX + dx},${r.gridY + dy}`)
+              }
+            }
+          }
           for (const [key, mesh] of slotMeshes) mesh.visible = !filled.has(key)
           // Dirt fill always draws — it's the visible ground/earth the
           // shelter sits on, not a tier-gated feature. The previous
@@ -1886,6 +1908,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
                 shelterStore.collectRoom(roomId, {
                   rewardCash: cashAmount,
                   rewardXp: Number(type?.rewardXp ?? 0),
+                  tier: Number(type?.tier ?? 1),
                 })
                 emitFx('flyCash', { amount: cashAmount, fromX, fromY })
                 return
