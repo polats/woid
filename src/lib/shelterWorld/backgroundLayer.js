@@ -153,21 +153,23 @@ export function createBackgroundLayer({ aspect = 1 } = {}) {
   // below, so curved surfaces get a free gradient that ambient alone
   // can't supply. Directional "sun" warms one side of every box.
   // Small ambient pulls shadow areas off pitch-black.
-  const hemi = new THREE.HemisphereLight(0xb8c8d8, 0x5e5644, 0.85)
+  // Night palette — cool blue sky tint above, near-black ground.
+  // Sun → moonlight (pale cool blue-white) at low intensity.
+  const hemi = new THREE.HemisphereLight(0x4a5e84, 0x1a1c24, 0.35)
   scene.add(hemi)
 
-  const sun = new THREE.DirectionalLight(0xfff0d8, 0.85)
+  const sun = new THREE.DirectionalLight(0xb0c8e8, 0.45)
   sun.position.set(45, 70, 25)
   scene.add(sun)
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.18))
+  scene.add(new THREE.AmbientLight(0xffffff, 0.08))
 
   // ── Sky hemisphere ───────────────────────────────────────────────
   {
     const radius = 200
     const geo = new THREE.SphereGeometry(radius, 48, 24, 0, Math.PI * 2, 0, Math.PI / 2)
-    const top = new THREE.Color('#2e4a66')
-    const horizon = new THREE.Color('#c8d2dc')
+    const top = new THREE.Color('#0c1424')
+    const horizon = new THREE.Color('#2a364a')
     const positions = geo.attributes.position
     const colors = new Float32Array(positions.count * 3)
     for (let i = 0; i < positions.count; i++) {
@@ -190,11 +192,11 @@ export function createBackgroundLayer({ aspect = 1 } = {}) {
     scene.add(mesh)
   }
 
-  // ── Sun disc on the skydome ──────────────────────────────────────
+  // ── Moon disc on the skydome (was sun, swapped for the night palette) ─
   {
-    const geo = new THREE.CircleGeometry(7, 24)
+    const geo = new THREE.CircleGeometry(5, 24)
     const mat = new THREE.MeshBasicMaterial({
-      color: 0xffe8a8, transparent: true, opacity: 0.92, fog: false, depthWrite: false,
+      color: 0xe6ecf4, transparent: true, opacity: 0.85, fog: false, depthWrite: false,
     })
     const mesh = new THREE.Mesh(geo, mat)
     // Pinned roughly where the directional light points from. Sits
@@ -208,7 +210,7 @@ export function createBackgroundLayer({ aspect = 1 } = {}) {
   const cloudTex = makeCloudTexture()
   {
     const cloudMat = new THREE.MeshBasicMaterial({
-      map: cloudTex, transparent: true, depthWrite: false, fog: true, opacity: 0.92,
+      map: cloudTex, color: 0x6a7488, transparent: true, depthWrite: false, fog: true, opacity: 0.55,
     })
     const count = 7
     for (let i = 0; i < count; i++) {

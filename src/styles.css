@@ -1126,6 +1126,39 @@ body {
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
+.sandbox3-card-tag-added {
+  background: #2e7d6c;
+  color: var(--paper);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+/* Tags fieldset in AgentProfile — vertical stack of curation
+   checkboxes (starter, added). Sits between the persona card and
+   the Settings strip so the flags are discoverable without the
+   user expanding the Settings panel. */
+.agent-profile-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-profile-tag {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+}
+.agent-profile-tag-name {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+.agent-profile-tag-hint {
+  color: var(--muted, #6a655a);
+  font-size: 11px;
+}
 /* System tab — shows the system prompt currently being passed to
    the character's brain on every turn. */
 .agent-system {
@@ -5284,7 +5317,7 @@ body {
    queries this class to target the coin-fly destination. */
 .shelter-currency-hud {
   position: absolute;
-  left: 12px;
+  right: 12px;
   bottom: 12px;
   z-index: 5;
   display: inline-flex;
@@ -5305,6 +5338,28 @@ body {
   font-size: 13px;
   letter-spacing: 0.04em;
   color: #f5f1e6;
+}
+
+/* 3D portrait of the selected character, anchored to the lower-left of
+   the shelter stage and pulled partially off-screen so the character
+   reads as standing at the camera's edge. Visible only while a
+   character is selected but the camera is still zoomed out. No frame
+   or background — just the character with a hard yellow outline drawn
+   by an OutlinePass inside its WebGL canvas. */
+.shelter-selection-portrait {
+  position: absolute;
+  left: -60px;
+  bottom: -10px;
+  width: 320px;
+  height: 420px;
+  z-index: 5;
+  pointer-events: none;
+  background: transparent;
+  animation: shelter-portrait-slide-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes shelter-portrait-slide-in {
+  from { transform: translateX(-160px); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
 }
 
 /* XP bar — full-width, between the screen body and the tab bar. */
@@ -5790,6 +5845,88 @@ body {
   transform: translate(-50%, 0);
 }
 
+/* Single-tap selection info card — small floater anchored at the
+   tap point, shown when a room or character is selected but not yet
+   focused. Disappears on deselect or focus. */
+.shelter-selection-card {
+  z-index: 4;
+  background: rgba(10, 14, 20, 0.92);
+  border: 2px solid #ffd84a;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.35);
+  color: #f3f3f3;
+  font-family: var(--font-mono);
+  border-radius: 4px;
+  overflow: hidden;
+  animation: shelter-selection-card-in 160ms ease-out;
+}
+@keyframes shelter-selection-card-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.shelter-selection-card-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+}
+.shelter-selection-card-avatar,
+.shelter-selection-card-roomglyph {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: 3px;
+  background: #1b2230;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #ffd84a;
+}
+.shelter-selection-card-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.shelter-selection-card-avatar-fallback {
+  font-size: 16px;
+  color: #ffd84a;
+  letter-spacing: 0;
+}
+.shelter-selection-card-text {
+  min-width: 0;
+  flex: 1;
+}
+.shelter-selection-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shelter-selection-card-sub {
+  font-size: 10px;
+  opacity: 0.72;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.shelter-selection-card-hint {
+  font-size: 9px;
+  text-align: center;
+  padding: 3px 6px 4px;
+  background: rgba(255, 216, 74, 0.12);
+  color: #ffd84a;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-top: 1px solid rgba(255, 216, 74, 0.25);
+}
+
 /* Character profile card — overlays the top of the shelter stage when
    an agent is tap-focused. Mirrors the agent-sandbox drawer aesthetic:
    ink-on-paper header (dark band with avatar + name), paper body with
@@ -5827,9 +5964,9 @@ body {
   border-bottom: 2px solid var(--ink);
 }
 .shelter-card-avatar {
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
+  flex: 0 0 96px;
+  width: 96px;
+  height: 96px;
   background: var(--paper-3, #20232a);
   overflow: hidden;
   display: flex;
@@ -5859,7 +5996,7 @@ body {
   font-family: var(--font-display);
   font-stretch: 80%;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 22px;
   letter-spacing: 0.02em;
   color: var(--paper);
   white-space: nowrap;

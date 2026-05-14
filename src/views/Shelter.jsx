@@ -3,6 +3,7 @@ import ShelterStage3D from './ShelterStage3D.jsx'
 import ShelterDebug from './ShelterDebug.jsx'
 import ShelterAgentList from './ShelterAgentList.jsx'
 import ShelterCharacterCard from './ShelterCharacterCard.jsx'
+import ShelterSelectionPortrait from './ShelterSelectionPortrait.jsx'
 import ShelterBuildCarousel from './ShelterBuildCarousel.jsx'
 import TutorialOverlay from './TutorialOverlay.jsx'
 import ShelterFxLayer from './ShelterFxLayer.jsx'
@@ -28,6 +29,7 @@ export default function Shelter() {
   const [tab, setTab] = useState('stage')
   const [focused, setFocused] = useState(null)
   const [focusedAgent, setFocusedAgent] = useState(null)
+  const [selection, setSelection] = useState(null)
   const tutorial = useSyncExternalStore(subTutorial, getTutorial)
   // The character card overlays the lower portion of the stage. We
   // suppress it during a tutorial cinematic by default — but a step
@@ -35,7 +37,13 @@ export default function Shelter() {
   // explicitly wants the player to see it (e.g. step 3 directs the
   // player at a specific tab).
   const cardSuppressed = tutorial.active && !tutorial.cardVisible
-  const cardAgent = cardSuppressed ? null : focusedAgent
+  // Card shows on both selection (single-tap) and focus (double-tap).
+  // The portrait below is the visual differentiator for selection-only.
+  const selectedAgent = selection?.kind === 'agent' ? selection : null
+  const cardAgent = cardSuppressed ? null : (focusedAgent || selectedAgent)
+  // 3D portrait of the selected character — shown only while the
+  // camera is zoomed out (i.e., selected but not focused).
+  const portraitPubkey = !focusedAgent && selectedAgent?.pubkey ? selectedAgent.pubkey : null
   // Cash + player XP from the shelter store. Cash floats bottom-left
   // over the stage (out of the status bar so the time can stand on
   // its own), and XP fills a thin bar across the bottom of the
@@ -121,11 +129,13 @@ export default function Shelter() {
                 <ShelterStage3D
                   onFocusChange={setFocused}
                   onAgentFocusChange={setFocusedAgent}
+                  onSelectionChange={setSelection}
                 />
-                <div className={`shelter-room-label${focused ? ' visible' : ''}`}>
-                  {focused?.name ?? ''}
+                <div className={`shelter-room-label${(focused || selection?.kind === 'room') ? ' visible' : ''}`}>
+                  {focused?.name ?? (selection?.kind === 'room' ? selection.name : '')}
                 </div>
                 <ShelterCharacterCard agent={cardAgent} />
+                <ShelterSelectionPortrait pubkey={portraitPubkey} />
                 {/* Dev panel — hidden behind a backtick toggle (or the
                     floating "DEV" button) so it stays out of the way for
                     casual viewers but is reachable on prod for adding

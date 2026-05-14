@@ -87,6 +87,18 @@ export function cameraTo({ state = 'room', ms = 1500 } = {}) {
 }
 
 /**
+ * Tween the camera to an explicit world position + zoom over `ms` ms.
+ * Used by the demo / trailer cinematic to slowly scroll top-to-bottom
+ * through a tall building. Resolves on completion or interruption.
+ */
+export function panCameraTo({ x = null, y = null, zoom = null, ms = 3000 } = {}) {
+  if (!handler) return Promise.resolve()
+  return new Promise((resolve) => {
+    handler({ type: 'panCameraTo', x, y, zoom, ms, onComplete: resolve })
+  })
+}
+
+/**
  * Drop any cinematic-only avatar overrides so the next sync tick
  * snaps every agent back to its store-driven position + role. Used
  * by tutorial reset / play start so a re-run of the wake-up doesn't

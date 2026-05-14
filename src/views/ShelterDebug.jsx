@@ -3,6 +3,7 @@ import config from '../config.js'
 import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
 import { formatSimTime, simDay, tickAgents } from '../lib/shelterStore/index.js'
 import { invalidateAllLayoutDressing } from '../lib/buildLayoutDressing.js'
+import { populateDemo, cleanupDemo, playTrailerCinematic } from '../lib/demoMode.js'
 import { useTutorialHost } from '../hooks/useTutorialHost.js'
 import tutorialScripts from '../lib/tutorial/scripts.json'
 
@@ -189,7 +190,32 @@ export default function ShelterDebug() {
   }
   const remove = (id) => store.removeAgent(id)
   const fastForward = () => { store.fastForward(60); tickAgents(store) }
-  const dump = () => console.log('[shelter] snapshot', store.getSnapshot())
+  // Demo: max out the building tier, fill every slot with a room from
+  // the bridge's "added" library, assign a rigged character per room.
+  // Used to set up the world for trailer capture. Logs progress to the
+  // console; safe to re-run (idempotent — cleans up prior demo first).
+  const [demoBusy, setDemoBusy] = useState(false)
+  const runDemo = async () => {
+    if (demoBusy) return
+    setDemoBusy(true)
+    try {
+      console.log('[demo] populating…')
+      await populateDemo(store)
+      tickAgents(store)
+      console.log('[demo] ready', store.getSnapshot())
+    } catch (err) {
+      console.error('[demo] failed', err)
+    } finally { setDemoBusy(false) }
+  }
+  const runCinematic = async () => {
+    try {
+      await playTrailerCinematic({ tier: 5 })
+    } catch (err) { console.warn('[demo] cinematic interrupted', err) }
+  }
+  const clearDemoState = () => {
+    cleanupDemo(store)
+    tickAgents(store)
+  }
   const reset = () => {
     if (!confirm(
       'Reset shelter? This wipes localStorage (cash, xp, agents, '
@@ -376,7 +402,18 @@ export default function ShelterDebug() {
 
           <div className="shelter-debug-actions">
             <button type="button" onClick={fastForward}>Fast-forward 1h</button>
-            <button type="button" onClick={dump}>Dump JSON</button>
+            <button
+              type="button" onClick={runDemo} disabled={demoBusy}
+              title="Fill the shelter with rooms + characters across all tier-5 slots (for trailer capture)"
+            >{demoBusy ? 'Building…' : 'Demo'}</button>
+            <button
+              type="button" onClick={runCinematic}
+              title="Slow top-to-bottom camera pan across the populated building"
+            >Play cinematic</button>
+            <button
+              type="button" onClick={clearDemoState}
+              title="Remove demo rooms + agents, reset building tier to 1"
+            >Clear demo</button>
             <button
               type="button" onClick={reset}
               title="Wipe player state + sim time, refresh room layouts from bridge"

@@ -1,4 +1,5 @@
 import { OFFLINE_CAP_MIN } from './clock.js'
+import { columnsForTier } from './buildingTier.js'
 
 /**
  * Shelter local-first store.
@@ -46,6 +47,17 @@ const blankSnapshot = () => ({
   // both lists at render time. Each entry has the same shape as the
   // layout entries: { id, name, type, gridX, gridY, gridW, gridH, color }.
   builtRooms: [],
+  // Building tier — the player-facing progression metric (1..N).
+  // Tier 1 is the starter shelter; upgrades bump this and rewrite
+  // `columns` via setBuildingTier().
+  buildingTier: 1,
+  // Column footprint of the shelter. Each entry is a vertical slice
+  // of buildable space: { gridX, gridW, maxFloor }. Layout rooms
+  // pre-fill specific positions inside columns; player builds in the
+  // rest. setBuildingTier writes this through via the tier curve;
+  // setColumns overrides directly without touching the tier label
+  // (demo / scenario use).
+  columns: columnsForTier(1),
 })
 
 /** XP curve — level N requires (N-1) * 100 cumulative xp. Level 1 starts. */
@@ -261,6 +273,34 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
   }
 
   /**
+   * Set the building tier (1..N) and write the matching column list
+   * through to `columns` via the curve. Use `setColumns` to override
+   * the column list without touching the tier label (demo / scenario).
+   */
+  function setBuildingTier(tier) {
+    const next = Math.max(1, Math.round(tier || 1))
+    const columns = columnsForTier(next)
+    if (snapshot.buildingTier === next
+        && JSON.stringify(snapshot.columns) === JSON.stringify(columns)) return
+    commit({ ...snapshot, buildingTier: next, columns })
+  }
+
+  /**
+   * Override the column list directly. The tier label stays unchanged.
+   * Used by demo / trailer scenarios that don't follow progression.
+   */
+  function setColumns(columns) {
+    if (!Array.isArray(columns)) return
+    const cleaned = columns.map((c) => ({
+      gridX: Number(c.gridX) || 0,
+      gridW: Math.max(1, Number(c.gridW) || 2),
+      maxFloor: Math.max(0, Number(c.maxFloor) || 0),
+    }))
+    if (JSON.stringify(snapshot.columns) === JSON.stringify(cleaned)) return
+    commit({ ...snapshot, columns: cleaned })
+  }
+
+  /**
    * Wipe all rooms' production state — productionTimer back to 0,
    * productionReady back to false. Used by the tutorial host so the
    * bar starts empty on a re-run instead of inheriting partial fill
@@ -418,7 +458,7 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
     // mutations
     addAgent, updateAgent, removeAgent, upsertRoom, clear,
     setAssignment, clearAssignment, collectRoom, resetPlayerProgress,
-    addBuiltRoom, clearBuiltRooms, resetRoomProduction,
+    addBuiltRoom, clearBuiltRooms, resetRoomProduction, setBuildingTier, setColumns,
     // clock
     advanceClock, fastForward,
     // sync

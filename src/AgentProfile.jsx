@@ -139,6 +139,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           harness: c.harness ?? 'direct',
           promptStyle: c.promptStyle ?? 'minimal',
           starter: !!c.starter,
+          added: !!c.added,
           needs: {
             energy: c.needs?.energy ?? 75,
             social: c.needs?.social ?? 75,
@@ -233,6 +234,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
       (form.harness || 'direct') !== (character.harness || 'direct') ||
       (form.promptStyle || 'minimal') !== (character.promptStyle || 'minimal') ||
       !!form.starter !== !!character.starter ||
+      !!form.added !== !!character.added ||
       NEEDS_AXES.some((a) => (form.needs?.[a] ?? 75) !== (character.needs?.[a] ?? 75))
     )
   }, [character, form])
@@ -262,6 +264,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
           harness: form.harness || null,
           promptStyle: form.promptStyle || null,
           starter: !!form.starter,
+          added: !!form.added,
           needs: form.needs ?? undefined,
         }),
       })
@@ -283,6 +286,7 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
         harness: next.harness ?? 'direct',
         promptStyle: next.promptStyle ?? 'minimal',
         starter: !!next.starter,
+        added: !!next.added,
         needs: { ...(f.needs || {}), ...(next.needs || {}) },
       }))
       onUpdated?.(next)
@@ -556,6 +560,39 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
         />
       </fieldset>
 
+      {/* Tags — curation flags that decide whether this character is
+          surfaced in the wake-up tutorial (`starter`) or the live
+          shelter / trailer demo pool (`added`). Lifted out of the
+          Settings strip so they're discoverable without expanding the
+          (rarely-touched) LLM-config panel. */}
+      <fieldset className="agent-profile-section agent-profile-tags">
+        <legend>Tags</legend>
+        <label className="agent-profile-tag">
+          <input
+            type="checkbox"
+            checked={!!form.starter}
+            onChange={(e) => setForm((f) => ({ ...f, starter: e.target.checked }))}
+            disabled={saving || generating}
+          />
+          <span className="agent-profile-tag-name">starter</span>
+          <small className="agent-profile-tag-hint">
+            Surfaces in the wake-up tutorial's recruit carousel.
+          </small>
+        </label>
+        <label className="agent-profile-tag">
+          <input
+            type="checkbox"
+            checked={!!form.added}
+            onChange={(e) => setForm((f) => ({ ...f, added: e.target.checked }))}
+            disabled={saving || generating}
+          />
+          <span className="agent-profile-tag-name">added</span>
+          <small className="agent-profile-tag-hint">
+            Approved for the live shelter + trailer demo character pool.
+          </small>
+        </label>
+      </fieldset>
+
       {/* Settings — applies on every spawn for this character. Brain
           is operational (which LLM drives the character), not
           identity, so it lives outside the persona card. Collapsed
@@ -655,22 +692,8 @@ export default function AgentProfile({ pubkey, onClose, onDeleted, onUpdated, on
             {PROMPT_STYLE_OPTIONS.find((p) => p.id === form.promptStyle)?.hint || ''}
           </small>
         </label>
-        {/* Starter flag — picked up by the Shelter wake-up tutorial,
-            which slides in a card carousel of "the three starters" so
-            the player can review them. Manifest-only metadata, no
-            runtime impact. */}
-        <label className="agent-profile-field agent-profile-field-checkbox">
-          <input
-            type="checkbox"
-            checked={!!form.starter}
-            onChange={(e) => setForm((f) => ({ ...f, starter: e.target.checked }))}
-            disabled={saving || generating}
-          />
-          <span className="agent-profile-field-label">Starter</span>
-          <small className="agent-profile-field-hint">
-            Show this character in the wake-up tutorial's recruit carousel.
-          </small>
-        </label>
+        {/* Starter + Added flags moved to the dedicated Tags section
+            above so they're visible without expanding Settings. */}
         </div>
       </details>
 

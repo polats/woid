@@ -65,13 +65,7 @@ export default function ShelterCharacterCard({ agent }) {
   // step). Doesn't re-fire if the player taps the already-active
   // tab so cancels don't loop.
   const handleTabActivate = (id) => {
-    const wasOn = tab === id
     setTab(id)
-    if (!wasOn && id === 'assignment' && !manualRoomId && agent?.id) {
-      startAssignmentMode(agent.id, ({ agentId, roomId }) => {
-        shelterApi.setAssignment(agentId, roomId)
-      })
-    }
   }
 
   useEffect(() => { setImgFailed(false); setTab('profile') }, [agent?.id])
@@ -116,7 +110,6 @@ export default function ShelterCharacterCard({ agent }) {
   const display = character?.name || agent.name || agent.id?.slice(0, 8) || '—'
   const initial = (display || '?').slice(0, 1).toUpperCase()
   const showImage = !!agent.avatarUrl && !imgFailed
-  const bio = character?.about?.trim() || ''
 
   // Resolved per-slot schedule (effective = base + override). The
   // bridge response is `{ morning: { roomId, action } | null, ... }`
@@ -137,21 +130,25 @@ export default function ShelterCharacterCard({ agent }) {
         </div>
         <div className="shelter-card-title">
           <strong>{display}</strong>
-          {agent.pubkey && (
-            <code title={agent.pubkey}>
-              {agent.pubkey.slice(0, 8)}…
-            </code>
-          )}
         </div>
       </header>
 
       <div className="shelter-card-body" role="tabpanel">
         {tab === 'profile' && (
-          <div className="shelter-card-profile">
-            {bio
-              ? <p className="shelter-card-bio">{bio}</p>
-              : <p className="shelter-card-bio-empty">No bio yet.</p>}
-          </div>
+          <AssignmentPanel
+            agent={agent}
+            manualRoomId={manualRoomId}
+            assignedRoom={assignedRoom}
+            assignedRoomType={assignedRoomType}
+            xp={xp}
+            level={level}
+            onAssign={() => {
+              if (!agent?.id) return
+              startAssignmentMode(agent.id, ({ agentId, roomId }) => {
+                shelterApi.setAssignment(agentId, roomId)
+              })
+            }}
+          />
         )}
         {tab === 'schedule' && (
           <ul className="shelter-card-schedule">
@@ -170,22 +167,6 @@ export default function ShelterCharacterCard({ agent }) {
             })}
           </ul>
         )}
-        {tab === 'assignment' && (
-          <AssignmentPanel
-            agent={agent}
-            manualRoomId={manualRoomId}
-            assignedRoom={assignedRoom}
-            assignedRoomType={assignedRoomType}
-            xp={xp}
-            level={level}
-            onAssign={() => {
-              if (!agent?.id) return
-              startAssignmentMode(agent.id, ({ agentId, roomId }) => {
-                shelterApi.setAssignment(agentId, roomId)
-              })
-            }}
-          />
-        )}
       </div>
 
       <nav className="shelter-card-tabs" role="tablist">
@@ -194,9 +175,6 @@ export default function ShelterCharacterCard({ agent }) {
         </CardTab>
         <CardTab id="schedule" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Schedule — daily timetable">
           <IconSchedule /><span>Schedule</span>
-        </CardTab>
-        <CardTab id="assignment" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Assignment — current task">
-          <IconAssignment /><span>Assignment</span>
         </CardTab>
       </nav>
     </aside>

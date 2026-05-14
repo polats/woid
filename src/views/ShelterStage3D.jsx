@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { Pass } from 'three/examples/jsm/postprocessing/Pass.js'
 import config from '../config.js'
 import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
 import { useShelterTick } from '../hooks/useShelterTick.js'
@@ -27,6 +35,7 @@ import {
   commitPlacement as commitBuildPlacement,
 } from '../lib/shelterBuildMode.js'
 import { getRoomType } from '../lib/shelterWorld/roomTypes.js'
+import { columnsForTier } from '../lib/shelterStore/buildingTier.js'
 import { PALETTE as OFFICE_PALETTE, LIGHTING as OFFICE_LIGHTING } from '../lib/shelterWorld/officeStyle.js'
 import {
   subscribe as subTutorialState,
@@ -268,9 +277,10 @@ function buildRoom(room, cellW, cellH) {
   lamp.position.set(0, housingY - 0.05, 0.12)
   group.add(lamp)
 
-  const label = makeLabelSprite(room.name)
-  label.position.set(-w / 2 + 0.45, h / 2 - 0.18, ROOM_DEPTH / 2 + 0.02)
-  group.add(label)
+  // Room name labels intentionally not rendered on the 3D view — they
+  // double up with the HUD chips and clutter the trailer scroll. The
+  // `makeLabelSprite` helper still exists for any future per-room
+  // overlay that wants it back.
 
   return group
 }
@@ -384,33 +394,82 @@ function buildSlotMesh({ slot, cellW, cellH, wallTex, tint }) {
 }
 
 /**
- * Default slots for the starter shelter: five slots stacked directly
- * above each ground-row room, matching that room's width. Upgrades
- * will extend this list (more floors, wider footprint) — for now
- * it's hardcoded to the "5 stories above each ground-row column"
- * rule the original decorative tower visualised.
+ * Vertical building-exterior frame — left + right cladding columns and
+ * a roof cap, one per building column. Lives outside the slot meshes
+ * (which hide when filled) so the building outline stays visible
+ * whether the floors are empty slots or built-out rooms.
+ *
+ * Each column has its own height (`maxFloor`), so a list of columns
+ * with varied heights produces a stepped silhouette — taller starter
+ * columns flanked by shorter new-unlock columns.
  */
-function deriveDefaultSlots(rooms, { floorsAbove = 5 } = {}) {
+function buildBuildingFrame({ columns, cellW, cellH }) {
+  const g = new THREE.Group()
+  g.name = 'shelter:building-frame'
+  g.position.z = -0.5   // a hair further back than the slots (z=-0.45)
+  const cladHex = '#5d564a'
+  const roofHex = '#2c2820'
+  const cladThickness = 0.18   // width of the vertical cladding strip
+  const roofThickness = 0.22   // height of the roof cap
+  const depth = 0.6
+  const mat = new THREE.MeshLambertMaterial({ color: cladHex })
+  const roofMat = new THREE.MeshLambertMaterial({ color: roofHex })
+  for (const col of columns) {
+    if (col.maxFloor <= 0) continue
+    const colWidth = col.gridW * cellW
+    // Column extends from y=0 (ground line) up to maxFloor × cellH.
+    const colHeightTotal = (col.maxFloor + 1) * cellH   // include ground row
+    const centreX = (col.gridX + col.gridW / 2) * cellW
+    const centreY = colHeightTotal / 2
+    // Left + right cladding strips. Run the full column height so a
+    // shorter column visually stops where it should.
+    const leftWall = new THREE.Mesh(
+      new THREE.BoxGeometry(cladThickness, colHeightTotal, depth), mat,
+    )
+    leftWall.position.set(centreX - colWidth / 2 - cladThickness / 2, centreY, 0)
+    g.add(leftWall)
+    const rightWall = new THREE.Mesh(
+      new THREE.BoxGeometry(cladThickness, colHeightTotal, depth), mat,
+    )
+    rightWall.position.set(centreX + colWidth / 2 + cladThickness / 2, centreY, 0)
+    g.add(rightWall)
+    // Roof cap — sits on top of THIS column, so different column
+    // heights leave stepped roof lines along the silhouette.
+    const cap = new THREE.Mesh(
+      new THREE.BoxGeometry(colWidth + cladThickness * 2 + 0.05, roofThickness, depth + 0.05),
+      roofMat,
+    )
+    cap.position.set(centreX, colHeightTotal + roofThickness / 2, 0)
+    g.add(cap)
+  }
+  return g
+}
+
+/**
+ * Slots derived from the column list. Each column generates one slot
+ * per floor from `gridY=0` up to `gridY=maxFloor`. Layout rooms
+ * (lobby, pattern-sorting) pre-fill specific positions — the slot
+ * visibility logic in the stage hides slots that share coordinates
+ * with any room.
+ */
+function deriveDefaultSlots(columns = []) {
   const slots = []
-  for (const r of rooms.filter((rm) => rm.gridY === 0)) {
-    for (let y = 1; y <= floorsAbove; y++) {
-      slots.push({
-        gridX: r.gridX,
-        gridY: y,
-        gridW: r.gridW,
-        gridH: r.gridH,
-      })
+  for (const col of columns) {
+    for (let y = 0; y <= col.maxFloor; y++) {
+      slots.push({ gridX: col.gridX, gridY: y, gridW: col.gridW, gridH: 1 })
     }
   }
   return slots
 }
 
-export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChange = null } = {}) {
+export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChange = null, onSelectionChange = null } = {}) {
   const hostRef = useRef(null)
   const onFocusChangeRef = useRef(onFocusChange)
   useEffect(() => { onFocusChangeRef.current = onFocusChange }, [onFocusChange])
   const onAgentFocusChangeRef = useRef(onAgentFocusChange)
   useEffect(() => { onAgentFocusChangeRef.current = onAgentFocusChange }, [onAgentFocusChange])
+  const onSelectionChangeRef = useRef(onSelectionChange)
+  useEffect(() => { onSelectionChangeRef.current = onSelectionChange }, [onSelectionChange])
 
   // Engine handles to live longer than the main effect's closure so a
   // sibling presence-sync effect can spawn / despawn / reposition
@@ -419,11 +478,16 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
   const projectorRef = useRef(null)
   const worldRootRef = useRef(null)
   const liveAvatarsRef = useRef(new Map())  // npub → spawn handle
+  const undergroundMeshRef = useRef(null)   // dirt-fill mesh; toggled by tier
   // Agent-focus state lives in refs so both the setup effect (which
   // owns the click handler + per-frame face-camera) and the sync
   // effect (which despawns avatars) can read/write it.
   const focusedAgentIdRef = useRef(null)
   const focusedAgentRestoreRef = useRef(null)
+  // Single-tap selection state — separate from focus (double-tap zoom).
+  // `selectedRef` is { kind: 'agent'|'room', id } | null.
+  const selectedRef = useRef(null)
+  const [selectionTick, setSelectionTick] = useState(0)
   // Bumped when the registry signals a model change for a visible
   // npub — forces the sync effect to re-run and respawn that agent.
   const invalidationRef = useRef(0)
@@ -447,7 +511,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.toneMapping = THREE.ACESFilmicToneMapping
-    renderer.toneMappingExposure = 1.0
+    renderer.toneMappingExposure = 0.72
     renderer.outputColorSpace = THREE.SRGBColorSpace
     host.appendChild(renderer.domElement)
     renderer.domElement.style.display = 'block'
@@ -465,7 +529,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     // ambient; per-room point lights still add warm interior glow.
     const pmrem = new THREE.PMREMGenerator(renderer)
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
-    scene.environmentIntensity = 0.6
+    scene.environmentIntensity = 0.38
 
     const worldRoot = new THREE.Group()
     worldRoot.name = 'shelter:world'
@@ -518,6 +582,10 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       fill.position.set(0, -FILL_DEPTH / 2, -0.6)
       fill.name = 'shelter:underground-fill'
       worldRoot.add(fill)
+      // Stash a ref so the slot subscriber can toggle it off when the
+      // current shelter has nothing below ground — saves a fullscreen
+      // fragment pass when the trailer doesn't visit underground.
+      undergroundMeshRef.current = fill
     }
 
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100)
@@ -537,10 +605,68 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     const backdrop = createBackgroundLayer({
       aspect: (host.clientWidth || 1) / (host.clientHeight || 1),
     })
+    // Hoisted so the resize() closure below can reference it on initial
+    // mount before the selection-system block (much later in this
+    // effect) reassigns it. See the "Single-tap selection highlight"
+    // section for the actual lifecycle.
+    let selectionHelper = null
+    let selectionHelperTarget = null
+
+    // ── Postprocessing for character silhouette outline ──────────────
+    // Scene render goes through an EffectComposer so OutlinePass can
+    // wrap a yellow glow around the selected avatar's silhouette.
+    //
+    // The backdrop (sky/clouds/hills) is wrapped as a custom Pass so
+    // it draws into the composer's read buffer first, then RenderPass
+    // composites the shelter scene on top with depth cleared.
+    class BackdropPass extends Pass {
+      constructor(bdp, mainCamera) {
+        super()
+        this.bdp = bdp
+        this.mainCamera = mainCamera
+        this.needsSwap = false
+        this.clear = true
+      }
+      render(rendererArg, writeBuffer, readBuffer) {
+        const prevAutoClear = rendererArg.autoClear
+        const prevClearColor = rendererArg.getClearColor(new THREE.Color())
+        const prevClearAlpha = rendererArg.getClearAlpha()
+        rendererArg.autoClear = false
+        rendererArg.setRenderTarget(this.renderToScreen ? null : readBuffer)
+        rendererArg.setClearColor(0x000000, 0)
+        rendererArg.clear(true, true, true)
+        this.bdp.render(rendererArg, this.mainCamera)
+        // Restore so subsequent passes don't inherit weird state.
+        rendererArg.autoClear = prevAutoClear
+        rendererArg.setClearColor(prevClearColor, prevClearAlpha)
+      }
+    }
+    const composer = new EffectComposer(renderer)
+    composer.addPass(new BackdropPass(backdrop, camera))
+    const scenePass = new RenderPass(scene, camera)
+    scenePass.clear = false
+    scenePass.clearDepth = true
+    composer.addPass(scenePass)
+    const outlinePass = new OutlinePass(
+      new THREE.Vector2(host.clientWidth || 1, host.clientHeight || 1),
+      scene,
+      camera,
+    )
+    outlinePass.edgeStrength = 6.0
+    outlinePass.edgeGlow = 1.2
+    outlinePass.edgeThickness = 3.0
+    outlinePass.pulsePeriod = 1.1
+    outlinePass.visibleEdgeColor.set(0xffd84a)
+    outlinePass.hiddenEdgeColor.set(0xffd84a)
+    composer.addPass(outlinePass)
+    composer.addPass(new OutputPass())
     const resize = () => {
       const w = host.clientWidth || 1
       const h = host.clientHeight || 1
       renderer.setSize(w, h, false)
+      composer.setSize(w, h)
+      outlinePass.setSize(w, h)
+      if (selectionHelper) selectionHelper.material.resolution.set(w, h)
       const aspect = w / h
       const halfH = FRUSTUM_HEIGHT / 2
       const halfW = halfH * aspect
@@ -894,7 +1020,13 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         }
       }
       focusedAgentIdRef.current = agentId
-      focusedAgentRestoreRef.current = useOutline ? applyOutline(handle.object3d) : null
+      // Skip applyOutline (the red shell) — the yellow OutlinePass on
+      // single-tap selection is the canonical highlight now. The double
+      // tap zoom doesn't need its own outline since the camera framing
+      // already makes the focused character unambiguous.
+      focusedAgentRestoreRef.current = null
+      // (legacy: `useOutline` and `applyOutline` are no longer wired.)
+      void useOutline
       // Notify the parent so it can render the character card. Look up
       // profile fields (name, avatarUrl) from the character registry,
       // falling back to the agent's stored name and the bridge fallback
@@ -1076,6 +1208,38 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       })
     }
 
+    /** Explicit-coords camera tween. `null` arguments keep the current
+     *  value for that axis, so the caller can move only Y (for the
+     *  vertical trailer scroll) or only zoom (zoom-out reveal). Bounds
+     *  are temporarily widened to whatever extent the tween needs so
+     *  the cinematic isn't clamped to the play area. */
+    const animateCameraPanTo = ({ x, y, zoom, ms }) => {
+      const dur = Math.max(1, ms ?? 3000)
+      controls.setLock({})
+      // Pop the bounds wide enough that we can pan to any coordinate
+      // the cinematic asks for. Restoring on completion isn't strictly
+      // needed — the next user pan triggers refit/setBounds anyway.
+      controls.setBounds({ minX: -200, maxX: 200, minY: -200, maxY: 200 })
+      tween.active = true
+      tween.t0 = performance.now()
+      tween.dur = dur
+      tween.fx = camera.position.x
+      tween.fy = camera.position.y
+      tween.fz = camera.zoom
+      tween.tx = x ?? camera.position.x
+      tween.ty = y ?? camera.position.y
+      tween.tz = zoom ?? camera.zoom
+      tween.onDone = null
+      const startedAt = performance.now()
+      return new Promise((resolve) => {
+        const wait = () => {
+          if (performance.now() - startedAt >= dur) resolve()
+          else requestAnimationFrame(wait)
+        }
+        requestAnimationFrame(wait)
+      })
+    }
+
     // Set the agent's motion immediately and stick it as their
     // focusRole so the per-frame motion sync keeps it. Used by the
     // tutorial's `setMotion` action — the recruit is already focused,
@@ -1238,6 +1402,9 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         animateAgentWalkIn(cmd.pubkey, cmd.fromOffsetX, cmd.dx, cmd.ms).then(() => cmd.onComplete?.())
       } else if (cmd?.type === 'cameraTo') {
         animateCameraTo(cmd.state, cmd.ms).then(() => cmd.onComplete?.())
+      } else if (cmd?.type === 'panCameraTo') {
+        animateCameraPanTo({ x: cmd.x, y: cmd.y, zoom: cmd.zoom, ms: cmd.ms })
+          .then(() => cmd.onComplete?.())
       } else if (cmd?.type === 'setAgentMotion') {
         setAgentMotionByPubkey(cmd.pubkey, cmd.motion)
         cmd.onComplete?.()
@@ -1315,6 +1482,43 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       setPresenceTick((n) => n + 1)
     })
 
+    // ── Per-room mood tint via emissive ────────────────────────────
+    // Each room gets a stable mood (warm / cool / amber / neutral)
+    // hashed from its id and applied as a subtle emissive tint. Not a
+    // light source — just a colour cast so rooms read as having
+    // different bulb temperatures without the screen looking pastel.
+    // No flicker (reads as blinking, not lighting); revisit later if
+    // we add real spotlights.
+    const ROOM_MOODS = [
+      // { hex, baseIntensity }
+      { hex: 0xffd9a8, base: 0.06 },   // warm incandescent
+      { hex: 0xc0d8ff, base: 0.05 },   // cool fluorescent
+      { hex: 0xff9a40, base: 0.05 },   // dim amber
+      { hex: 0xfff5e6, base: 0.07 },   // neutral bright
+    ]
+    const hashStr = (s) => {
+      let h = 5381
+      for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+      return Math.abs(h)
+    }
+    // roomId → [{ mat, base }] — captured so pulse/selection can read
+    // the baseline and so we can dispose cleanly on teardown.
+    const roomLightingData = new Map()
+    const applyRoomLighting = (group, roomId) => {
+      if (roomLightingData.has(roomId)) return
+      const mood = ROOM_MOODS[hashStr(String(roomId)) % ROOM_MOODS.length]
+      const mats = []
+      group.traverse((o) => {
+        const m = o.material
+        if (m && m.emissive) {
+          m.emissive.setHex(mood.hex)
+          m.emissiveIntensity = mood.base
+          mats.push({ mat: m, base: mood.base })
+        }
+      })
+      if (mats.length) roomLightingData.set(roomId, mats)
+    }
+
     fetch('/shelter-layout.json')
       .then((r) => r.json())
       .then((layout) => {
@@ -1333,6 +1537,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           const g = buildRoom(room, cellW, cellH)
           worldRoot.add(g)
           roomGroups.push(g)
+          applyRoomLighting(g, room.id)
           // Production HUD per work room. Type-id can be either the
           // room id (layout rooms use type-as-id) or `room.type` for
           // built rooms (id is uuid-like).
@@ -1359,53 +1564,104 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
 
         for (const room of layout.rooms ?? []) addRoomToScene(room)
 
-        // ── Build slots above the ground row ──────────────────────
+        // ── Build slots above (and eventually below) the ground row ──
         // The shelter is part of a larger building; the player can
         // only construct in pre-allocated slots (visualised as
         // unbuilt floors). When a real room exists at a slot's grid
         // position, the slot mesh hides so the room contents show
-        // through without z-fight.
+        // through without z-fight. The slot list is derived from the
+        // current `buildingTier` in shelterStore so upgrades and the
+        // demo button can both add more floors live without a stage
+        // remount.
         const slotsGroup = new THREE.Group()
         slotsGroup.name = 'shelter:slots'
-        slotsGroup.position.z = -0.45  // sit behind the cell plane
+        slotsGroup.position.z = -0.45
         worldRoot.add(slotsGroup)
         const slotMeshes = new Map()  // "gx,gy" → mesh
-        {
-          buildSlots = deriveDefaultSlots(layout.rooms ?? [], { floorsAbove: 5 })
-          const sharedTex = makeTowerWindowTexture()
-          // One window-tile per cell in width; one per cell in height.
-          // All slots in the starter set share the same (gridW=2, gridH=1)
-          // size so a single shared texture + repeat config is fine.
-          sharedTex.repeat.set(2, 1)
+        const sharedTex = makeTowerWindowTexture()
+        sharedTex.repeat.set(2, 1)
+        let currentColumnsKey = ''
+        // Building exterior frame — wraps each column with left/right
+        // cladding + a roof cap. Always visible (slot visibility is
+        // independent) so the silhouette of the building is preserved
+        // whether floors are empty or filled, and varied column
+        // heights give a stepped silhouette.
+        let buildingFrame = null
+        const rebuildBuildingFrame = (columns) => {
+          if (buildingFrame) {
+            worldRoot.remove(buildingFrame)
+            buildingFrame.traverse((o) => {
+              if (o.geometry) o.geometry.dispose?.()
+              if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose?.())
+              else if (o.material) o.material.dispose?.()
+            })
+            buildingFrame = null
+          }
+          if (columns?.length) {
+            buildingFrame = buildBuildingFrame({ columns, cellW, cellH })
+            worldRoot.add(buildingFrame)
+          }
+        }
+        const rebuildSlots = () => {
+          const snap = shelterStore.getSnapshot()
+          const columns = snap.columns ?? columnsForTier(snap.buildingTier ?? 1)
+          const key = JSON.stringify(columns)
+          if (key === currentColumnsKey) return
+          currentColumnsKey = key
+          rebuildBuildingFrame(columns)
+          // Tear down the previous slot meshes.
+          for (const mesh of slotMeshes.values()) {
+            slotsGroup.remove(mesh)
+            mesh.traverse((o) => {
+              if (o.geometry) o.geometry.dispose?.()
+              if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose?.())
+              else if (o.material) o.material.dispose?.()
+            })
+          }
+          slotMeshes.clear()
+          buildSlots = deriveDefaultSlots(columns)
           for (const slot of buildSlots) {
-            // Slight darken with height so a tall stack reads as
-            // receding into shade.
             const tint = new THREE.Color().lerpColors(
               new THREE.Color('#ffffff'),
               new THREE.Color('#88817b'),
-              Math.min(slot.gridY / 6, 1),
+              Math.min(Math.abs(slot.gridY) / 6, 1),
             )
             const mesh = buildSlotMesh({ slot, cellW, cellH, wallTex: sharedTex, tint })
             slotMeshes.set(`${slot.gridX},${slot.gridY}`, mesh)
             slotsGroup.add(mesh)
           }
-          const syncSlotVisibility = () => {
-            const built = shelterStore.getSnapshot().builtRooms ?? []
-            const filled = new Set(built.map((r) => `${r.gridX},${r.gridY}`))
-            for (const [key, mesh] of slotMeshes) mesh.visible = !filled.has(key)
-          }
-          syncSlotVisibility()
-          const unsubSlots = shelterStore.subscribe(syncSlotVisibility)
-          disposers.push(unsubSlots)
-          disposers.push(() => {
-            slotsGroup.traverse((o) => {
-              if (o.geometry) o.geometry.dispose?.()
-              if (Array.isArray(o.material)) o.material.forEach((m) => { m.map?.dispose?.(); m.dispose?.() })
-              else if (o.material) { o.material.map?.dispose?.(); o.material.dispose?.() }
-            })
-            worldRoot.remove(slotsGroup)
-          })
         }
+        rebuildSlots()
+        const syncSlotVisibility = () => {
+          rebuildSlots()
+          const built = shelterStore.getSnapshot().builtRooms ?? []
+          const filled = new Set(built.map((r) => `${r.gridX},${r.gridY}`))
+          for (const [key, mesh] of slotMeshes) mesh.visible = !filled.has(key)
+          // Dirt fill always draws — it's the visible ground/earth the
+          // shelter sits on, not a tier-gated feature. The previous
+          // tier-driven hiding wiped the brown band on the default
+          // (tier-1, no underground) view.
+        }
+        syncSlotVisibility()
+        const unsubSlots = shelterStore.subscribe(syncSlotVisibility)
+        disposers.push(unsubSlots)
+        disposers.push(() => {
+          slotsGroup.traverse((o) => {
+            if (o.geometry) o.geometry.dispose?.()
+            if (Array.isArray(o.material)) o.material.forEach((m) => { m.map?.dispose?.(); m.dispose?.() })
+            else if (o.material) { o.material.map?.dispose?.(); o.material.dispose?.() }
+          })
+          sharedTex.dispose?.()
+          worldRoot.remove(slotsGroup)
+          if (buildingFrame) {
+            buildingFrame.traverse((o) => {
+              if (o.geometry) o.geometry.dispose?.()
+              if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose?.())
+              else if (o.material) o.material.dispose?.()
+            })
+            worldRoot.remove(buildingFrame)
+          }
+        })
 
         // Stash these so the dynamic builtRooms subscriber + ghost
         // computation can read them without re-fetching the layout.
@@ -1525,6 +1781,8 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     let downX = 0, downY = 0
     let lastTapAt = 0
     let lastTapRoomId = null
+    let lastTapAgentAt = 0
+    let lastTapAgentId = null
     const onPointerDown = (e) => { downX = e.clientX; downY = e.clientY }
     const onClick = (e) => {
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > TAP_PIXEL_TOLERANCE) return
@@ -1639,10 +1897,11 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         }
       }
 
-      // Prefer avatar hits — the user's intent when tapping a character
-      // standing in a room is "select this character", not "double-tap
-      // the room". A single tap is enough; double-tap-on-character
-      // would be a separate gesture and we don't have a use for it.
+      // Prefer avatar hits over room hits — tapping a character
+      // standing inside a room should target the character.
+      // Single tap = select (yellow highlight). Double tap (within
+      // DOUBLE_TAP_MS, same agent) = focus/zoom — toggles off if
+      // already focused.
       const avatarObjs = []
       for (const handle of liveAvatarsRef.current.values()) {
         if (handle && !handle.pending && handle.object3d) avatarObjs.push(handle.object3d)
@@ -1658,11 +1917,19 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           node = node.parent
         }
         if (agentId) {
-          if (focusedAgentIdRef.current === agentId) {
-            // Tap-toggle off.
-            exitFocus()
+          const now = performance.now()
+          const isDouble = agentId === lastTapAgentId && (now - lastTapAgentAt) < DOUBLE_TAP_MS
+          lastTapAgentAt = now
+          lastTapAgentId = agentId
+          if (isDouble) {
+            if (focusedAgentIdRef.current === agentId) {
+              exitFocus()
+            } else {
+              focusAgent(agentId)
+            }
           } else {
-            focusAgent(agentId)
+            // Single tap — select + highlight, no zoom.
+            setSelection({ kind: 'agent', id: agentId })
           }
           return
         }
@@ -1670,8 +1937,9 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
 
       const hits = raycaster.intersectObjects(roomGroups, true)
       if (!hits.length) {
-        // Tapped empty space — clear any active selection.
+        // Tapped empty space — clear any active focus and selection.
         if (focusedAgentIdRef.current) exitFocus()
+        clearSelection()
         return
       }
       let node = hits[0].object
@@ -1686,7 +1954,11 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       const isDouble = roomId === lastTapRoomId && (now - lastTapAt) < DOUBLE_TAP_MS
       lastTapAt = now
       lastTapRoomId = roomId
-      if (!isDouble) return
+      if (!isDouble) {
+        // Single tap — select + highlight, no zoom.
+        setSelection({ kind: 'room', id: roomId })
+        return
+      }
 
       // Double tap — toggle focus on/off.
       if (focusedRoomId === roomId) {
@@ -1857,6 +2129,148 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       tutorialPulseRoomId = t.pulseRoom ?? null
       reconcilePulseRooms()
     })
+
+    // ── Single-tap selection highlight ───────────────────────────────
+    // Bright-yellow bbox outline (THREE.BoxHelper) parented to the
+    // scene root. Auto-sizes to the selected room/agent and updates
+    // each frame so it tracks moving avatars. Disposed + removed on
+    // deselect / teardown.
+    const SELECT_COLOR = 0xffd84a
+    const SELECT_LINEWIDTH = 6  // world pixels — Line2 honors this
+    const SELECT_PULSE_PERIOD_SEC = 1.1
+    // 12 edges of an AABB cube in unit-space. Scaled per-frame from
+    // the target's world bbox.
+    const UNIT_BOX_EDGES = new Float32Array([
+      -1,-1,-1,  1,-1,-1,   1,-1,-1,  1, 1,-1,   1, 1,-1, -1, 1,-1,  -1, 1,-1, -1,-1,-1,
+      -1,-1, 1,  1,-1, 1,   1,-1, 1,  1, 1, 1,   1, 1, 1, -1, 1, 1,  -1, 1, 1, -1,-1, 1,
+      -1,-1,-1, -1,-1, 1,   1,-1,-1,  1,-1, 1,   1, 1,-1,  1, 1, 1,  -1, 1,-1, -1, 1, 1,
+    ])
+    // selectionHelper is hoisted earlier in the effect — see the top
+    // of this block where it's declared so the resize() closure can
+    // access it on initial mount without a TDZ error.
+    const selectionBox = new THREE.Box3()
+    const selectionTmpVec = new THREE.Vector3()
+
+    const findRoomRoot = (id) =>
+      roomGroups.find((g) => g.userData.room?.id === id) ?? null
+
+    const findAgentRoot = (id) => {
+      const handle = liveAvatarsRef.current.get(id)
+      return handle && !handle.pending ? handle.object3d ?? null : null
+    }
+
+    const clearSelectionHelper = () => {
+      if (!selectionHelper) return
+      try { selectionHelper.parent?.remove(selectionHelper) } catch {}
+      try { selectionHelper.geometry?.dispose() } catch {}
+      try { selectionHelper.material?.dispose() } catch {}
+      selectionHelper = null
+      selectionHelperTarget = null
+    }
+
+    const reconcileSelection = () => {
+      const cur = selectedRef.current
+      // Agents use OutlinePass silhouette glow — clear the box helper
+      // and drive the outlinePass selection list instead.
+      if (cur?.kind === 'agent') {
+        clearSelectionHelper()
+        const root = findAgentRoot(cur.id)
+        outlinePass.selectedObjects = root ? [root] : []
+        return
+      }
+      // Rooms (or no selection) — clear the outline pass; rooms keep
+      // the thick yellow box helper.
+      outlinePass.selectedObjects = []
+      if (!cur) { clearSelectionHelper(); return }
+      const root = findRoomRoot(cur.id)
+      if (!root) { clearSelectionHelper(); return }
+      if (selectionHelperTarget === root) return
+      clearSelectionHelper()
+      const geom = new LineSegmentsGeometry()
+      geom.setPositions(UNIT_BOX_EDGES)
+      const mat = new LineMaterial({
+        color: SELECT_COLOR,
+        linewidth: SELECT_LINEWIDTH,
+        transparent: true,
+        depthTest: false,
+        // Resolution must be set so the shader can scale linewidth
+        // to screen pixels. Re-set on resize below.
+        resolution: new THREE.Vector2(
+          renderer.domElement.clientWidth || 1,
+          renderer.domElement.clientHeight || 1,
+        ),
+      })
+      selectionHelper = new LineSegments2(geom, mat)
+      selectionHelper.renderOrder = 999
+      selectionHelper.frustumCulled = false
+      selectionHelperTarget = root
+      scene.add(selectionHelper)
+    }
+
+    // Per-frame: size + position the box to the target's world AABB,
+    // and pulse opacity.
+    const updateSelectionHelper = () => {
+      if (!selectionHelper || !selectionHelperTarget) return
+      selectionBox.setFromObject(selectionHelperTarget)
+      if (selectionBox.isEmpty()) { selectionHelper.visible = false; return }
+      selectionHelper.visible = true
+      selectionBox.getCenter(selectionTmpVec)
+      selectionHelper.position.copy(selectionTmpVec)
+      selectionBox.getSize(selectionTmpVec)
+      // UNIT_BOX_EDGES spans -1..1 (size 2), so scale = half-size.
+      selectionHelper.scale.set(
+        Math.max(0.001, selectionTmpVec.x / 2),
+        Math.max(0.001, selectionTmpVec.y / 2),
+        Math.max(0.001, selectionTmpVec.z / 2),
+      )
+      const tt = (performance.now() / 1000) * (Math.PI * 2 / SELECT_PULSE_PERIOD_SEC)
+      const k = (Math.sin(tt) + 1) / 2
+      selectionHelper.material.opacity = 0.55 + k * 0.45
+    }
+
+    // Emit selection-change to the parent. Kept separate from focus
+    // events so the parent can render the selection card + portrait
+    // *only* while zoomed out. Focus events (onAgentFocusChange /
+    // onFocusChange) still fire on the double-tap zoom path.
+    const buildSelectionPayload = (next) => {
+      if (!next) return null
+      if (next.kind === 'agent') {
+        const a = shelterStore.getSnapshot().agents?.[next.id] ?? null
+        const reg = a?.pubkey ? registry.get(a.pubkey) : null
+        return {
+          kind: 'agent',
+          id: next.id,
+          pubkey: a?.pubkey ?? null,
+          name: reg?.name ?? a?.name ?? null,
+          avatarUrl: reg?.avatarUrl ?? null,
+        }
+      }
+      const rg = roomGroups.find((g) => g.userData.room?.id === next.id)
+      const meta = rg?.userData?.room ?? null
+      return {
+        kind: 'room',
+        id: next.id,
+        name: meta?.name ?? next.id,
+      }
+    }
+
+    const setSelection = (next) => {
+      const cur = selectedRef.current
+      const same = cur && next && cur.kind === next.kind && cur.id === next.id
+      if (same) return // same-tap no-op
+      selectedRef.current = next
+      reconcileSelection()
+      setSelectionTick((n) => n + 1)
+      onSelectionChangeRef.current?.(buildSelectionPayload(next))
+    }
+
+    const clearSelection = () => {
+      if (!selectedRef.current) return
+      selectedRef.current = null
+      reconcileSelection()
+      setSelectionTick((n) => n + 1)
+      onSelectionChangeRef.current?.(null)
+    }
 
     // ── Build mode — ghost cells for placement ──────────────────
     // When build-mode `selectedType` is set, we render a flat yellow
@@ -2134,6 +2548,10 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         for (const m of ghostMaterials) m.opacity = alpha
       }
 
+      // Size + position the selection outline to the target's bbox
+      // and pulse opacity. Tracks moving avatars and rooms.
+      updateSelectionHelper()
+
       // Bright-yellow emissive pulse on tutorial-targeted +
       // assignment-mode rooms. Runs independently of focus state.
       if (pulseRoomData.size) {
@@ -2201,12 +2619,10 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       // shelter on top. The backdrop owns its own scene + camera; we
       // just hand the renderer between passes and clear depth so the
       // cells composite cleanly without z-fighting the distant geo.
-      renderer.autoClear = false
-      renderer.setClearColor(0x000000, 0)
-      renderer.clear(true, true, true)
-      backdrop.render(renderer, camera)
-      renderer.clearDepth()
-      renderer.render(scene, camera)
+      // Composer drives the whole render: BackdropPass → scene
+      // RenderPass (clearDepth) → OutlinePass (yellow silhouette glow
+      // on selected avatar) → OutputPass.
+      composer.render()
     }
     tick()
 
@@ -2230,6 +2646,12 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         }
       }
       pulseRoomData.clear()
+      // Drop the selection outline + outline-pass selection on
+      // tear-down.
+      clearSelectionHelper()
+      outlinePass.selectedObjects = []
+      try { composer.dispose() } catch {}
+      selectedRef.current = null
       try { unsubRegistry() } catch {}
       try { unsubRoles() } catch {}
       try { registry.dispose() } catch {}

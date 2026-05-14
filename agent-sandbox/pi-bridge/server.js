@@ -680,6 +680,9 @@ function listCharacters() {
         // sandbox card and feeds the wake-up tutorial's recruit
         // carousel. Defaults to false for legacy records.
         starter: !!c.starter,
+        // Curated-pool flag — characters allowed in the live game +
+        // trailer demo. Parallels the room-layout `added` status.
+        added: !!c.added,
         npc_role: c.npc_role ?? null,
         npc_default_pos: c.npc_default_pos ?? null,
         shift_start: c.shift_start ?? null,
@@ -922,46 +925,80 @@ registerPrompt("npc-persona", PERSONA_SYSTEM_NPC);
 // overridable below so the agent-sandbox UI can edit it without a
 // server restart.
 const PERSONA_SYSTEM = [
-  "You generate short character profiles for the recruits of a Severance-flavoured",
-  "corporate-mystery game. The world's register is calm, polite, slightly off —",
-  "but the profiles you write are about WHO THE PERSON IS, not what they do.",
-  "Focus on temperament and inner life. Do not mention jobs, titles, departments,",
-  "ledgers, procedures, or any technical or workplace jargon.",
+  "You generate short character briefs for the recruits of a Severance-flavoured",
+  "corporate-mystery game. The world's aesthetic floor is: Severance (Lumon),",
+  "The Stanley Parable, The Backrooms, The Amazing Digital Circus — liminal,",
+  "fluorescent-lit corporate / institutional, depopulated and uncanny. Avoid",
+  "outdoorsy or naturalistic content (no foliage, no real windows to outside)",
+  "unless the brief specifically calls for it.",
   "",
-  "These become NIP-01 kind:0 Nostr profiles — only name + about.",
+  "Each brief is written for a single human character. The brief becomes the",
+  "NIP-01 kind:0 Nostr `about` AND is fed directly to a FLUX text-to-image",
+  "model that draws the character's portrait. Concrete VISIBLE descriptors are",
+  "load-bearing — clothing, hair, build, age, accessories. The model can't",
+  "draw 'introspective' or 'careful', but it CAN draw 'oval wire-rim glasses,",
+  "tobacco-stained brown cardigan over a beige polo'.",
   "",
-  "Voice goals:",
-  "- Personality-first. Write about how the person moves through a room, what",
-  "  they notice, what they care too much about, how they speak when they're",
-  "  alone, the small habits a friend would tease them for.",
-  "- Plain language. No technical or corporate vocabulary — no 'department',",
-  "  'protocol', 'intake', 'compliance', 'directive', 'clearance', 'shift',",
-  "  'procedure', or similar. Describe the person, not the institution.",
-  "- Specific over abstract. Concrete details (the way they hold a teacup,",
-  "  the songs they hum when nervous, the friend they always quote, the colour",
-  "  of the scarf folded in a coat pocket) instead of general adjectives like",
-  "  'mysterious', 'kind', 'introverted'.",
-  "- Calm, polished tone — quiet observation rather than dramatic flourish.",
-  "  The reader should feel like they've watched this person for an afternoon,",
-  "  not been handed a personnel file.",
+  "FORMAT — three short pieces of information, in this rough order:",
+  "  • Age + role + (optional) build / ethnicity.",
+  "  • Visible appearance — clothing, hair, accessories. Comma-separated",
+  "    concrete details. NO abstractions. NO 'professional-looking', NO",
+  "    'casual outfit'. Specific colours, specific garments.",
+  "  • Short personality tag, 3-7 words, clipped.",
   "",
-  "Respond ONLY with valid JSON. Both fields are REQUIRED.",
-  "No markdown, no code fences, no trailing text.",
+  "VARY THE OPENING. Do NOT start every brief with 'A [age]-year-old",
+  "[role].' That structure gets stale fast. Use a mix:",
+  "  - 'A 49-year-old reception desk supervisor. Mint-green twin-set...'",
+  "  - 'Pearl Greaves runs the reception desk. 49, blonde bouffant...'",
+  "  - 'The reception desk supervisor, 49 and warmly direct. Mint-green...'",
+  "  - 'Late 40s. Reception desk supervisor. Mint-green wool twin-set...'",
+  "  - 'Reception desk supervisor, almost 50. Tidy 1980s bouffant...'",
+  "Pick a different opening each generation. The three pieces of info",
+  "all need to be present; their ORDER and PHRASING vary.",
+  "",
+  "Concrete-visual content remains load-bearing — clothing colours,",
+  "hair, accessories must still appear so FLUX can draw them. Don't",
+  "trade visual detail for prose style.",
+  "",
+  "Total `about` length: 30-80 words.",
+  "",
+  "Roles to draw from (Severance / Stanley Parable / Backrooms / Digital",
+  "Circus institutional cast — feel free to invent more in the same register):",
+  "  data sorter, archivist, mailroom supervisor, cafeteria manager,",
+  "  receptionist, security officer, compliance officer, drafting technician,",
+  "  microfilm clerk, executive, janitorial supervisor, photocopy attendant,",
+  "  telex operator, stenographer, vending machine technician, watercooler",
+  "  attendant, lactation room attendant, maintenance worker, surveillance",
+  "  analyst, tape librarian, decontamination officer.",
+  "",
+  "Names: formal first + last, 2-40 characters. INVENT EACH ONE FRESH.",
+  "  Mix cultures (East Asian, South Asian, Latin, Black, Eastern European,",
+  "  Northern European, Mediterranean, Pacific). Slightly unusual surnames",
+  "  read better than common ones — aim for the texture of a 1970s",
+  "  corporate phone directory. Single distinctive surnames are",
+  "  acceptable. No nicknames, no digit-suffixes, no emoji, no fictional /",
+  "  pop-culture references.",
+  "",
+  "  CRITICAL: do NOT reuse a name across generations. If you've ever",
+  "  produced a name in this format before, choose a different one — vary",
+  "  given name, surname, AND cultural background each time.",
+  "",
+  "Respond ONLY with valid JSON. Both fields REQUIRED. No markdown, no",
+  "code fences, no trailing text.",
   "{",
-  '  "name": "A formal full name. First + last; occasionally a single distinctive surname. 2-40 characters. Mix of cultures welcome. No emoji, no nicknames, no digit-suffixes.",',
-  '  "about": "REQUIRED. 2-4 sentences. Describe the person\'s temperament and texture: how they speak, what they pay attention to, a private habit, an opinion they hold gently but firmly. No job descriptions, no workplace terminology."',
+  '  "name": "Formal full name, 2-40 chars.",',
+  '  "about": "Three short sentences in the format above. 30-80 words total."',
   "}",
   "",
-  "Examples of register (do not copy, sense the tone):",
-  "- 'Tomas Akin listens longer than most people do, which leaves him with",
-  "   the unsettling reputation of always remembering what you said. He",
-  "   carries a thin notebook he never opens in public, and is given to",
-  "   short, careful smiles. Asked anything direct, he tilts his head a",
-  "   degree before answering, as if the question deserved courtesy.'",
+  "EXAMPLE structure (DO NOT COPY the name or details — produce a wholly",
+  "different character of the same shape):",
+  '  { "name": "[your fresh full name here]",',
+  '    "about": "[age]-year-old [role from list above]. [Three to five concrete visible details: clothing, hair, accessories, build]. [Three-to-seven word personality tag]." }',
   "",
-  "Surprise the reader with each character's particular texture, not with",
-  "personality archetypes. Two thoughtful people should feel different because",
-  "of what they think about, not because one is bubbly and one is grumpy.",
+  "Vary across generations: different ages (20s to 70s), different builds,",
+  "different ethnicities, different roles from the list above, different",
+  "decade signatures (1960s through early 1990s palette). Avoid making every",
+  "character a young anxious office worker.",
 ].join("\n");
 
 // Registered as overridable so the agent-sandbox UI can edit the player
@@ -1366,8 +1403,72 @@ async function generateAvatarBytes({ name, about, promptOverride, seed }) {
       "No text, no watermark, no signatures, no UI chrome, no logos.",
     ].filter(Boolean).join(" ");
   }
-  const { buffer, mime, ext } = await generateImageBytes({ prompt });
-  return { buffer, mime, ext, prompt };
+  // Primary path: NIM hosted FLUX.1 schnell. Lately the safety filter
+  // has been blocking more aggressively — when generateImageBytes
+  // exhausts its internal 3 retries with the "kept coming back tiny"
+  // message, fall back to our self-hosted flux.1-kontext (same instance
+  // we use for tpose). Kontext expects an input image; we give it a
+  // blank off-white canvas so the prompt drives the output.
+  try {
+    const { buffer, mime, ext } = await generateImageBytes({ prompt });
+    return { buffer, mime, ext, prompt };
+  } catch (err) {
+    const blocked = /kept coming back tiny|safety-blocked/i.test(err?.message || "");
+    if (!blocked || !FLUX_KONTEXT_URL) throw err;
+    console.warn("[avatar] NIM schnell safety-blocked, falling back to flux-kontext");
+    const { buffer, mime, ext } = await generateAvatarViaKontext({ prompt });
+    return { buffer, mime, ext, prompt };
+  }
+}
+
+// Self-hosted FLUX.1 Kontext fallback for avatar generation. Same
+// service the tpose pipeline drives — different infrastructure, less
+// aggressive safety filter than the NIM hosted endpoints. Uses a
+// blank off-white reference image so the prompt determines the
+// output; Kontext requires an image input but this one carries no
+// structural content for the model to copy.
+async function generateAvatarViaKontext({ prompt }) {
+  if (!FLUX_KONTEXT_URL) throw new Error("FLUX_KONTEXT_URL not configured");
+  // Cached blank reference — 1024×1024 off-white square, regenerated
+  // only once per server lifetime.
+  if (!generateAvatarViaKontext._refDataUri) {
+    const ref = await sharp({
+      create: { width: 1024, height: 1024, channels: 3, background: BG_RGB },
+    }).png().toBuffer();
+    generateAvatarViaKontext._refDataUri =
+      `data:image/png;base64,${ref.toString("base64")}`;
+  }
+  const dataUri = generateAvatarViaKontext._refDataUri;
+  let buffer = null;
+  let lastBytes = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(`${FLUX_KONTEXT_URL.replace(/\/$/, "")}/v1/infer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        prompt,
+        image: dataUri,
+        seed: Math.floor(Math.random() * 2_147_483_647),
+        steps: 30,
+        aspect_ratio: "1:1",
+        resize_response_image: false,
+        cfg_scale: 5.0,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`flux-kontext avatar ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const b64 = data.artifacts?.[0]?.base64;
+    if (!b64) throw new Error("flux-kontext avatar: no image in response");
+    const buf = Buffer.from(b64, "base64");
+    lastBytes = buf.length;
+    if (buf.length >= 15_000) { buffer = buf; break; }
+    console.warn(`[avatar:kontext] attempt ${attempt + 1}: ${buf.length}B — retrying`);
+  }
+  if (!buffer) throw new Error(`flux-kontext avatar returned only tiny output (last: ${lastBytes}B)`);
+  return { buffer, mime: "image/png", ext: "png" };
 }
 
 // Post-image generation — raw prompt with a small style nudge so
@@ -4527,6 +4628,7 @@ app.get("/characters/:pubkey", (req, res) => {
     // field always being present.
     kind: c.kind ?? "player",
     starter: !!c.starter,
+    added: !!c.added,
     npc_role: c.npc_role ?? null,
     npc_default_pos: c.npc_default_pos ?? null,
     shift_start: c.shift_start ?? null,
@@ -5925,7 +6027,7 @@ app.patch("/characters/:pubkey", async (req, res) => {
   if (!c) return res.status(404).json({ error: "not found" });
   const {
     name, about, state, avatarUrl, model, harness, promptStyle, mood, needs,
-    npc_role, npc_default_pos, shift_start, shift_end, starter,
+    npc_role, npc_default_pos, shift_start, shift_end, starter, added,
   } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = String(name).trim() || c.name;
@@ -6006,6 +6108,13 @@ app.patch("/characters/:pubkey", async (req, res) => {
     // manifest so the wake-up scenario can pull "the three starters"
     // without hardcoding pubkeys.
     if (starter !== undefined) patch.starter = !!starter;
+    // Curated-pool flag. `added: true` characters are the ones the
+    // game (and the trailer demo) draw from when populating shelter
+    // agents. Parallels the room-layout `added` status — both mean
+    // "approved for use in the live build". Lets us keep half-baked
+    // or off-theme rigged characters in the registry but out of the
+    // active pool.
+    if (added !== undefined) patch.added = !!added;
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }

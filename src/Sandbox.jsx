@@ -13,6 +13,10 @@ const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'
 
 export default function Sandbox() {
   const [characters, setCharacters] = useState([])
+  // Filter strip for the agents list. Mirrors the rooms page's
+  // built-in / drafts / added split so the two sidebars look
+  // alike. Reuses the .rooms-status-tabs CSS.
+  const [agentFilter, setAgentFilter] = useState('all')
   const [objects, setObjects] = useState([])
   const [rooms, setRooms] = useState([])
   const [grid, setGrid] = useState(null) // { width, height } from /rooms
@@ -385,11 +389,43 @@ export default function Sandbox() {
           </div>
         )}
         {spawnError && <p className="agent-sandbox-error">{spawnError}</p>}
+        {/* Filter strip — same shape + styling as the Rooms page's
+            status tabs. Lets us slice the agent roster by curation
+            flags without scrolling through everyone. */}
+        {characters.length > 0 && (() => {
+          const tabs = [
+            { id: 'all', label: 'All', count: characters.length },
+            { id: 'added', label: 'Added', count: characters.filter((c) => c.added).length },
+          ]
+          return (
+            <nav className="rooms-status-tabs" role="tablist" aria-label="agent filter">
+              {tabs.map((t) => (
+                <button
+                  key={t.id}
+                  type="button" role="tab"
+                  aria-selected={agentFilter === t.id}
+                  className={`rooms-status-tab${agentFilter === t.id ? ' active' : ''}`}
+                  onClick={() => setAgentFilter(t.id)}
+                >
+                  {t.label} <span className="rooms-status-tab-count">{t.count}</span>
+                </button>
+              ))}
+            </nav>
+          )
+        })()}
         {characters.length === 0 ? (
           <p className="muted">No agents yet. Click + New to mint one.</p>
-        ) : (
+        ) : (() => {
+          const filtered = characters.filter((c) => {
+            if (agentFilter === 'added') return !!c.added
+            return true
+          })
+          if (filtered.length === 0) {
+            return <p className="muted">No agents match this filter.</p>
+          }
+          return (
           <ul className="sandbox3-card-list">
-            {characters.map((c) => {
+            {filtered.map((c) => {
               const runtime = c.runtime?.running ? c.runtime : null
               const thinking = !!runtime?.thinking
               const selected = inspectedId && (inspectedId === c.pubkey || inspectedId === runtime?.agentId)
@@ -474,6 +510,14 @@ export default function Sandbox() {
                               starter
                             </span>
                           )}
+                          {c.added && (
+                            <span
+                              className="sandbox3-card-tag sandbox3-card-tag-added"
+                              title="In the curated pool for the live shelter + trailer demo"
+                            >
+                              added
+                            </span>
+                          )}
                           {m && (
                             <span
                               className="sandbox3-card-tag sandbox3-card-tag-model"
@@ -531,7 +575,8 @@ export default function Sandbox() {
               )
             })}
           </ul>
-        )}
+          )
+        })()}
         </>
         ) : (
           <PetsPlaceholder />
