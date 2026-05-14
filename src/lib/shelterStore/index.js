@@ -12,6 +12,7 @@ export {
   levelForXp, xpAtLevel,
   tierMultiplier, roomLevelMultiplier, roomLevelForXp, roomXpAtLevel, roomXpPerLevel,
   playerRewardXpFor,
+  MANAGER_KEY, pairKey, relationshipBandForScore, minScoreForBand,
 } from './store.js'
 export {
   SIM_MINUTES_PER_REAL_SECOND,

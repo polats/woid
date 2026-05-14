@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
@@ -29,6 +30,12 @@ const AVATAR_UPSCALE = AVATAR_HEIGHT_M / SHELTER_AVATAR_HEIGHT_M
 
 export default function ShelterSelectionPortrait({ pubkey }) {
   const hostRef = useRef(null)
+  // Held false until the avatar GLB has spawned + an idle motion has
+  // landed, so the slide-in only runs after there's actually a
+  // character to slide in (no empty-box pop-then-fill).
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => { setLoaded(false) }, [pubkey])
 
   useEffect(() => {
     if (!pubkey) return
@@ -124,6 +131,9 @@ export default function ShelterSelectionPortrait({ pubkey }) {
       } else {
         animationLibrary.getRole('idle').then(applyIdle).catch(() => {})
       }
+      // Trigger the slide-in only AFTER the avatar is in scene so
+      // there's something to look at.
+      setLoaded(true)
     }).catch((err) => console.warn('[SelectionPortrait] spawn:', err))
 
     let raf = 0
@@ -143,13 +153,31 @@ export default function ShelterSelectionPortrait({ pubkey }) {
       try { registry.dispose?.() } catch {}
       try { pmrem.dispose() } catch {}
       try { composer.dispose() } catch {}
+      // forceContextLoss explicitly releases the WebGL context now,
+      // instead of waiting on canvas GC. Critical when the user
+      // selects between characters rapidly — each portrait mount
+      // creates a fresh renderer, and browsers cap ~16 live
+      // contexts before silently dropping the oldest (taking the
+      // main shelter stage with it).
+      try { renderer.forceContextLoss() } catch {}
       try { renderer.dispose() } catch {}
       try { host.removeChild(renderer.domElement) } catch {}
     }
   }, [pubkey])
 
   if (!pubkey) return null
-  // Key on pubkey so React remounts the element when the selection
-  // changes — that retriggers the slide-in animation each time.
-  return <div key={pubkey} ref={hostRef} className="shelter-selection-portrait" />
+  // motion.div drives in / out transitions. Initial state hides the
+  // portrait to the left; we animate in only once `loaded === true`
+  // so the GLB is in scene before the slide begins. Exit reverses.
+  return (
+    <motion.div
+      key={pubkey}
+      ref={hostRef}
+      className="shelter-selection-portrait"
+      initial={{ x: -160, opacity: 0 }}
+      animate={loaded ? { x: 0, opacity: 1 } : { x: -160, opacity: 0 }}
+      exit={{ x: -160, opacity: 0 }}
+      transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+    />
+  )
 }

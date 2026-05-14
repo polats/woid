@@ -4999,7 +4999,7 @@ function emptyNotesFor() {
   // (id, title, unlockedAt) but read its body from c.about at GET time.
   return {
     pages: [
-      { id: "p0", title: "About", unlockedAt: new Date().toISOString() },
+      { id: "p0", title: "Candidate Profile", unlockedAt: new Date().toISOString() },
     ],
     next: null,
   };
@@ -5017,7 +5017,13 @@ function buildNotesResponse(c) {
   if (!readNotesFile(c.pubkey)) writeNotesFile(c.pubkey, stored);
   const pages = stored.pages.map((p, i) =>
     i === 0
-      ? { ...p, body: c.about ?? "" }
+      ? {
+          ...p,
+          // Page 0 is always the candidate profile — override the
+          // stored title so legacy "About" snapshots heal on read.
+          title: "Candidate Profile",
+          body: c.about ?? "",
+        }
       : p,
   );
   return { pages, next: stored.next ?? null };

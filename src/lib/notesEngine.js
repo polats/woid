@@ -16,7 +16,7 @@
  * entry. Storyteller's PUT to /notes/next isn't observed here yet —
  * once slice 3 wires it, we'll add a refresh hook.
  */
-import { levelForXp } from './shelterStore/index.js'
+import { levelForXp, MANAGER_KEY, pairKey, minScoreForBand } from './shelterStore/index.js'
 import config from '../config.js'
 
 const cfg = config.agentSandbox || {}
@@ -87,6 +87,17 @@ export function evalCondition(condition, agent, snapshot) {
       const since = Number(agent.assignedSinceSimMin ?? NaN)
       if (!Number.isFinite(since)) return false
       return (snapshot.simMinutes - since) >= want
+    }
+    case 'relationshipAt': {
+      // condition: { type, pubkey, level }
+      //   pubkey — other party (use 'manager' for the player)
+      //   level  — band name: 'acquaintance' | 'friend' | 'close' | 'bonded'
+      const me = agent.pubkey
+      const other = String(condition.pubkey ?? MANAGER_KEY)
+      const key = pairKey(me, other)
+      if (!key) return false
+      const score = snapshot.relationships?.[key]?.score ?? 0
+      return score >= minScoreForBand(String(condition.level ?? 'acquaintance'))
     }
     default:
       return false

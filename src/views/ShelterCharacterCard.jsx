@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import config from '../config.js'
 import { subscribe as subTutorial, getState as getTutorial } from '../lib/tutorial/runtime.js'
 import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
-import { levelForXp, xpAtLevel } from '../lib/shelterStore/index.js'
+import { levelForXp, xpAtLevel, MANAGER_KEY, pairKey, relationshipBandForScore } from '../lib/shelterStore/index.js'
 import { getRoomType } from '../lib/shelterWorld/roomTypes.js'
 import { start as startAssignmentMode } from '../lib/shelterAssignmentMode.js'
 
@@ -25,11 +25,12 @@ const cfg = config.agentSandbox || {}
  * retry an avatar that previously 404'd.
  */
 export default function ShelterCharacterCard({ agent }) {
-  const [tab, setTab] = useState('profile')
+  const [tab, setTab] = useState('notes')
   const [imgFailed, setImgFailed] = useState(false)
   const [character, setCharacter] = useState(null)
   const [notes, setNotes] = useState(null)
   const [notesIdx, setNotesIdx] = useState(0)
+  const [charactersList, setCharactersList] = useState([])
   // Subscribe to the tutorial runtime's pulseTab so step 3 can
   // highlight the Assignment tab without prop-threading from Shelter.
   const tutorial = useSyncExternalStore(subTutorial, getTutorial)
@@ -56,7 +57,7 @@ export default function ShelterCharacterCard({ agent }) {
     setTab(id)
   }
 
-  useEffect(() => { setImgFailed(false); setTab('profile') }, [agent?.id])
+  useEffect(() => { setImgFailed(false); setTab('notes') }, [agent?.id])
 
   // Fetch /characters/:pubkey → { name, about, ... } so we have the bio.
   // Also re-confirms name in case the registry was stale.
@@ -88,6 +89,18 @@ export default function ShelterCharacterCard({ agent }) {
   }, [tab, agent?.pubkey])
   // Reset the carousel index when the focused character changes.
   useEffect(() => { setNotesIdx(0); setNotes(null) }, [agent?.id])
+
+  // Relationships — fetch the character roster once when the tab
+  // opens so we can render names + avatars for each edge.
+  useEffect(() => {
+    if (tab !== 'relationships' || !cfg.bridgeUrl) return
+    let cancelled = false
+    fetch(`${cfg.bridgeUrl}/characters`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (!cancelled && j?.characters) setCharactersList(j.characters) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [tab])
   // When new notes arrive, keep the active chip on the latest unlocked
   // page (one before the locked-next, if present).
   useEffect(() => {
@@ -146,8 +159,28 @@ export default function ShelterCharacterCard({ agent }) {
   const xpNeeded = Math.max(1, xpCeil - xpFloor)
   const xpPct = Math.max(0, Math.min(100, (xpInLevel / xpNeeded) * 100))
 
+  // Vital stats lifted to the header. Mood values default to 50 when
+  // the bridge fetch hasn't landed yet. Manager bond comes from the
+  // shelter store's relationships map (always shown, even at 0).
+  const energy = clampPct(character?.mood?.energy ?? 50)
+  const social = clampPct(character?.mood?.social ?? 50)
+  const managerScore = (() => {
+    if (!agent?.pubkey) return 0
+    const key = pairKey(agent.pubkey, MANAGER_KEY)
+    return key ? (shelterSnap?.relationships?.[key]?.score ?? 0) : 0
+  })()
+  const managerBand = relationshipBandForScore(managerScore)
+
   return (
-    <aside className="shelter-card" role="status" aria-live="polite">
+    <motion.aside
+      className="shelter-card"
+      role="status"
+      aria-live="polite"
+      initial={{ y: -20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: -20, opacity: 0 }}
+      transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+    >
       <header className="shelter-card-head">
         <div className="shelter-card-head-row">
           <div className="shelter-card-avatar">
@@ -170,66 +203,46 @@ export default function ShelterCharacterCard({ agent }) {
               </div>
             </div>
             <strong>{display}</strong>
-            {(specialty || personality) && (
-              <div className="shelter-card-tags">
-                {specialty && (
-                  <span className="shelter-card-tag is-specialty" title="Specialty">
-                    {specialty}
-                  </span>
-                )}
-                {personality && (
-                  <span className="shelter-card-tag is-personality" title="Personality">
-                    {personality}
-                  </span>
-                )}
+            <div className="shelter-card-vitals">
+              <div className="shelter-card-vitals-row">
+                <NeedBar label="Energy" pct={energy} kind="energy" compact />
+                <NeedBar label="Social" pct={social} kind="social" compact />
               </div>
-            )}
+              <PlayerBondBar score={managerScore} band={managerBand} />
+            </div>
           </div>
         </div>
       </header>
 
       <div className="shelter-card-body" role="tabpanel">
-        {tab === 'profile' && (
-          <AssignmentPanel
-            agent={agent}
-            character={character}
-            manualRoomId={manualRoomId}
-            assignedRoom={assignedRoom}
-            assignedRoomType={assignedRoomType}
-            onCollect={() => {
-              if (!manualRoomId) return
-              shelterApi.collectRoom(manualRoomId, {
-                rewardCash: Number(assignedRoomType?.rewardCash ?? 0),
-                rewardXp: Number(assignedRoomType?.rewardXp ?? 0),
-                tier: Number(assignedRoomType?.tier ?? 1),
-              })
-            }}
-            onAssign={() => {
-              if (!agent?.id) return
-              startAssignmentMode(agent.id, ({ agentId, roomId }) => {
-                shelterApi.setAssignment(agentId, roomId)
-              })
-            }}
-          />
-        )}
         {tab === 'notes' && (
           <NotesPanel
             pages={notePages}
             index={safeIdx}
             onSelect={setNotesIdx}
+            specialty={specialty}
+            personality={personality}
+          />
+        )}
+        {tab === 'relationships' && (
+          <RelationshipsPanel
+            agent={agent}
+            relationships={shelterSnap?.relationships ?? {}}
+            charactersList={charactersList}
+            bridgeUrl={cfg.bridgeUrl}
           />
         )}
       </div>
 
       <nav className="shelter-card-tabs" role="tablist">
-        <CardTab id="profile" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Profile">
-          <IconProfile /><span>Profile</span>
+        <CardTab id="notes" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Dossier — candidate profile + quest log">
+          <IconNotes /><span>Dossier</span>
         </CardTab>
-        <CardTab id="notes" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Notes — quest log">
-          <IconNotes /><span>Notes</span>
+        <CardTab id="relationships" tab={tab} setTab={handleTabActivate} pulseTab={pulseTab} title="Relationships — bonds with the manager + coworkers">
+          <IconRelationships /><span>Bonds</span>
         </CardTab>
       </nav>
-    </aside>
+    </motion.aside>
   )
 }
 
@@ -302,7 +315,7 @@ function IconNotes() {
  * the visual identity carries through. Locked chips shake; nothing
  * inside to read.
  */
-function NotesPanel({ pages, index, onSelect }) {
+function NotesPanel({ pages, index, onSelect, specialty, personality }) {
   const containerRef = useRef(null)
   const stripRef = useRef(null)
   const chipRefs = useRef({})
@@ -446,6 +459,8 @@ function NotesPanel({ pages, index, onSelect }) {
           originRect={originRect}
           portalTarget={portalTarget}
           onClose={() => { setOpenId(null); setOriginRect(null) }}
+          specialty={specialty}
+          personality={personality}
         />
       )}
     </div>
@@ -467,7 +482,11 @@ function NotesPanel({ pages, index, onSelect }) {
  * Portal: rendered into document.body so it escapes the character
  * card's overflow:hidden and properly modal-overlays the viewport.
  */
-function OpenCard({ page, originRect, portalTarget, onClose }) {
+function OpenCard({ page, originRect, portalTarget, onClose, specialty, personality }) {
+  // Page 0 (About) gets a tags row at the top of its body so the
+  // player sees the character's specialty + personality alongside
+  // the bio without a dedicated Profile tab.
+  const isAboutPage = page.id === 'p0'
   const [phase, setPhase] = useState('anticipate')
 
   // Open sequence:  anticipate → grow → flip → reveal → open
@@ -589,6 +608,16 @@ function OpenCard({ page, originRect, portalTarget, onClose }) {
               }}
             >
               <div className="folder-modal-page-stamp">FILE {idToTabNumber(page.id)}</div>
+              {isAboutPage && (specialty || personality) && (
+                <div className="folder-modal-page-tags">
+                  {specialty && (
+                    <span className="shelter-card-tag is-specialty" title="Specialty">{specialty}</span>
+                  )}
+                  {personality && (
+                    <span className="shelter-card-tag is-personality" title="Personality">{personality}</span>
+                  )}
+                </div>
+              )}
               <div className="folder-modal-page-body">{page.body}</div>
             </motion.div>
           </div>
@@ -619,6 +648,101 @@ function OpenCard({ page, originRect, portalTarget, onClose }) {
 }
 
 // "p3" → "03", "placeholder-7" → "07", fallback "—".
+/**
+ * Bonds panel — one row per relationship, each row using the same
+ * segmented bond bar as the manager-bond chip in the header.
+ * Reads uniformly: the player learns the bar pattern once in the
+ * header (Player Bond) and applies it across every coworker bond
+ * in this tab.
+ *
+ * Manager is pinned to the top. Coworkers follow, ranked by score
+ * descending. Rows scroll vertically if there are more than fit.
+ */
+function RelationshipsPanel({ agent, relationships, charactersList, bridgeUrl }) {
+  const me = agent?.pubkey
+
+  const rows = useMemo(() => {
+    const out = []
+    if (!me) return out
+    // Coworker edges only — the manager bond is already surfaced in
+    // the card header as a permanent fixture, so showing it here too
+    // would be redundant.
+    for (const [key, rec] of Object.entries(relationships)) {
+      if (!key.includes('|')) continue
+      const [a, b] = key.split('|')
+      if (a === MANAGER_KEY || b === MANAGER_KEY) continue
+      if (a !== me && b !== me) continue
+      const other = a === me ? b : a
+      out.push({ pubkey: other, score: rec.score ?? 0, isManager: false })
+    }
+    out.sort((x, y) => y.score - x.score)
+    return out
+  }, [me, relationships])
+
+  const nameMap = useMemo(() => {
+    const m = new Map()
+    for (const c of charactersList) m.set(c.pubkey, c)
+    return m
+  }, [charactersList])
+
+  if (!me) return null
+
+  return (
+    <div className="shelter-card-bonds">
+      {rows.length === 0 && (
+        <p className="shelter-card-bonds-hint">
+          Work alongside others to build coworker bonds.
+        </p>
+      )}
+      <div className="shelter-card-bonds-list">
+        {rows.map((row) => {
+          const band = relationshipBandForScore(row.score)
+          const meta = row.isManager
+            ? { name: 'Manager', avatarUrl: null }
+            : (nameMap.get(row.pubkey) ?? { name: row.pubkey.slice(0, 8) + '…' })
+          return (
+            <div
+              key={row.pubkey}
+              className={`shelter-card-bond-row${row.isManager ? ' is-manager' : ''}`}
+              title={`${meta.name} — ${band} (${row.score}/100)`}
+            >
+              <div className="shelter-card-bond-row-avatar">
+                {row.isManager ? (
+                  <span className="shelter-card-bond-row-mgr">M</span>
+                ) : meta.avatarUrl || bridgeUrl ? (
+                  <img
+                    src={meta.avatarUrl ?? `${bridgeUrl}/characters/${row.pubkey}/avatar`}
+                    alt=""
+                    draggable={false}
+                    onError={(e) => { e.currentTarget.style.display = 'none' }}
+                  />
+                ) : (
+                  <span>{(meta.name ?? '?').slice(0, 1).toUpperCase()}</span>
+                )}
+              </div>
+              <span className="shelter-card-bond-row-name">{meta.name}</span>
+              <PlayerBondBar score={row.score} band={band} hideLabel />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function IconRelationships() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <circle cx="5" cy="6" r="2" />
+      <circle cx="19" cy="6" r="2" />
+      <circle cx="5" cy="18" r="2" />
+      <circle cx="19" cy="18" r="2" />
+      <path d="M12 9 L5 6 M12 9 L19 6 M12 15 L5 18 M12 15 L19 18" />
+    </svg>
+  )
+}
+
 function idToTabNumber(id) {
   if (!id) return '—'
   const m = String(id).match(/(\d+)/)
@@ -626,15 +750,9 @@ function idToTabNumber(id) {
   return m[1].padStart(2, '0')
 }
 function AssignmentPanel({
-  agent, character, manualRoomId, assignedRoom, assignedRoomType,
-  onAssign, onCollect,
+  agent, manualRoomId, assignedRoom, assignedRoomType,
+  specialty, personality, onAssign, onCollect,
 }) {
-  // Energy + social — 0..100. Bridge always seeds 50/50; persona
-  // gameplay can shift them. Falls back to 50 if the bridge response
-  // hasn't loaded yet.
-  const energy = clampPct(character?.mood?.energy ?? 50)
-  const social = clampPct(character?.mood?.social ?? 50)
-
   const ready = !!assignedRoom?.productionReady
   const reward = Number(assignedRoomType?.rewardCash ?? 0)
   const dur = Number(assignedRoomType?.productionDuration ?? 0)
@@ -643,10 +761,16 @@ function AssignmentPanel({
 
   return (
     <div className="shelter-card-assignment">
-      <div className="shelter-card-needs-row">
-        <NeedBar label="Energy" pct={energy} kind="energy" />
-        <NeedBar label="Social" pct={social} kind="social" />
-      </div>
+      {(specialty || personality) && (
+        <div className="shelter-card-tags">
+          {specialty && (
+            <span className="shelter-card-tag is-specialty" title="Specialty">{specialty}</span>
+          )}
+          {personality && (
+            <span className="shelter-card-tag is-personality" title="Personality">{personality}</span>
+          )}
+        </div>
+      )}
 
       {manualRoomId ? (
         ready ? (
@@ -721,15 +845,56 @@ function clampPct(v) {
   return Math.max(0, Math.min(100, Math.round(n)))
 }
 
-function NeedBar({ label, pct, kind }) {
+function NeedBar({ label, pct, kind, compact = false }) {
   return (
     <div
-      className={`shelter-card-need-bar shelter-card-need-${kind}`}
+      className={[
+        'shelter-card-need-bar',
+        `shelter-card-need-${kind}`,
+        compact ? 'is-compact' : '',
+      ].filter(Boolean).join(' ')}
       title={`${label} — ${pct}/100`}
     >
       <div className="shelter-card-need-bar-fill" style={{ width: `${pct}%` }} />
+      {/* Slider-thumb caret riding on top of the bar at the current
+          value — a hard, unambiguous "you are here" marker. */}
+      <span className="shelter-card-bar-thumb" style={{ left: `${pct}%` }} />
       <span className="shelter-card-need-bar-label">{label}</span>
       <span className="shelter-card-need-bar-value">{pct}</span>
+    </div>
+  )
+}
+
+// Player bond bar — full-width, divided into the five band segments
+// (Stranger / Acquaintance / Friend / Close / Bonded) by thin
+// vertical dividers at the actual band thresholds, so the player
+// sees a tier visually approach as the score climbs.
+const BOND_SEGMENT_BREAKS = [10, 30, 60, 85]
+function PlayerBondBar({ score, band, hideLabel = false }) {
+  const pct = Math.max(0, Math.min(100, Number(score) || 0))
+  return (
+    <div
+      className={`shelter-card-bond-bar shelter-card-bond-bar-${band}`}
+      title={hideLabel ? `${band} (${pct}/100)` : `Player bond — ${band} (${pct}/100)`}
+    >
+      {/* Scrim covers the UNFILLED portion of the gradient so the
+          colours stay fixed to absolute score positions and only
+          the right-hand "not-yet-achieved" portion dims. */}
+      <div className="shelter-card-bond-bar-scrim" style={{ width: `${100 - pct}%` }} />
+      {/* Slider-thumb caret at the current score — same indicator
+          shape as energy + social so the row reads as a unit. */}
+      <span className="shelter-card-bar-thumb" style={{ left: `${pct}%` }} />
+      {BOND_SEGMENT_BREAKS.map((t) => (
+        <div
+          key={t}
+          className="shelter-card-bond-bar-divider"
+          style={{ left: `${t}%` }}
+        />
+      ))}
+      {!hideLabel && (
+        <span className="shelter-card-bond-bar-label">Player Bond</span>
+      )}
+      <span className="shelter-card-bond-bar-value">{pct}</span>
     </div>
   )
 }

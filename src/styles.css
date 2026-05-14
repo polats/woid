@@ -5341,6 +5341,106 @@ body {
   color: #f5f1e6;
 }
 
+/* Stage-level action button — bottom-center of the phone screen,
+   beside the 3D character portrait. Drives the agent's room
+   assignment / collection without opening the character card. */
+.shelter-stage-action {
+  /* Centering via layout (margin: 0 auto inside an inset:0 box)
+     rather than transform — framer-motion's animate prop drives
+     transform on this element, so a CSS transform would get
+     overwritten and break the centering. */
+  position: absolute;
+  bottom: 22px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: fit-content;
+  z-index: 6;
+  appearance: none;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 180px;
+  max-width: 260px;
+  padding: 10px 18px;
+  background: var(--ink, #1a1a1a);
+  color: var(--paper, #f5f1e6);
+  border: 1.5px solid var(--ink, #1a1a1a);
+  box-shadow: 3px 3px 0 var(--ink, #1a1a1a);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  overflow: hidden;
+}
+.shelter-stage-action-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(245, 241, 230, 0.18);
+  transition: width 320ms ease;
+  z-index: 0;
+}
+.shelter-stage-action-label {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  line-height: 1.05;
+}
+.shelter-stage-action-primary {
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.shelter-stage-action-sub {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  font-weight: 500;
+  text-transform: uppercase;
+  opacity: 0.8;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shelter-stage-action-collect {
+  background: #c41a3a;
+  color: #fff5e6;
+  border-color: #c41a3a;
+  animation: shelter-stage-action-collect-pulse 1.2s ease-in-out infinite;
+}
+@keyframes shelter-stage-action-collect-pulse {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.18); }
+}
+.shelter-stage-action-collect .shelter-stage-action-fill {
+  background: rgba(255, 255, 255, 0.22);
+}
+/* No hover/active transform — framer-motion owns this element's
+   transform via animate. We change box-shadow only as the press
+   feedback; the button visually "depresses" without us touching
+   transform. */
+.shelter-stage-action:hover {
+  box-shadow: 2px 2px 0 var(--ink, #1a1a1a);
+}
+.shelter-stage-action:active {
+  box-shadow: 0 0 0 var(--ink, #1a1a1a);
+}
+
+/* Tag row at the top of the Candidate Profile (p0) folder body —
+   shows the character's specialty + personality chips above the
+   bio prose. */
+.folder-modal-page-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1.5px solid rgba(106, 86, 48, 0.45);
+}
+
 /* 3D portrait of the selected character, anchored to the lower-left of
    the shelter stage and pulled partially off-screen so the character
    reads as standing at the camera's edge. Visible only while a
@@ -5356,11 +5456,8 @@ body {
   z-index: 5;
   pointer-events: none;
   background: transparent;
-  animation: shelter-portrait-slide-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-@keyframes shelter-portrait-slide-in {
-  from { transform: translateX(-160px); opacity: 0; }
-  to   { transform: translateX(0);     opacity: 1; }
+  /* CSS slide-in removed — framer-motion's animate prop now drives
+     the entrance so it only runs once the GLB has actually loaded. */
 }
 
 /* XP bar — full-width, between the screen body and the tab bar. */
@@ -6378,6 +6475,87 @@ body {
      own height/padding. */
 }
 
+/* ── Bonds tab — uniform segmented-bar list ──────────────────────
+   One row per relationship. Each row reuses the same segmented
+   Player Bond bar from the header so the visual language is
+   consistent: same gradient, same 5 tiers, same slider-thumb.
+   Manager is pinned to the top; coworkers follow by score desc. */
+.shelter-card-bonds {
+  position: relative;
+  height: 100%;
+  background: var(--paper);
+  padding: 4px 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.shelter-card-bonds-hint {
+  margin: 6px 4px 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink, #1a1a1a);
+  opacity: 0.55;
+  text-align: center;
+}
+.shelter-card-bonds-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.shelter-card-bond-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.shelter-card-bond-row-avatar {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink, #1a1a1a);
+  background: var(--paper-3, #20232a);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+}
+.shelter-card-bond-row-avatar img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+.shelter-card-bond-row.is-manager .shelter-card-bond-row-avatar {
+  background: var(--ink, #1a1a1a);
+  color: #ffd84a;
+  border-color: #ffd84a;
+}
+.shelter-card-bond-row-mgr {
+  letter-spacing: 0;
+}
+.shelter-card-bond-row-name {
+  flex: 0 0 64px;
+  max-width: 64px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink, #1a1a1a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Bond bar inside a row — flex-fills remaining width, slightly
+   shorter than the standalone header bar so 4 rows fit in the
+   96 px body. */
+.shelter-card-bond-row .shelter-card-bond-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 16px;
+}
+
 /* ── Folder modal ────────────────────────────────────────────────
    Portalled to document.body. Fullscreen overlay + a manilla folder
    that opens via 3D cover flip. The closed front cover rotates
@@ -6863,6 +7041,138 @@ body {
 .shelter-card-needs-row .shelter-card-need-bar {
   flex: 1 1 0;
   min-width: 0;
+}
+
+/* Header-row vitals — stacked two-row layout that lives at the
+   bottom of the dark ink strip. Top row: Energy + Social bars
+   side-by-side, compact, with full label + value vertically
+   centered. Bottom row: a full-width Player Bond bar segmented
+   into the five relationship tiers so progression is legible. */
+.shelter-card-vitals {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.shelter-card-vitals-row {
+  display: flex;
+  gap: 6px;
+}
+.shelter-card-vitals-row .shelter-card-need-bar {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.shelter-card-need-bar.is-compact {
+  position: relative;
+  height: 18px;
+  border-color: rgba(245, 241, 230, 0.55);
+  background: rgba(0, 0, 0, 0.32);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  /* No overflow:hidden — the slider-thumb caret rides above the
+     bar and would be clipped. The fill is bounded by width:%
+     anyway so nothing else leaks. */
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+.shelter-card-need-bar.is-compact .shelter-card-need-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  /* Hard bright edge marks the leading position. No blur — blur
+     cast a coloured halo over neighbouring bands. Note: do NOT
+     set background-image here; the kind-specific energy/social
+     rules own the fill's gradient via the `background` shorthand. */
+  border-right: 2px solid rgba(255, 255, 255, 0.9);
+}
+.shelter-card-need-bar.is-compact .shelter-card-need-bar-label,
+.shelter-card-need-bar.is-compact .shelter-card-need-bar-value {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  color: var(--paper, #f5f1e6);
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+  padding: 0;
+  float: none;
+}
+.shelter-card-need-bar.is-compact .shelter-card-need-bar-value {
+  font-weight: 700;
+}
+
+/* Player bond bar — full width. Vertical dividers at the tier
+   boundaries (10, 30, 60, 85) so the player sees the next tier
+   approaching. Border + fill colour shifts to the current band. */
+.shelter-card-bond-bar {
+  position: relative;
+  height: 18px;
+  background: linear-gradient(90deg, #8a8a8a 0% 10%,
+                                     #c69a2c 10% 30%,
+                                     #6fb37a 30% 60%,
+                                     #5a78c0 60% 85%,
+                                     #c41a3a 85% 100%);
+  border: 1.5px solid rgba(245, 241, 230, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+.shelter-card-bond-bar-scrim {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(8, 10, 14, 0.88);
+  /* Hard 2 px bright edge marks the current value position. No
+     blur — the cast shadow tinted adjacent band colours. */
+  border-left: 2px solid rgba(255, 255, 255, 0.92);
+  transition: width 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Slider-thumb marker — a downward-pointing notch riding on top of
+   each bar at the current value. Hard yellow + ink border so it
+   stands out against every band colour without tinting any of them.
+   Shared by energy/social/bond so the row reads as one instrument. */
+.shelter-card-bar-thumb {
+  position: absolute;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  transform: translateX(-50%) rotate(45deg);
+  background: #ffd84a;
+  border: 1.5px solid var(--ink, #1a1a1a);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 3;
+}
+.shelter-card-bond-bar-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(245, 241, 230, 0.55);
+  z-index: 1;
+}
+.shelter-card-bond-bar-label,
+.shelter-card-bond-bar-value {
+  position: relative;
+  z-index: 2;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--paper, #f5f1e6);
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.75);
+}
+.shelter-card-bond-bar-value {
+  font-weight: 700;
+}
+/* Subtle band-coloured glow on bonded so the topmost state celebrates. */
+.shelter-card-bond-bar-bonded {
+  box-shadow: 0 0 4px rgba(196, 26, 58, 0.55);
 }
 
 /* Per-character need bars (Energy, Social) — paper-on-ink slot in the

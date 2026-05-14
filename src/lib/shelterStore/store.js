@@ -58,7 +58,46 @@ const blankSnapshot = () => ({
   // setColumns overrides directly without touching the tier label
   // (demo / scenario use).
   columns: columnsForTier(1),
+  // Symmetric per-pair relationship scores in 0..100. Sparse map —
+  // keys are `pairKey(a, b)` (manager always position-A; otherwise
+  // lex-sorted). The manager is the player themself; every agent
+  // builds a relationship with the manager alongside relationships
+  // with their coworkers.
+  relationships: {},
 })
+
+// Sentinel pubkey for the player. Real character pubkeys are 64
+// lowercase hex; "manager" is reserved so it can never collide.
+export const MANAGER_KEY = 'manager'
+
+const RELATIONSHIP_BANDS = [
+  { name: 'bonded',       min: 85 },
+  { name: 'close',        min: 60 },
+  { name: 'friend',       min: 30 },
+  { name: 'acquaintance', min: 10 },
+  { name: 'stranger',     min: 0 },
+]
+
+/** Canonical key for a relationship pair. Manager always first. */
+export function pairKey(a, b) {
+  if (!a || !b || a === b) return null
+  if (a === MANAGER_KEY) return `${MANAGER_KEY}|${b}`
+  if (b === MANAGER_KEY) return `${MANAGER_KEY}|${a}`
+  return a < b ? `${a}|${b}` : `${b}|${a}`
+}
+
+/** Map 0..100 → band name. */
+export function relationshipBandForScore(score) {
+  const s = Math.max(0, Math.min(100, Number(score) || 0))
+  for (const b of RELATIONSHIP_BANDS) if (s >= b.min) return b.name
+  return 'stranger'
+}
+
+/** Minimum score that qualifies as the given band — used by notes engine. */
+export function minScoreForBand(name) {
+  const hit = RELATIONSHIP_BANDS.find((b) => b.name === name)
+  return hit ? hit.min : 0
+}
 
 /**
  * XP curve — triangular / quadratic.
@@ -242,6 +281,10 @@ function pruneLegacyHardcodedNpcs(snapshot) {
 
 export function createShelterStore({ sync = LocalOnlySync } = {}) {
   let snapshot = readFromStorage() ?? blankSnapshot()
+  // Forward-fill any fields added after this snapshot was last
+  // persisted. Keeps the migration cost zero (no version bump) while
+  // protecting the rest of the code from missing-field crashes.
+  if (!snapshot.relationships) snapshot = { ...snapshot, relationships: {} }
   // Persist the prune so localStorage stops carrying the legacy entry
   // and reloads don't have to re-clean. pruneLegacyHardcodedNpcs is a
   // no-op for fresh saves, so this only writes when there's actually
@@ -444,8 +487,39 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
       paceMode: null, paceStartedAt: null,
       paceRestUntil: null, paceRestRole: null,
     }
-    commit({ ...snapshot, agents: { ...snapshot.agents, [agentId]: next } })
+    // Manager-relationship bump — every fresh assignment is the
+    // manager investing time in this agent (+1).
+    const nextRelationships = sameRoom
+      ? snapshot.relationships
+      : bumpedRelationships(snapshot.relationships, a.pubkey, MANAGER_KEY, 1)
+    commit({
+      ...snapshot,
+      agents: { ...snapshot.agents, [agentId]: next },
+      relationships: nextRelationships,
+    })
     return next
+  }
+
+  // ── Relationships ────────────────────────────────────────────────
+  // Pure helper used by collectRoom + setAssignment. Returns a new
+  // map; doesn't mutate snapshot.
+  function bumpedRelationships(rels, a, b, delta) {
+    const base = rels ?? {}  // defensive — older snapshots lack the field
+    const key = pairKey(a, b)
+    if (!key || !delta) return base
+    const prev = base[key]?.score ?? 0
+    const score = Math.max(0, Math.min(100, prev + delta))
+    if (score === prev) return base
+    return { ...base, [key]: { score, updatedAt: snapshot.simMinutes } }
+  }
+
+  function relationshipScore(a, b) {
+    const key = pairKey(a, b)
+    if (!key) return 0
+    return snapshot.relationships?.[key]?.score ?? 0
+  }
+  function relationshipBand(a, b) {
+    return relationshipBandForScore(relationshipScore(a, b))
   }
 
   /**
@@ -534,6 +608,24 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
       },
     }
     const totalXp = playerXpPerWorker * Math.max(1, assigned.length)
+
+    // Relationship bumps on collect:
+    //   - every pair of co-workers: +3 (shared accomplishment)
+    //   - every worker ↔ manager:   +2 (delivered for the boss)
+    let nextRelationships = snapshot.relationships
+    for (let i = 0; i < assigned.length; i++) {
+      const wi = assigned[i]
+      if (wi.pubkey) {
+        nextRelationships = bumpedRelationships(nextRelationships, wi.pubkey, MANAGER_KEY, 2)
+      }
+      for (let j = i + 1; j < assigned.length; j++) {
+        const wj = assigned[j]
+        if (wi.pubkey && wj.pubkey) {
+          nextRelationships = bumpedRelationships(nextRelationships, wi.pubkey, wj.pubkey, 3)
+        }
+      }
+    }
+
     commit({
       ...snapshot,
       cash: (snapshot.cash ?? 0) + rewardCash,
@@ -542,6 +634,7 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
       playerXp: (snapshot.playerXp ?? 0) + totalXp,
       agents: nextAgents,
       rooms: nextRooms,
+      relationships: nextRelationships,
     })
     return {
       rewardCash,
@@ -591,6 +684,7 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
     // mutations
     addAgent, updateAgent, removeAgent, upsertRoom, clear,
     setAssignment, clearAssignment, collectRoom, resetPlayerProgress,
+    relationshipScore, relationshipBand,
     addBuiltRoom, clearBuiltRooms, resetRoomProduction, setBuildingTier, setColumns,
     // clock
     advanceClock, fastForward,

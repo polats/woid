@@ -1,10 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
+import { AnimatePresence } from 'framer-motion'
 import ShelterStage3D from './ShelterStage3D.jsx'
 import ShelterDebug from './ShelterDebug.jsx'
 import ShelterAgentList from './ShelterAgentList.jsx'
 import ShelterCharacterCard from './ShelterCharacterCard.jsx'
 import ShelterSelectionPortrait from './ShelterSelectionPortrait.jsx'
 import ShelterRoomCard from './ShelterRoomCard.jsx'
+import ShelterStageActionButton from './ShelterStageActionButton.jsx'
 import ShelterBuildCarousel from './ShelterBuildCarousel.jsx'
 import TutorialOverlay from './TutorialOverlay.jsx'
 import ShelterFxLayer from './ShelterFxLayer.jsx'
@@ -149,8 +151,25 @@ export default function Shelter() {
                   const name = focused?.name ?? (selection?.kind === 'room' ? selection.name : null)
                   return <ShelterRoomCard roomId={id} name={name} />
                 })()}
-                <ShelterCharacterCard agent={cardAgent} />
-                <ShelterSelectionPortrait pubkey={portraitPubkey} />
+                {/* Card, portrait, and stage action all animate in
+                    and out together as the player selects/deselects.
+                    AnimatePresence keeps each component mounted long
+                    enough for its exit transition to play. */}
+                <AnimatePresence>
+                  {cardAgent && (
+                    <ShelterCharacterCard key="card" agent={cardAgent} />
+                  )}
+                </AnimatePresence>
+                <AnimatePresence mode="wait">
+                  {portraitPubkey && (
+                    <ShelterSelectionPortrait key={portraitPubkey} pubkey={portraitPubkey} />
+                  )}
+                </AnimatePresence>
+                <AnimatePresence>
+                  {portraitPubkey && cardAgent && (
+                    <ShelterStageActionButton key="action" agent={cardAgent} />
+                  )}
+                </AnimatePresence>
                 {/* Dev panel — hidden behind a backtick toggle (or the
                     floating "DEV" button) so it stays out of the way for
                     casual viewers but is reachable on prod for adding
