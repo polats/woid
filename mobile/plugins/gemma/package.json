@@ -1,0 +1,21 @@
+{
+  "name": "@woid/capacitor-gemma",
+  "version": "0.0.1",
+  "description": "On-device Gemma 4 LLM for Capacitor (Android first).",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "files": [
+    "android/src",
+    "android/build.gradle",
+    "src"
+  ],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^8.0.0"
+  }
+}

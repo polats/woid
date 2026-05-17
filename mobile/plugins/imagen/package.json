@@ -1,0 +1,21 @@
+{
+  "name": "@woid/capacitor-imagen",
+  "version": "0.0.1",
+  "description": "On-device image generation for Capacitor (Android first). Stable Diffusion 1.5 via stable-diffusion.cpp.",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "files": [
+    "android/src",
+    "android/build.gradle",
+    "src"
+  ],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^8.0.0"
+  }
+}

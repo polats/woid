@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!--
+    Qualcomm's QNN .so files (libQnnHtp.so etc.) must be present on
+    disk for dlopen to find them when ONNX Runtime asks for the QNN
+    backend. Forcing extraction guarantees they're laid out in the
+    app's nativeLibraryDir at install time.
+  -->
+  <application android:extractNativeLibs="true" />
+</manifest>

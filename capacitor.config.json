@@ -1,0 +1,19 @@
+{
+  "appId": "com.woid.shelter",
+  "appName": "Shelter",
+  "webDir": "dist-mobile",
+  "ios": {
+    "contentInset": "always",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#0a0a0c",
+      "showSpinner": false
+    }
+  }
+}

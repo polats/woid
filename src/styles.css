@@ -5340,6 +5340,258 @@ body {
   letter-spacing: 0.04em;
   color: #f5f1e6;
 }
+/* `is-bumping` is toggled by the FX layer when coins land. Short
+   scale + glow pulse to acknowledge the credit hit the wallet. */
+.shelter-currency-hud.is-bumping {
+  animation: shelter-currency-bump 480ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes shelter-currency-bump {
+  0%   { transform: scale(1);    box-shadow: 0 0 0 rgba(255, 216, 74, 0); }
+  35%  { transform: scale(1.18); box-shadow: 0 0 22px rgba(255, 216, 74, 0.75); }
+  70%  { transform: scale(0.98); }
+  100% { transform: scale(1);    box-shadow: 0 0 0 rgba(255, 216, 74, 0); }
+}
+
+/* Character dialog — speech-bubble style copy that appears when
+   the player has zoomed in on (focused) a character. Mirrors the
+   tutorial dialog visual so the player reads it as the same kind
+   of "someone's speaking" affordance. Anchored bottom of the
+   phone screen, above the bottom safe-area. */
+.shelter-character-dialog {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 16px;
+  z-index: 6;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 10px;
+  background: rgba(8, 10, 14, 0.92);
+  border: 2px solid #f5f1e6;
+  border-radius: 6px;
+  color: #f5f1e6;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
+}
+.shelter-character-dialog-portrait {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  background: #20232a;
+  border: 1.5px solid #f5f1e6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.shelter-character-dialog-portrait img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+.shelter-character-dialog-portrait span {
+  font-family: var(--font-display);
+  font-stretch: 75%;
+  font-weight: 900;
+  font-size: 22px;
+  text-transform: uppercase;
+  color: #f5f1e6;
+}
+.shelter-character-dialog-text {
+  flex: 1;
+  min-width: 0;
+}
+/* Type sizes mirror the tutorial dialog so the two feel like the
+   same affordance — 11 px speaker label, 13 px body. */
+.shelter-character-dialog-text strong {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #d2cdb8;
+  margin-bottom: 4px;
+}
+.shelter-character-dialog-text p {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* Interaction card — replaces the dossier at the top of the phone
+   screen while the player is zoomed in. The PLAYER is speaking, so
+   no character avatar — just "Talking to <Name>" + the player↔
+   character bond bar + the text input row (mic + send). */
+.shelter-interaction-card {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 4;
+  padding: 10px 14px;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+.shelter-interaction-card-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.shelter-interaction-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.shelter-interaction-card-addressing {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.shelter-interaction-card-prefix {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink);
+  opacity: 0.55;
+}
+.shelter-interaction-card-name {
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shelter-interaction-card-bond {
+  /* Reuses the segmented .shelter-card-bond-bar visual; just bound
+     to a fixed width here so it can sit beside the addressing
+     block without stretching. */
+  flex: 0 0 130px;
+}
+/* Red blink applied when the bond drops mid-conversation. The thumb
+   and scrim inherit smooth transitions from the base bond-bar rules,
+   so the score change itself already glides — this overlay just adds
+   the alarm color. */
+.shelter-interaction-card-bond.is-flashing {
+  animation: shelter-bond-flash 320ms ease-in-out 3;
+}
+.shelter-interaction-card-bond.is-flashing .shelter-card-bar-thumb {
+  background: #ff3a3a;
+  border-color: #5a0a0a;
+  box-shadow: 0 0 6px rgba(255, 60, 60, 0.85);
+}
+@keyframes shelter-bond-flash {
+  0%, 100% { box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.55); }
+  50% {
+    box-shadow: inset 0 0 0 2px #ff3a3a, 0 0 10px rgba(255, 60, 60, 0.7);
+  }
+}
+/* Smooth slide for the thumb when the score changes, matching the
+   scrim's existing transition. */
+.shelter-interaction-card-bond .shelter-card-bar-thumb {
+  transition: left 240ms cubic-bezier(0.22, 1, 0.36, 1),
+              background 200ms ease, box-shadow 200ms ease;
+}
+
+.shelter-interaction-card-toast {
+  position: absolute;
+  left: 50%;
+  bottom: -34px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  background: var(--ink, #1a1a1a);
+  color: var(--paper, #f5f1e6);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  border: 1.5px solid var(--ink);
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  animation: shelter-toast-in 240ms ease-out;
+}
+@keyframes shelter-toast-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.shelter-interaction-card-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.shelter-interaction-card-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-2, var(--paper));
+  color: var(--ink);
+  outline: none;
+}
+.shelter-interaction-card-input::placeholder {
+  color: rgba(0, 0, 0, 0.35);
+}
+.shelter-interaction-card-input:focus {
+  border-color: #5a78c0;
+  box-shadow: 0 0 0 2px rgba(90, 120, 192, 0.25);
+}
+.shelter-interaction-card-mic {
+  flex: 0 0 30px;
+  width: 30px;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper-2, var(--paper));
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  cursor: pointer;
+}
+.shelter-interaction-card-mic:hover,
+.shelter-interaction-card-mic:focus {
+  background: var(--ink);
+  color: var(--paper);
+}
+.shelter-interaction-card-send {
+  flex: 0 0 auto;
+  appearance: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 0 12px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1.5px solid var(--ink);
+  cursor: pointer;
+}
+.shelter-interaction-card-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.shelter-interaction-card-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
 
 /* Stage-level action button — bottom-center of the phone screen,
    beside the 3D character portrait. Drives the agent's room
@@ -5459,6 +5711,27 @@ body {
   /* CSS slide-in removed — framer-motion's animate prop now drives
      the entrance so it only runs once the GLB has actually loaded. */
 }
+.shelter-selection-portrait.is-clickable {
+  cursor: pointer;
+}
+/* Wrapper itself stays pointer-events: none — the hit zone is a
+   small child element positioned over the visible silhouette so
+   the click target matches what the player sees. */
+.shelter-selection-portrait.is-clickable canvas { pointer-events: none; }
+.shelter-selection-portrait-hit {
+  position: absolute;
+  /* Tuned to the rendered silhouette: avatar is shifted up + left
+     within the canvas (wrapper.position.set(-0.175, 0.125, 0)) and
+     rendered at ~half human upscale. These offsets place the hit
+     zone over the body. Adjust if the camera/framing changes. */
+  left: 70px;
+  bottom: 30px;
+  width: 110px;
+  height: 280px;
+  pointer-events: auto;
+  cursor: pointer;
+  background: transparent;
+}
 
 /* XP bar — full-width, between the screen body and the tab bar. */
 .shelter-xp-bar {
@@ -5510,6 +5783,111 @@ body {
 .shelter-build-carousel.visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+/* Story-so-far + Agents overlays — reuse the build carousel
+   silhouette so the three bottom-bar toggles feel like one
+   family. Same slide-from-top transition, same chrome. */
+.shelter-story-panel,
+.shelter-agents-panel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 12px;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  z-index: 5;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  font-family: var(--font-mono);
+  color: var(--ink);
+  padding: 8px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-24px);
+  transition: opacity 320ms ease, transform 360ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.shelter-story-panel.visible,
+.shelter-agents-panel.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.shelter-story-panel-head,
+.shelter-agents-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 6px;
+  border-bottom: 1px solid var(--ink-faint, rgba(0, 0, 0, 0.15));
+}
+.shelter-story-panel-title,
+.shelter-agents-panel-title {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.shelter-story-panel-close,
+.shelter-agents-panel-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ink);
+}
+.shelter-story-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.shelter-story-entry {
+  padding: 8px 10px;
+  border: 1.5px solid var(--ink);
+  background: var(--card, var(--paper));
+}
+.shelter-story-entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.shelter-story-entry-chapter {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--ink-faint, rgba(0, 0, 0, 0.5));
+}
+.shelter-story-entry-title {
+  font-family: var(--font-display, var(--font-mono));
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+.shelter-story-entry-body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.shelter-story-entry-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.shelter-story-entry-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
 }
 .shelter-build-carousel-head {
   display: flex;
@@ -5692,8 +6070,13 @@ body {
   background: linear-gradient(180deg, #ffe480, #c69a2c);
   border: 1.5px solid #1a1a1a;
   box-shadow: 0 0 12px rgba(255, 216, 74, 0.7);
-  animation: shelter-fx-coin-fly 950ms cubic-bezier(0.4, 0.05, 0.7, 1) forwards;
+  animation: shelter-fx-coin-fly var(--fx-duration, 950ms) cubic-bezier(0.4, 0.05, 0.7, 1) var(--fx-delay, 0ms) both;
   white-space: nowrap;
+}
+/* Burst-companion coins (no amount label) — smaller, just a coin */
+.shelter-fx-coin.is-coin-only {
+  padding: 4px 7px;
+  font-size: 12px;
 }
 @keyframes shelter-fx-coin-fly {
   0% {
@@ -5716,6 +6099,114 @@ body {
     opacity: 0;
     transform: translate(-50%, -50%) scale(0.5);
   }
+}
+
+/* Room-built celebration — fires when the player places a new room
+   via the build carousel. A gold ring expands outward (shockwave),
+   12 sparks fan out radially, and a "BUILT" stamp pops + fades. */
+.shelter-fx-build {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+.shelter-fx-build-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
+  border-radius: 50%;
+  border: 3px solid #ffd84a;
+  box-shadow:
+    0 0 24px rgba(255, 216, 74, 0.85),
+    inset 0 0 16px rgba(255, 216, 74, 0.55);
+  animation: shelter-fx-build-ring-expand 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes shelter-fx-build-ring-expand {
+  0%   { opacity: 0; transform: scale(0.2); }
+  20%  { opacity: 1; }
+  100% { opacity: 0; transform: scale(5.5); border-width: 1px; }
+}
+.shelter-fx-build-spark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #ffe480 0%, #ffd84a 55%, transparent 100%);
+  box-shadow: 0 0 10px rgba(255, 216, 74, 0.95);
+  animation: shelter-fx-build-spark-fly 800ms cubic-bezier(0.22, 0.61, 0.36, 1) var(--fx-spark-delay, 0ms) both;
+}
+@keyframes shelter-fx-build-spark-fly {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.4);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(calc(var(--fx-spark-dx) * 0.15), calc(var(--fx-spark-dy) * 0.15)) scale(1.2);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--fx-spark-dx), var(--fx-spark-dy)) scale(0.4);
+  }
+}
+.shelter-fx-build-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: #1a1a1a;
+  background: linear-gradient(180deg, #ffe480, #c69a2c);
+  border: 1.5px solid #1a1a1a;
+  border-radius: 4px;
+  white-space: nowrap;
+  box-shadow: 0 0 18px rgba(255, 216, 74, 0.85);
+  animation: shelter-fx-build-label 1100ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
+}
+@keyframes shelter-fx-build-label {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.4); }
+  25%  { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+  55%  { opacity: 1; transform: translate(-50%, -90%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -140%) scale(0.95); }
+}
+
+/* Floating "+¤<n>" reward popup over the collected room. Rises a
+   short distance and fades — gives the collect a clear value cue
+   before the coins finish their flight. */
+.shelter-fx-reward-popup {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #ffe480;
+  text-shadow:
+    0 0 6px rgba(255, 216, 74, 0.9),
+    0 1px 0 #1a1a1a,
+    0 -1px 0 #1a1a1a,
+    1px 0 0 #1a1a1a,
+    -1px 0 0 #1a1a1a;
+  white-space: nowrap;
+  animation: shelter-fx-reward-popup-rise 1200ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes shelter-fx-reward-popup-rise {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+  15%  { opacity: 1; transform: translate(-50%, -90%) scale(1.15); }
+  70%  { opacity: 1; transform: translate(-50%, -140%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -180%) scale(0.92); }
 }
 
 .shelter-fx-celebration {
@@ -5911,6 +6402,130 @@ body {
   display: flex;
   overflow: hidden;
   background: #0b0e12;
+}
+/* Crack cinematic — applied to the stage body while the cinematic
+   is active. The shake amplitude ramps up implicitly because the
+   keyframe pushes harder offsets late in the cycle. */
+.shelter-screen-body.is-cracking {
+  animation: shelter-screen-quake 200ms ease-in-out infinite;
+}
+@keyframes shelter-screen-quake {
+  0%   { transform: translate(0, 0) rotate(0); }
+  15%  { transform: translate(-2px, 1px) rotate(-0.15deg); }
+  30%  { transform: translate(2px, -1px) rotate(0.18deg); }
+  45%  { transform: translate(-3px, 2px) rotate(-0.22deg); }
+  60%  { transform: translate(3px, -2px) rotate(0.22deg); }
+  75%  { transform: translate(-2px, -1px) rotate(-0.12deg); }
+  90%  { transform: translate(2px, 1px) rotate(0.14deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+
+/* ─── Crack cinematic overlay ─────────────────────────────────── */
+.crack-cinematic {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+  overflow: hidden;
+  transition: opacity 200ms ease;
+}
+/* Bottom-anchored amber wash — the warm glow from "behind" the
+   walls. Hard radial fade so the top of the frame stays normal. */
+.crack-cinematic-amber {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 70% at 50% 110%,
+      rgba(255, 175, 60, 0.95) 0%,
+      rgba(255, 140, 40, 0.55) 22%,
+      rgba(170, 70, 10, 0.25) 45%,
+      rgba(0, 0, 0, 0) 70%),
+    linear-gradient(to top,
+      rgba(120, 50, 0, 0.55) 0%,
+      rgba(60, 20, 0, 0.20) 30%,
+      rgba(0, 0, 0, 0) 60%);
+  mix-blend-mode: screen;
+  filter: saturate(1.2);
+  transition: opacity 240ms ease;
+}
+/* The SVG holds the actual crack geometry — sits above the amber
+   wash so the dark fracture lines read on top of the glow. */
+.crack-cinematic-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* Falling dust — repeating subtle grain that drifts down at a
+   slow rate so the eye reads the air itself as disturbed. */
+.crack-cinematic-dust {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 220, 170, 0.18) 1px, transparent 1px);
+  background-size: 7px 9px;
+  opacity: 0.4;
+  animation: crack-cinematic-dust 3200ms linear infinite;
+}
+@keyframes crack-cinematic-dust {
+  0%   { background-position: 0 0; opacity: 0.2; }
+  50%  { opacity: 0.45; }
+  100% { background-position: 0 60px; opacity: 0.2; }
+}
+.crack-cinematic-vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 80% at 50% 50%,
+      rgba(0, 0, 0, 0) 50%,
+      rgba(0, 0, 0, 0.55) 100%);
+  mix-blend-mode: multiply;
+}
+
+/* Impact flash — quick white pulse keyed off the strike beat in
+   the overlay's clock. Anchored higher than the amber wash so it
+   reads as a snapped photo of the moment the wall cracked. */
+.crack-cinematic-flash {
+  position: absolute;
+  inset: 0;
+  /* Anchored to the fracture line (~72 % down the frame) so the
+     impact reads as a strike along the ground row, not the sky. */
+  background:
+    radial-gradient(75% 35% at 50% 72%,
+      rgba(255, 255, 240, 0.95) 0%,
+      rgba(255, 220, 160, 0.55) 28%,
+      rgba(255, 200, 100, 0) 60%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+/* Embers — small rising dots emitted from the fracture line. The
+   `--drift` custom property is set per-ember in JS for a varied
+   sideways drift while they rise. */
+.crack-cinematic-embers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.crack-cinematic-ember {
+  position: absolute;
+  /* Spawn on the fracture line — matches FRACTURE_Y in the JSX. */
+  top: 72%;
+  width: 1.2px;
+  height: 1.2px;
+  border-radius: 50%;
+  background: #ffd07a;
+  box-shadow:
+    0 0 4px 1px rgba(255, 175, 60, 0.8),
+    0 0 10px 2px rgba(255, 110, 30, 0.45);
+  animation-name: crack-cinematic-ember-rise;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-out;
+  --drift: 0px;
+}
+@keyframes crack-cinematic-ember-rise {
+  0%   { transform: translate(0, 0) scale(0.7); opacity: 0; }
+  15%  { opacity: 1; }
+  100% { transform: translate(var(--drift), -180%) scale(0.4); opacity: 0; }
 }
 .shelter-stage3d {
   flex: 1;
@@ -6410,6 +7025,98 @@ body {
 .shelter-card-notes-chip.is-placeholder {
   opacity: 0.55;
 }
+/* "Ready" — locked-next whose condition is already met. Soft gold
+   pulse on the chip so the player knows it's actionable; no padlock
+   icon, only the requirement copy underneath. */
+.shelter-card-notes-chip.is-locked.is-ready {
+  cursor: pointer;
+  border-color: #c79a2a;
+  background: linear-gradient(180deg, #f0d885 0%, #d8b85a 100%);
+  animation: shelter-card-notes-chip-ready 1600ms ease-in-out infinite;
+}
+.shelter-card-notes-chip.is-locked.is-ready::after {
+  /* Swap the muted CLASSIFIED stamp for a bright READY label. */
+  content: 'READY';
+  color: #6a3a00;
+  border-color: #6a3a00;
+  background: rgba(255, 240, 200, 0.6);
+}
+@keyframes shelter-card-notes-chip-ready {
+  0%, 100% {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18),
+                0 0 0 0 rgba(245, 200, 60, 0.0);
+  }
+  50% {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18),
+                0 0 18px 4px rgba(245, 200, 60, 0.65);
+  }
+}
+/* Tap celebration — single-shot burst when the player triggers the
+   unlock. Overrides the steady "ready" pulse for the duration. */
+.shelter-card-notes-chip.is-locked.is-ready.is-unlocking {
+  animation: shelter-card-notes-chip-unlock 720ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes shelter-card-notes-chip-unlock {
+  0%   { transform: scale(1)    rotate(0); }
+  25%  { transform: scale(1.12) rotate(-2deg);
+         box-shadow: 0 0 28px 8px rgba(255, 220, 90, 0.95); }
+  60%  { transform: scale(1.06) rotate(1.4deg);
+         box-shadow: 0 0 36px 12px rgba(255, 240, 160, 0.85); }
+  100% { transform: scale(1)    rotate(0);
+         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18); }
+}
+.shelter-card-notes-chip-burst {
+  position: absolute;
+  inset: -10px;
+  border: 2px solid rgba(255, 220, 90, 0.9);
+  border-radius: 6px;
+  pointer-events: none;
+  animation: shelter-card-notes-chip-burst-ring 720ms ease-out forwards;
+}
+@keyframes shelter-card-notes-chip-burst-ring {
+  0%   { opacity: 0.9; transform: scale(0.6); }
+  100% { opacity: 0;   transform: scale(1.7); }
+}
+/* Classified variant — dark redacted dossier for the trailer's
+   reveal beats. Overrides the manilla styling with a black field,
+   blood-red trim, and a much louder CLASSIFIED stamp. */
+.shelter-card-notes-chip.is-locked.is-classified {
+  background: linear-gradient(180deg, #1a0a0a 0%, #0a0405 100%);
+  border-color: #7a1a1a;
+  color: #f4d2d2;
+  box-shadow: 0 2px 6px rgba(120, 0, 0, 0.35),
+              inset 0 0 0 1px rgba(180, 30, 30, 0.35);
+}
+.shelter-card-notes-chip.is-locked.is-classified::before {
+  background: #7a1a1a;
+  color: #f4d2d2;
+  border-color: #7a1a1a;
+}
+.shelter-card-notes-chip.is-locked.is-classified::after {
+  /* Bigger, fully opaque stamp pulled into the centre — overrides
+     the subtle default CLASSIFIED watermark. */
+  top: 22px;
+  font-size: 12px;
+  color: #ff3a3a;
+  border-color: #ff3a3a;
+  letter-spacing: 0.22em;
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.shelter-card-notes-chip.is-locked.is-classified .shelter-card-notes-chip-lock {
+  color: #ff6a6a;
+  opacity: 0.45;
+}
+.shelter-card-notes-chip.is-locked.is-classified .shelter-card-notes-chip-cond {
+  color: #f4d2d2;
+}
+.shelter-card-notes-chip.is-locked.is-classified .shelter-card-notes-chip-stripe {
+  background: repeating-linear-gradient(
+    -45deg,
+    #4a0a0a 0 6px,
+    #7a1a1a 6px 12px
+  );
+}
 .shelter-card-notes-chip.is-shaking {
   animation: shelter-card-notes-chip-shake 360ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
 }
@@ -6442,7 +7149,7 @@ body {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 52px;
+  font-size: 36px;
   /* Darker than before so the watermark reads at a glance without
      competing with the condition text in the foreground. */
   opacity: 0.28;
@@ -7629,7 +8336,7 @@ body {
   position: absolute;
   top: 10px;
   right: 10px;
-  z-index: 5;
+  z-index: 10000;
   width: 38px;
   height: 22px;
   padding: 0;
@@ -7656,7 +8363,7 @@ body {
   right: 10px;
   bottom: 12px;
   width: 240px;
-  z-index: 4;
+  z-index: 10000;
   padding: 12px;
   background: rgba(12, 15, 20, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -9128,9 +9835,49 @@ body {
 
 .studio-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
   gap: var(--sp-4);
-  align-items: stretch;
+  align-items: start;
+}
+
+/* Left column wraps the preview + tags so they're sticky relative to the
+   scrolling .studio container while the right column (input + library)
+   scrolls past it. Fixed to viewport height so the tags region below the
+   viewer can scroll internally. */
+.studio-hero-preview-col {
+  position: sticky;
+  top: var(--sp-5);
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+  height: calc(100vh - var(--sp-5) * 2);
+}
+.studio-hero-preview-col .anim-tags-section {
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 0;
+}
+
+/* Right column mirrors the left: a fixed-height sticky pane with the
+   prompt anchored on top and the library scrolling in its own region
+   below. */
+.studio-hero-right {
+  position: sticky;
+  top: var(--sp-5);
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+  height: calc(100vh - var(--sp-5) * 2);
+}
+.studio-hero-right > section {
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .studio-hero-preview {
@@ -9139,6 +9886,7 @@ body {
   box-shadow: 4px 4px 0 var(--ink);
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   min-height: 360px;
 }
 .studio-hero-preview-frame {
@@ -9198,6 +9946,7 @@ body {
   flex-direction: column;
   gap: var(--sp-3);
   min-width: 0;
+  flex: 0 0 auto;
 }
 
 .studio-hero-input form { display: flex; flex-direction: column; gap: var(--sp-3); flex: 1; min-height: 0; }
@@ -9395,6 +10144,10 @@ body {
 @media (max-width: 900px) {
   .studio-hero { grid-template-columns: minmax(0, 1fr); }
   .studio-hero-preview { min-height: 280px; }
+  .studio-hero-preview-col { position: static; height: auto; }
+  .studio-hero-preview-col .anim-tags-section { overflow: visible; flex: none; }
+  .studio-hero-right { position: static; height: auto; }
+  .studio-hero-right > section { overflow: visible; flex: none; }
 }
 
 /* ──────── Spell preview — embedded full-bleed in studio-hero ──────── */

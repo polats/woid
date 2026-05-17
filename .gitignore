@@ -2,6 +2,20 @@
 
 node_modules
 dist
+dist-mobile
+
+# Capacitor native platform projects — generated locally via
+# `npm run mobile:add:ios` / `mobile:add:android`. Native source
+# (signing configs, app icons) lives outside the repo for now.
+ios/
+android/
+
+# Gradle build artifacts for our local Capacitor plugins. Plugin source
+# lives in mobile/plugins/<name>/{src,android/src,android/build.gradle};
+# everything under build/ is regenerable.
+mobile/plugins/*/android/build/
+mobile/plugins/*/android/.cxx/
+
 .DS_Store
 *.log
 .github-token
