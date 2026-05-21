@@ -37,6 +37,14 @@ const allOrphans = flags.has('--all-orphans')
 const limit = kv.limit ? parseInt(kv.limit, 10) : Infinity
 const nameFilter = kv.name ? new RegExp(kv.name, 'i') : null
 const manifestPath = resolve(kv.manifest || 'e2e-runs/cast-manifest.json')
+// Must match the backend the mesh was made with so the kimodo
+// registry id (`unirig_<pubkey>_<backend>`) lines up — otherwise the
+// bridge throws a "previously rigged with backend X" force-gate error.
+const backend = (kv.backend || 'trellis').toLowerCase()
+if (!['trellis', 'hunyuan3d'].includes(backend)) {
+  console.error(`--backend must be 'trellis' or 'hunyuan3d' (got ${backend})`)
+  process.exit(1)
+}
 
 async function listCharacters() {
   const r = await fetch(`${BRIDGE}/characters`)
@@ -62,7 +70,7 @@ async function generateRig(pubkey) {
   const r = await fetch(`${BRIDGE}/characters/${pubkey}/generate-rig/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ backend: 'trellis', force }),
+    body: JSON.stringify({ backend, force }),
     signal: AbortSignal.timeout(1_800_000),
   })
   if (!r.ok) throw new Error(`stream HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`)

@@ -208,13 +208,6 @@ export class Animator {
     const fullFrame = pairs.filter(p => p.alignMode === 'frame').map(p => p.kimodoName)
     const dirOnly = pairs.filter(p => p.alignMode === 'direction').map(p => p.kimodoName)
     const noAlign = pairs.filter(p => p.alignMode === 'none').map(p => p.kimodoName)
-    console.log('[retarget]',
-      'resolved:', pairs.length,
-      'fullFrame:', fullFrame.length, fullFrame,
-      'directionOnly:', dirOnly,
-      'noAlign:', noAlign,
-      'unmapped:', unmapped,
-      'missing-in-rig:', missing)
     this.pairs = pairs
   }
 

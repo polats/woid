@@ -27,6 +27,7 @@ Edit `woid.config.json` to brand the project:
 ## What's inside
 
 - **Tasks** — Trello-style board backed by markdown files in `tasks/` ([format](docs/tasks-format.md))
+- **Agent harness** — a tiny library of character-agnostic agent primitives (perception, needs, moodlets, memory, Brain/Verb/GameAdapter contracts) in `src/lib/harness/`. Powers three demo games: Sims (multiplayer Colyseus sandbox), Shelter (Severance-flavored solo idle), and Colony (ONI-flavored colony sim). External games adopt by writing one adapter. ([design](docs/design/agent-harness.md), [research](docs/research/agent-harness-2026.md), [HARNESS.md](src/lib/harness/docs/HARNESS.md), [integrating.md](src/lib/harness/docs/integrating.md))
 - **Agent Sandbox** — optional, Docker-based. Colyseus room + strfry Nostr relay + pi coding-agent runtime. Pick a model from NVIDIA NIM, Google Gemini, or a local llama.cpp server ([local-llm setup](docs/local-llm.md)). Spawn named agents with seed messages, watch their live thought / tool-call / result stream in an inspector drawer, see every post in the relay feed; a persistent "Administrator" identity auto-announces each arrival. ([docs](docs/agent-sandbox.md))
 - **Testing** — Playwright e2e harness. Every run is archived with video + pass/fail data; browsable at `#/testing` inside the app. ([docs](docs/testing.md))
 - **Diagrams** — React Flow canvases stored as markdown with a fenced JSON block in `diagrams/`

@@ -53,6 +53,13 @@ if (!['cloud', 'local'].includes(source)) {
   console.error(`--source must be 'cloud' or 'local' (got ${source})`)
   process.exit(1)
 }
+// Backend selector — only relevant for --source=cloud. Bridge supports
+// trellis (default, image-to-3d via Cloud Run TRELLIS) and hunyuan3d.
+const backend = (kv.backend || 'trellis').toLowerCase()
+if (!['trellis', 'hunyuan3d'].includes(backend)) {
+  console.error(`--backend must be 'trellis' or 'hunyuan3d' (got ${backend})`)
+  process.exit(1)
+}
 const manifestPath = resolve(kv.manifest || 'e2e-runs/cast-manifest.json')
 
 // ─── Bridge helpers ─────────────────────────────────────────────────
@@ -98,7 +105,7 @@ async function generateMeshCloud(pubkey) {
   const r = await fetch(`${BRIDGE}/characters/${pubkey}/generate-model/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ backend: 'trellis' }),
+    body: JSON.stringify({ backend }),
     signal: AbortSignal.timeout(900_000),
   })
   if (!r.ok) throw new Error(`stream HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`)
@@ -208,7 +215,7 @@ for (const c of targets) {
     if (source === 'cloud') {
       const r = await generateMeshCloud(c.pubkey)
       const dt = ((Date.now() - start) / 1000).toFixed(1)
-      console.log(`  ✓ ${r.bytes}B via cloud trellis in ${dt}s\n`)
+      console.log(`  ✓ ${r.bytes}B via cloud ${backend} in ${dt}s\n`)
     } else {
       const bytes = await generateMeshLocal(c.pubkey, c.npub)
       const dt = ((Date.now() - start) / 1000).toFixed(1)

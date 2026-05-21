@@ -240,6 +240,7 @@ export default function AnimationsSandbox() {
       </header>
 
       <div className="studio-hero">
+        <div className="studio-hero-preview-col">
         <div className="studio-hero-preview">
           <div className="studio-hero-preview-frame">
             {motion ? (
@@ -296,6 +297,104 @@ export default function AnimationsSandbox() {
           )}
         </div>
 
+
+      <section className="anim-tags-section">
+        <div className="studio-grid-head">
+          <h2>Animation tags</h2>
+          <span className="spells-count">{tags.length}</span>
+        </div>
+
+        <div className="anim-tags-grid">
+          {tags.map((tag) => {
+            const entry = assignments[tag] ?? { id: null, explicit: false }
+            const animId = entry.id
+            const item = animId ? items.find((a) => (a.id ?? a.name) === animId) : null
+            const isBuiltin = animationLibrary.BUILTIN_TAGS.includes(tag)
+            const isDefault = !entry.explicit && !!animId
+            const isPublished = !!animId && publishedSet.has(animId)
+            const needsPublish = !!animId && !isPublished
+            return (
+              <div
+                key={tag}
+                className={`anim-tag-card${animId ? ' is-assigned' : ''}${animId && animId === selectedId ? ' is-selected' : ''}${needsPublish ? ' needs-publish' : ''}`}
+              >
+                <div className="anim-tag-card-head">
+                  <strong>{tag}</strong>
+                  {isBuiltin && <span className="anim-tag-card-pill">built-in</span>}
+                  {animId && isPublished && (
+                    <span
+                      className="anim-tag-card-pill is-published"
+                      title="Motion is published to prod"
+                    >published</span>
+                  )}
+                  {animId && needsPublish && (
+                    <span
+                      className="anim-tag-card-pill is-warning"
+                      title="Tagged but not published — prod will fall back to idle"
+                    >⚠ unpublished</span>
+                  )}
+                  {!isBuiltin && (
+                    <button
+                      type="button"
+                      className="anim-tag-card-x"
+                      title={`Remove tag ${tag}`}
+                      onClick={() => deleteTag(tag)}
+                    >×</button>
+                  )}
+                </div>
+                {animId ? (
+                  <button
+                    type="button"
+                    className="anim-tag-card-body"
+                    onClick={() => setSelectedId(animId)}
+                    title="Jump to this clip"
+                  >
+                    <span className="anim-tag-card-id">
+                      {animId}
+                      {isDefault && <span className="anim-tag-card-default"> · default</span>}
+                    </span>
+                  </button>
+                ) : (
+                  <div className="anim-tag-card-body anim-tag-card-empty">
+                    unassigned
+                  </div>
+                )}
+                {needsPublish && cfg.bridgeUrl && (
+                  <button
+                    type="button"
+                    className="anim-tag-card-publish"
+                    onClick={() => onPublish(animId)}
+                    disabled={publishingId === animId}
+                    title="Upload this motion to prod so prod players can resolve this tag"
+                  >
+                    {publishingId === animId ? 'Publishing…' : 'Publish'}
+                  </button>
+                )}
+              </div>
+            )
+          })}
+
+          <form className="anim-tag-card anim-tag-add" onSubmit={onAddTag}>
+            <div className="anim-tag-card-head">
+              <strong>+ new tag</strong>
+            </div>
+            <input
+              type="text"
+              value={newTag}
+              onChange={(e) => { setNewTag(e.target.value); setTagError(null) }}
+              placeholder="e.g. wave, sit, dance"
+              maxLength={24}
+            />
+            <button type="submit" className="studio-role-btn" disabled={!newTag.trim()}>
+              add
+            </button>
+            {tagError && <p className="spells-error">{tagError}</p>}
+          </form>
+        </div>
+      </section>
+        </div>
+
+        <div className="studio-hero-right">
         <div className="studio-hero-input">
           <form onSubmit={onSubmit}>
             <textarea
@@ -431,102 +530,7 @@ export default function AnimationsSandbox() {
             {listError && <p className="spells-error">kimodo offline? {listError}</p>}
           </form>
         </div>
-      </div>
 
-      <section className="anim-tags-section">
-        <div className="studio-grid-head">
-          <h2>Animation tags</h2>
-          <span className="spells-count">{tags.length}</span>
-        </div>
-
-        <div className="anim-tags-grid">
-          {tags.map((tag) => {
-            const entry = assignments[tag] ?? { id: null, explicit: false }
-            const animId = entry.id
-            const item = animId ? items.find((a) => (a.id ?? a.name) === animId) : null
-            const isBuiltin = animationLibrary.BUILTIN_TAGS.includes(tag)
-            const isDefault = !entry.explicit && !!animId
-            const isPublished = !!animId && publishedSet.has(animId)
-            const needsPublish = !!animId && !isPublished
-            return (
-              <div
-                key={tag}
-                className={`anim-tag-card${animId ? ' is-assigned' : ''}${animId && animId === selectedId ? ' is-selected' : ''}${needsPublish ? ' needs-publish' : ''}`}
-              >
-                <div className="anim-tag-card-head">
-                  <strong>{tag}</strong>
-                  {isBuiltin && <span className="anim-tag-card-pill">built-in</span>}
-                  {animId && isPublished && (
-                    <span
-                      className="anim-tag-card-pill is-published"
-                      title="Motion is published to prod"
-                    >published</span>
-                  )}
-                  {animId && needsPublish && (
-                    <span
-                      className="anim-tag-card-pill is-warning"
-                      title="Tagged but not published — prod will fall back to idle"
-                    >⚠ unpublished</span>
-                  )}
-                  {!isBuiltin && (
-                    <button
-                      type="button"
-                      className="anim-tag-card-x"
-                      title={`Remove tag ${tag}`}
-                      onClick={() => deleteTag(tag)}
-                    >×</button>
-                  )}
-                </div>
-                {animId ? (
-                  <button
-                    type="button"
-                    className="anim-tag-card-body"
-                    onClick={() => setSelectedId(animId)}
-                    title="Jump to this clip"
-                  >
-                    <span className="anim-tag-card-id">
-                      {animId}
-                      {isDefault && <span className="anim-tag-card-default"> · default</span>}
-                    </span>
-                  </button>
-                ) : (
-                  <div className="anim-tag-card-body anim-tag-card-empty">
-                    unassigned
-                  </div>
-                )}
-                {needsPublish && cfg.bridgeUrl && (
-                  <button
-                    type="button"
-                    className="anim-tag-card-publish"
-                    onClick={() => onPublish(animId)}
-                    disabled={publishingId === animId}
-                    title="Upload this motion to prod so prod players can resolve this tag"
-                  >
-                    {publishingId === animId ? 'Publishing…' : 'Publish'}
-                  </button>
-                )}
-              </div>
-            )
-          })}
-
-          <form className="anim-tag-card anim-tag-add" onSubmit={onAddTag}>
-            <div className="anim-tag-card-head">
-              <strong>+ new tag</strong>
-            </div>
-            <input
-              type="text"
-              value={newTag}
-              onChange={(e) => { setNewTag(e.target.value); setTagError(null) }}
-              placeholder="e.g. wave, sit, dance"
-              maxLength={24}
-            />
-            <button type="submit" className="studio-role-btn" disabled={!newTag.trim()}>
-              add
-            </button>
-            {tagError && <p className="spells-error">{tagError}</p>}
-          </form>
-        </div>
-      </section>
 
       <section>
         <div className="studio-grid-head">
@@ -599,6 +603,8 @@ export default function AnimationsSandbox() {
           </div>
         )}
       </section>
+        </div>
+      </div>
     </div>
   )
 }
