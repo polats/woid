@@ -4,6 +4,7 @@ import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js
 import { formatSimTime, simDay, tickAgents } from '../lib/shelterStore/index.js'
 import { invalidateAllLayoutDressing } from '../lib/buildLayoutDressing.js'
 import { populateDemo, cleanupDemo, playTrailerCinematic } from '../lib/demoMode.js'
+import { playCrackCinematic } from '../lib/crackCinematic.js'
 import { useTutorialHost } from '../hooks/useTutorialHost.js'
 import tutorialScripts from '../lib/tutorial/scripts.json'
 
@@ -224,9 +225,19 @@ export default function ShelterDebug() {
       await playTrailerCinematic({ tier: 5 })
     } catch (err) { console.warn('[demo] cinematic interrupted', err) }
   }
+  const runCrack = () => {
+    // Get out of the way — the cinematic is fullscreen-cinematic.
+    setOpen(false)
+    playCrackCinematic().catch((err) => {
+      console.warn('[demo] crack cinematic interrupted', err)
+    })
+  }
   const clearDemoState = () => {
     cleanupDemo(store)
     tickAgents(store)
+  }
+  const resetTimers = () => {
+    store.resetRoomProduction()
   }
   const reset = () => {
     if (!confirm(
@@ -423,9 +434,17 @@ export default function ShelterDebug() {
               title="Slow top-to-bottom camera pan across the populated building"
             >Play cinematic</button>
             <button
+              type="button" onClick={runCrack}
+              title="Shake the screen, crack the bottom floors, reveal amber backrooms"
+            >Crack</button>
+            <button
               type="button" onClick={clearDemoState}
               title="Remove demo rooms + agents, reset building tier to 1"
             >Clear demo</button>
+            <button
+              type="button" onClick={resetTimers}
+              title="Set every room's production timer back to 0"
+            >Reset timers</button>
             <button
               type="button" onClick={reset}
               title="Wipe player state + sim time, refresh room layouts from bridge"

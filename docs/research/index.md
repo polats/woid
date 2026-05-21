@@ -37,6 +37,8 @@ How metaverse / virtual-space platforms architect rooms, sync, and user state.
 What experimenting with LLMs as NPC brains has and hasn't validated.
 
 - [Generative Agents (Smallville) and AI Town](#/docs/llm-agent-prior-work)
+- [LLM agents 2025–2026 update — PIANO, AgentSociety, Concordia, ACE](#/docs/llm-agents-2025-2026)
+- [Agent harness 2026 — BYO-agent landscape, MCP vs Skills, A2A, Census, DF memory tiers](#/docs/research/agent-harness-2026)
 
 ## Infra & pipeline research
 

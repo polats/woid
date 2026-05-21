@@ -33,7 +33,9 @@ export default function ShelterStageActionButton({ agent }) {
   const assignedRoomType = manualRoomId ? getRoomType(manualRoomId) : null
   const ready = !!assignedRoom?.productionReady
   const reward = Number(assignedRoomType?.rewardCash ?? 0)
-  const dur = Number(assignedRoomType?.productionDuration ?? 0)
+  // Per-room override wins over the type default (demo seeder uses it
+  // to stagger production by floor; see lib/demoMode.js + tick.js).
+  const dur = Number(assignedRoom?.productionDuration ?? assignedRoomType?.productionDuration ?? 0)
   const timer = Number(assignedRoom?.productionTimer ?? 0)
   const productionPct = dur > 0 ? Math.min(100, (timer / dur) * 100) : 0
 

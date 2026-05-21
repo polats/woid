@@ -62,11 +62,13 @@ function tickProduction(store) {
   for (const [roomId, workers] of byRoom) {
     const type = roomTypeFor(roomId)
     if (!type?.isWork) continue
-    const dur = Number(type.productionDuration ?? 0)
-    if (!dur) continue
     const room = snapshot.rooms[roomId] ?? {
       upgradeLevel: 1, productionTimer: 0, productionReady: false,
     }
+    // Per-room override wins over the type default — used by the demo
+    // seeder to stagger production durations across the building.
+    const dur = Number(room.productionDuration ?? type.productionDuration ?? 0)
+    if (!dur) continue
     if (room.productionReady) continue
     // Linear contribution per worker, capped by tick to keep things
     // smooth even after a long pause.

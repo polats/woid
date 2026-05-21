@@ -35,6 +35,11 @@ export const PACE_DURATION_MIN = 3
 export const PACE_REST_MIN_MIN = 1
 export const PACE_REST_MAX_MIN = 4
 const PACE_REST_ROLES = ['idle', 'wave']
+// Workers (manually assigned to a room) pace just like idle agents, but
+// when they pause they cycle through the work animations instead of
+// idle/wave. Length must be a power of two for the `& (len-1)` hash mask
+// below to distribute evenly.
+const PACE_WORK_REST_ROLES = ['work', 'work2', 'work3', 'work']
 
 // Stable hash for deterministic positioning. Same agent + same
 // action always lands at the same spot. Avalanche finalizer (Murmur3
@@ -80,9 +85,10 @@ function pacePos(agentId, roomId, cycle) {
 // Hashing on cycle (a sim-minute floor) means the same agent at the same
 // cycle picks the same role / duration on every recompute — important
 // because the resolver runs each tick and we don't want to re-roll mid-rest.
-function pickRestRole(agentId, cycle) {
+function pickRestRole(agentId, cycle, state) {
   const h = hashCode(`${agentId}:rest:role:${cycle}`)
-  return PACE_REST_ROLES[h & (PACE_REST_ROLES.length - 1)] ?? 'idle'
+  const pool = state === 'work' ? PACE_WORK_REST_ROLES : PACE_REST_ROLES
+  return pool[h & (pool.length - 1)] ?? 'idle'
 }
 function pickRestDuration(agentId, cycle) {
   const h = hashCode(`${agentId}:rest:dur:${cycle}`)
@@ -208,7 +214,7 @@ export function resolveAgentState(agent, simMinutes) {
           paceStartedAt: null,
           paceMode: 'resting',
           paceRestUntil: simMinutes + pickRestDuration(agent.id, cycle),
-          paceRestRole: pickRestRole(agent.id, cycle),
+          paceRestRole: pickRestRole(agent.id, cycle, agent.state),
         }
       }
       return null

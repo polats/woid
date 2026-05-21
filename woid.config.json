@@ -3,7 +3,8 @@
   "description": "Plan, diagram, and run live LLM-agent experiments against reference projects.",
   "home": "welcome",
   "features": {
-    "agentSandbox": true
+    "agentSandbox": true,
+    "colony": true
   },
   "agentSandbox": {
     "roomServerUrl": "ws://localhost:12567",

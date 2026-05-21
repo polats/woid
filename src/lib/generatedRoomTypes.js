@@ -77,7 +77,14 @@ export async function refresh() {
         color: palette?.accent || '#9aa3b0',
         palette,
         description: `${r.propCount} props · generated`,
-        isWork: false,
+        // Match pattern-sorting's work parameters so generated rooms
+        // produce on the same cadence as the built-in work room.
+        isWork: true,
+        workstationCount: 1,
+        capacity: 1,
+        productionDuration: 10,
+        rewardCash: 100,
+        rewardXp: 100,
       }
     }))
     state = { types, ready: true }; emit()

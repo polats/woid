@@ -123,7 +123,27 @@ export function createAvatarFactory({ registry } = {}) {
     // Ground-truth shadow disc — sits at wrapper-local y≈0 (the
     // floor) regardless of how the avatar shifts above it.
     wrapper.add(makeShadowDisc())
-    return wrapper
+    // Tight invisible hit target for click raycasting. SkinnedMesh
+    // raycasts use the bind-pose bbox which can be much larger than
+    // the visible avatar (causing taps on nearby rooms to register on
+    // the character). A small explicit box matching the avatar's
+    // visible extents keeps selection honest.
+    //
+    // Lives on layer 1 (only) so it's invisible to the main camera
+    // and to OutlinePass (which would otherwise silhouette the box
+    // around the character instead of the character mesh itself).
+    // The click raycaster enables layer 1 just for the avatar pass.
+    const hitW = 0.22
+    const hitH = TARGET_HEIGHT
+    const hitTarget = new THREE.Mesh(
+      new THREE.BoxGeometry(hitW, hitH, hitW),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+    )
+    hitTarget.position.y = hitH / 2
+    hitTarget.name = 'avatarHitTarget'
+    hitTarget.layers.set(1)
+    wrapper.add(hitTarget)
+    return { wrapper, hitTarget }
   }
 
   const buildKimodo = async (entry) => {
@@ -157,7 +177,7 @@ export function createAvatarFactory({ registry } = {}) {
     // current pose. Wrapper sits at world origin during construction,
     // so the world-space mesh bbox min.y is also the wrapper-local y
     // we need to subtract from root.position to plant feet at floor.
-    const wrapper = wrap(root, scale, tmpl.feetY, 0, false)
+    const { wrapper, hitTarget } = wrap(root, scale, tmpl.feetY, 0, false)
     // Wire the wrapper as the animator's external reference so
     // wrapper rotations (walk-heading, worldRoot tilt, debug rotate)
     // actually rotate the visible character. Without this the
@@ -175,14 +195,15 @@ export function createAvatarFactory({ registry } = {}) {
         root.position.y -= worldBbox.min.y
       }
     }
-    return { object3d: wrapper, animator, tier: 'kimodo' }
+    return { object3d: wrapper, hitTarget, animator, tier: 'kimodo' }
   }
 
   const buildStatic = async (entry) => {
     const tmpl = await loadTemplate(entry.modelUrl)
     const root = tmpl.scene.clone(true)
     const scale = tmpl.height > 0 ? TARGET_HEIGHT / tmpl.height : 1
-    return { object3d: wrap(root, scale, tmpl.feetY), animator: null, tier: 'static' }
+    const { wrapper, hitTarget } = wrap(root, scale, tmpl.feetY)
+    return { object3d: wrapper, hitTarget, animator: null, tier: 'static' }
   }
 
   const buildFallback = async () => {
@@ -211,7 +232,8 @@ export function createAvatarFactory({ registry } = {}) {
         },
       }
     }
-    return { object3d: wrap(root, scale, tmpl.feetY, 0, true), animator, tier: 'fallback' }
+    const { wrapper, hitTarget } = wrap(root, scale, tmpl.feetY, 0, true)
+    return { object3d: wrapper, hitTarget, animator, tier: 'fallback' }
   }
 
   const spawn = async (npub) => {
@@ -262,6 +284,7 @@ export function createAvatarFactory({ registry } = {}) {
       npub,
       tier: result.tier,
       object3d: result.object3d,
+      hitTarget: result.hitTarget,
       animator: result.animator,
       dispose() {
         instances.delete(id)

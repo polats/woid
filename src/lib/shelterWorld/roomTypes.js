@@ -20,6 +20,7 @@
  */
 
 import { PALETTE } from './officeStyle.js'
+import { getState as getGeneratedState } from '../generatedRoomTypes.js'
 
 export const ROOM_CATEGORY = {
   lobby: 'lobby',
@@ -80,6 +81,33 @@ export const ROOM_TYPES = {
       { id: 'fluorescent-panel', slot: 'ceil', prompt: 'recessed fluorescent ceiling light panel' },
     ],
   },
+  'mail-room': {
+    id: 'mail-room',
+    name: 'Mailroom',
+    category: ROOM_CATEGORY.work,
+    description:
+      'A small interdepartmental sorting station. Quick to set up — '
+      + 'three pieces of furniture, no overhead fixtures.',
+    vibe: 'Outgoing mail is collected at noon. Please do not ask about Tuesdays.',
+    defaultBuilt: false,
+    tier: 1,
+    isWork: true,
+    workstationCount: 1,
+    capacity: 1,
+    productionDuration: 10,
+    rewardCash: 80,
+    rewardXp: 80,
+    defaultGrid: { w: 2, h: 1 },
+    color: '#a89878',
+    palette: { wall: PALETTE.wallWarm, floor: PALETTE.linoleumGrey, accent: PALETTE.accentAmber },
+    // Intentionally short prop list — three items so build mode finishes
+    // loading quickly in the demo (the break-room is heavier).
+    props: [
+      { id: 'mail-sorting-table', slot: 'mid', prompt: 'beige laminate sorting table with rows of pigeonhole cubbies on top' },
+      { id: 'mail-cart', slot: 'fore', prompt: 'metal wheeled mailroom cart with canvas tote bags' },
+      { id: 'rubber-stamp-tray', slot: 'mid', prompt: 'wooden tray holding three rubber date stamps and an ink pad' },
+    ],
+  },
   'break-room': {
     id: 'break-room',
     name: 'Break Room',
@@ -106,9 +134,15 @@ export const ROOM_TYPES = {
 /** All registered type ids in declaration order. */
 export const ROOM_TYPE_IDS = Object.keys(ROOM_TYPES)
 
-/** Lookup helper. Returns null on unknown id. */
+/** Lookup helper. Returns null on unknown id.
+ *  Falls through to the generated-room registry for `gen:*` ids so the
+ *  work tick and stage code can read work fields off LLM-built rooms. */
 export function getRoomType(id) {
-  return ROOM_TYPES[id] ?? null
+  if (ROOM_TYPES[id]) return ROOM_TYPES[id]
+  if (typeof id === 'string' && id.startsWith('gen:')) {
+    return getGeneratedState().types.find((t) => t.id === id) ?? null
+  }
+  return null
 }
 
 /** Flat list of every prop reference across every room type, with the

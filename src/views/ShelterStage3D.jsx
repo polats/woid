@@ -43,6 +43,14 @@ import {
 } from '../lib/tutorial/runtime.js'
 import { emit as emitFx } from '../lib/shelterFxBus.js'
 import { createBackgroundLayer } from '../lib/shelterWorld/backgroundLayer.js'
+import { createCrackMaterial } from '../lib/crackShader.js'
+import {
+  subscribe as subCrackCinematic,
+  getState as getCrackCinematic,
+  DESCENT_START_MS,
+  REVEAL_DELAY_AFTER_DESCENT_MS,
+  REVEAL_LEN_MS,
+} from '../lib/crackCinematic.js'
 
 /**
  * Shelter diorama renderer.
@@ -462,7 +470,7 @@ function deriveDefaultSlots(columns = []) {
   return slots
 }
 
-export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChange = null, onSelectionChange = null } = {}) {
+export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChange = null, onSelectionChange = null, onDropCharacter = null } = {}) {
   const hostRef = useRef(null)
   const onFocusChangeRef = useRef(onFocusChange)
   useEffect(() => { onFocusChangeRef.current = onFocusChange }, [onFocusChange])
@@ -470,6 +478,8 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
   useEffect(() => { onAgentFocusChangeRef.current = onAgentFocusChange }, [onAgentFocusChange])
   const onSelectionChangeRef = useRef(onSelectionChange)
   useEffect(() => { onSelectionChangeRef.current = onSelectionChange }, [onSelectionChange])
+  const onDropCharacterRef = useRef(onDropCharacter)
+  useEffect(() => { onDropCharacterRef.current = onDropCharacter }, [onDropCharacter])
 
   // Engine handles to live longer than the main effect's closure so a
   // sibling presence-sync effect can spawn / despawn / reposition
@@ -479,6 +489,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
   const worldRootRef = useRef(null)
   const liveAvatarsRef = useRef(new Map())  // npub → spawn handle
   const undergroundMeshRef = useRef(null)   // dirt-fill mesh; toggled by tier
+  const crackMaterialRef = useRef(null)     // shader on the dirt-fill mesh; driven by the Crack cinematic
   // Agent-focus state lives in refs so both the setup effect (which
   // owns the click handler + per-frame face-camera) and the sync
   // effect (which despawns avatars) can read/write it.
@@ -562,24 +573,25 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       surface.name = 'shelter:ground-surface'
       worldRoot.add(surface)
 
-      // Underground dirt fill — gradient from topsoil → deep earth.
+      // Underground dirt fill — gradient from topsoil → deep earth,
+      // driven by the crack shader so the Crack cinematic can split
+      // the surface open and reveal amber rooms beneath without
+      // swapping the mesh out at runtime. At uProgress=0 the shader
+      // just outputs the dirt gradient and reads identically to the
+      // old vertex-color material.
       const fillGeo = new THREE.PlaneGeometry(GROUND_WIDTH, FILL_DEPTH)
-      const topsoil = new THREE.Color('#4a3528')
-      const deep = new THREE.Color('#15100a')
-      const cols = new Float32Array(12)
-      // PlaneGeometry verts after construction: 0=top-left, 1=top-right,
-      // 2=bottom-left, 3=bottom-right (in pre-rotation local coords).
-      cols[0]  = topsoil.r; cols[1]  = topsoil.g; cols[2]  = topsoil.b
-      cols[3]  = topsoil.r; cols[4]  = topsoil.g; cols[5]  = topsoil.b
-      cols[6]  = deep.r;    cols[7]  = deep.g;    cols[8]  = deep.b
-      cols[9]  = deep.r;    cols[10] = deep.g;    cols[11] = deep.b
-      fillGeo.setAttribute('color', new THREE.BufferAttribute(cols, 3))
-      const fillMat = new THREE.MeshBasicMaterial({ vertexColors: true })
+      const fillMat = createCrackMaterial({ topColor: '#4a3528', deepColor: '#15100a' })
+      crackMaterialRef.current = fillMat
       const fill = new THREE.Mesh(fillGeo, fillMat)
       // Top edge of the plane sits at y=0; centre at y=-FILL_DEPTH/2.
-      // Sit a hair behind the surface strip so the surface line stays
-      // visible at the seam.
-      fill.position.set(0, -FILL_DEPTH / 2, -0.6)
+      // We sit the fill IN FRONT of every room cell so the shader can
+      // punch holes through it and reveal real underground room
+      // geometry behind. Rooms have ROOM_DEPTH=3 so their front-facing
+      // surfaces sit around z=+1.5; dirt at z=+1.7 covers them all.
+      // The fill's geometry only extends below y=0, so it never
+      // covers above-ground rooms.
+      fill.position.set(0, -FILL_DEPTH / 2, 1.7)
+      fill.renderOrder = 5  // draw after rooms so alpha=0 reveals them
       fill.name = 'shelter:underground-fill'
       worldRoot.add(fill)
       // Stash a ref so the slot subscriber can toggle it off when the
@@ -1411,6 +1423,19 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       } else if (cmd?.type === 'clearTutorialOverrides') {
         clearTutorialOverrides()
         cmd.onComplete?.()
+      } else if (cmd?.type === 'celebrateRoom' && cmd.roomId) {
+        // Find the room group, project its world position to screen,
+        // and emit sparkle + popup events on the FX bus.
+        const rg = roomGroups.find((g) => g.userData.room?.id === cmd.roomId)
+        if (rg) {
+          const worldPos = new THREE.Vector3()
+          rg.getWorldPosition(worldPos)
+          const ndc = worldPos.clone().project(camera)
+          const rect = renderer.domElement.getBoundingClientRect()
+          const x = ((ndc.x + 1) / 2) * rect.width + rect.left
+          const y = ((-ndc.y + 1) / 2) * rect.height + rect.top
+          emitFx('roomBuilt', { roomId: cmd.roomId, fromX: x, fromY: y })
+        }
       }
     })
 
@@ -1910,7 +1935,22 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
                   rewardXp: Number(type?.rewardXp ?? 0),
                   tier: Number(type?.tier ?? 1),
                 })
-                emitFx('flyCash', { amount: cashAmount, fromX, fromY })
+                // Burst of coins + a floating "+¤<amount>" label.
+                // Coins all carry the total amount so the label shown
+                // on each one stays informative; arrival of the FIRST
+                // one bumps the counter. fxBus consumers handle the
+                // visual side.
+                const BURST = 7
+                for (let n = 0; n < BURST; n++) {
+                  emitFx('flyCash', {
+                    amount: cashAmount,
+                    fromX, fromY,
+                    burstIndex: n,
+                    burstTotal: BURST,
+                    showAmount: n === 0,  // only first coin shows "¤<amount>"
+                  })
+                }
+                emitFx('rewardPopup', { amount: cashAmount, fromX, fromY })
                 return
               }
               break
@@ -1925,13 +1965,26 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       // Single tap = select (yellow highlight). Double tap (within
       // DOUBLE_TAP_MS, same agent) = focus/zoom — toggles off if
       // already focused.
+      // Raycast against the per-avatar invisible hit target (a tight
+      // box sized to match the visible model) rather than the whole
+      // object3d — SkinnedMesh bind-pose bboxes are much larger than
+      // the rendered character and would steal taps from nearby rooms.
+      // Raycast against the per-avatar invisible hit target (a tight
+      // box sized to match the visible model) rather than the whole
+      // object3d — SkinnedMesh bind-pose bboxes are much larger than
+      // the rendered character and would steal taps from nearby rooms.
+      // Hit targets live on layer 1 only (so they're invisible to the
+      // camera + OutlinePass); we enable layer 1 on the raycaster just
+      // for this pass and restore the default mask afterwards.
       const avatarObjs = []
       for (const handle of liveAvatarsRef.current.values()) {
-        if (handle && !handle.pending && handle.object3d) avatarObjs.push(handle.object3d)
+        if (handle && !handle.pending && handle.hitTarget) avatarObjs.push(handle.hitTarget)
       }
+      raycaster.layers.enable(1)
       const avatarHits = avatarObjs.length
-        ? raycaster.intersectObjects(avatarObjs, true)
+        ? raycaster.intersectObjects(avatarObjs, false)
         : []
+      raycaster.layers.disable(1)
       if (avatarHits.length) {
         let node = avatarHits[0].object
         let agentId = null
@@ -2013,6 +2066,43 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
     renderer.domElement.addEventListener('click', onClick)
 
+    // ── Drag-and-drop spawn from the agent sandbox overlay ──────────
+    // Same raycast against roomGroups; on drop, identify the room and
+    // pass a per-room (roomId, localU, localV) target to the parent.
+    const onDragOver = (e) => {
+      if (!onDropCharacterRef.current) return
+      const types = e.dataTransfer?.types
+      if (!types || !Array.from(types).includes('application/x-character-pubkey')) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+    const onDrop = (e) => {
+      const cb = onDropCharacterRef.current
+      if (!cb) return
+      const pubkey = e.dataTransfer?.getData('application/x-character-pubkey')
+        || e.dataTransfer?.getData('text/plain')
+      if (!pubkey) return
+      e.preventDefault()
+      const rect = renderer.domElement.getBoundingClientRect()
+      ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.setFromCamera(ndc, camera)
+      const hits = raycaster.intersectObjects(roomGroups, true)
+      if (!hits.length) return
+      let node = hits[0].object
+      while (node) {
+        if (node.userData?.room) {
+          const room = node.userData.room
+          if (room.type === 'door') return
+          cb(pubkey, { roomId: room.id, localU: 0.5, localV: 0.5 })
+          return
+        }
+        node = node.parent
+      }
+    }
+    renderer.domElement.addEventListener('dragover', onDragOver)
+    renderer.domElement.addEventListener('drop', onDrop)
+
     // ── Per-room production HUD (bar + ready coin) ───────────────
     // Built once per work room and parented to the room group so it
     // tracks the room's transform. Visibility + bar fill + ready
@@ -2058,9 +2148,27 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       fill.renderOrder = 101
       g.add(fill)
       // Ready coin — gold disc that bobs + pulses + brightens once
-      // the room flips productionReady. Placed above the bar.
+      // the room flips productionReady. Placed above the bar with a
+      // larger additive halo behind it so the eye catches it across
+      // a tall building.
+      const halo = new THREE.Mesh(
+        new THREE.CircleGeometry(0.30, 32),
+        new THREE.MeshBasicMaterial({
+          color: 0xffd84a,
+          fog: false,
+          depthTest: false,
+          transparent: true,
+          opacity: 0.0,
+          blending: THREE.AdditiveBlending,
+        }),
+      )
+      halo.position.y = 0.32
+      halo.position.z = -0.001
+      halo.renderOrder = 101
+      halo.visible = false
+      g.add(halo)
       const coin = new THREE.Mesh(
-        new THREE.CircleGeometry(0.12, 24),
+        new THREE.CircleGeometry(0.14, 24),
         new THREE.MeshBasicMaterial({ color: READY_COIN_BASE.getHex(), fog: false, depthTest: false }),
       )
       // Coin floats above the room's top edge — the bar itself is now
@@ -2070,7 +2178,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       coin.renderOrder = 102
       coin.visible = false
       g.add(coin)
-      return { group: g, fillMesh: fill, readyMesh: coin, barWidth }
+      return { group: g, fillMesh: fill, readyMesh: coin, haloMesh: halo, barWidth }
     }
 
     // ── Bright-yellow room pulse ─────────────────────────────────
@@ -2101,6 +2209,13 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           const type = getRoomType(meta.type ?? meta.id)
           if (type?.isWork) wanted.add(meta.id)
         }
+      }
+      // Ready rooms — emissive pulse on every room flagged
+      // productionReady so the player sees where to collect at a
+      // glance, especially across a tall building.
+      const snapNow = shelterStore.getSnapshot()
+      for (const [id, room] of Object.entries(snapNow.rooms ?? {})) {
+        if (room?.productionReady) wanted.add(id)
       }
       // Restore any room that's no longer wanted.
       for (const id of [...pulseRoomData.keys()]) {
@@ -2150,6 +2265,22 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
     // Tutorial-driven single-room pulse.
     const unsubTutorialPulseRoom = subTutorialState((t) => {
       tutorialPulseRoomId = t.pulseRoom ?? null
+      reconcilePulseRooms()
+    })
+
+    // Production-ready pulse — re-run reconcile when any room's ready
+    // state flips so the gold emissive turns on/off in sync with the
+    // collect coin. Cheap: reconcile diffs against the captured set
+    // and only touches rooms that newly entered or left.
+    let lastReadySet = ''
+    const unsubReadyPulse = shelterStore.subscribe((snap) => {
+      const ids = []
+      for (const [id, r] of Object.entries(snap.rooms ?? {})) {
+        if (r?.productionReady) ids.push(id)
+      }
+      const key = ids.sort().join(',')
+      if (key === lastReadySet) return
+      lastReadySet = key
       reconcilePulseRooms()
     })
 
@@ -2600,7 +2731,10 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         for (const [roomId, hud] of productionHuds) {
           const room = snapNow.rooms?.[roomId]
           const type = roomTypeFor(roomId)
-          const dur = Number(type?.productionDuration ?? 0)
+          // Per-room override wins over the type default (demo seeder
+          // uses it to stagger production by floor; see lib/demoMode.js
+          // + lib/shelterStore/tick.js).
+          const dur = Number(room?.productionDuration ?? type?.productionDuration ?? 0)
           const timer = Number(room?.productionTimer ?? 0)
           const ready = !!room?.productionReady
           // Visible iff a manually-assigned worker exists for this room.
@@ -2615,8 +2749,11 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           )
           // Ready coin — bob (sine on Y) + pulse (sine on scale +
           // colour). 1.1s period so it reads as a friendly "tap me"
-          // beat rather than a frantic alarm.
+          // beat rather than a frantic alarm. The halo behind it
+          // breathes wider + fades to draw the eye across a tall
+          // building of ready rooms.
           hud.readyMesh.visible = ready
+          if (hud.haloMesh) hud.haloMesh.visible = ready
           if (ready) {
             const phase = now * (Math.PI * 2 / 1.1)
             const k1 = (Math.sin(phase) + 1) / 2          // 0..1
@@ -2626,6 +2763,12 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
             hud.readyMesh.scale.setScalar(s)
             _huiTmpColor.copy(READY_COIN_BASE).lerp(READY_COIN_PEAK, k1)
             hud.readyMesh.material.color.copy(_huiTmpColor)
+            if (hud.haloMesh) {
+              const haloScale = 1.0 + 0.55 * k1
+              hud.haloMesh.scale.setScalar(haloScale)
+              hud.haloMesh.material.opacity = 0.25 + 0.45 * k1
+              hud.haloMesh.position.y = 0.32 + 0.05 * k2
+            }
           }
         }
       }
@@ -2637,6 +2780,31 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       const k = Math.max(0, Math.min(1, (z - 1) / 2))
       worldRoot.rotation.x = TILT_MAX + (TILT_MIN - TILT_MAX) * k + debugRX
       worldRoot.rotation.y = debugRY
+
+      // Drive the Crack cinematic's shader uniforms. uProgress eases
+      // 0→1 across the cinematic's lifetime; uTime keeps the slow
+      // amber flicker alive while we hold on the final framing.
+      if (crackMaterialRef.current) {
+        const cs = getCrackCinematic()
+        const u = crackMaterialRef.current.uniforms
+        u.uTime.value = performance.now() / 1000
+        if (cs.active && cs.startedAt) {
+          const elapsed = performance.now() - cs.startedAt
+          // Cracks start AFTER the camera has been descending for
+          // REVEAL_DELAY_AFTER_DESCENT_MS — the player should see
+          // visible camera motion before the floor splits. Slow
+          // power-curve ease keeps the cracks creeping rather than
+          // slamming open, which sells the "snaking" propagation.
+          const REVEAL_START = DESCENT_START_MS + REVEAL_DELAY_AFTER_DESCENT_MS
+          const t = (elapsed - REVEAL_START) / REVEAL_LEN_MS
+          const eased = t <= 0 ? 0 : t >= 1 ? 1 : 1 - Math.pow(1 - t, 4)
+          u.uProgress.value = eased
+        } else if (u.uProgress.value > 0) {
+          // Smoothly drift back to 0 after the cinematic ends so the
+          // ground doesn't snap shut. ~600ms fade.
+          u.uProgress.value = Math.max(0, u.uProgress.value - 0.02)
+        }
+      }
 
       // Two-pass render: perspective backdrop first, then the ortho
       // shelter on top. The backdrop owns its own scene + camera; we
@@ -2656,9 +2824,12 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
       controls.dispose()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('click', onClick)
+      renderer.domElement.removeEventListener('dragover', onDragOver)
+      renderer.domElement.removeEventListener('drop', onDrop)
       try { unregisterStageHandler() } catch {}
       try { unsubAssignmentMode() } catch {}
       try { unsubTutorialPulseRoom() } catch {}
+      try { unsubReadyPulse() } catch {}
       try { unsubBuildMode() } catch {}
       clearGhosts()
       // Restore every captured material on tear-down.
@@ -2759,28 +2930,21 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
           // tutorialRole wins over everything — the cinematic owns
           // motion while it's animating. Then `walk` wins for the
           // explicit walking-to-a-room state (focused or not).
-          // Then `work` wins when the agent is at their manually-
-          // assigned room AND in state='work' — they're on the job,
-          // and the work motion should play even when the player has
-          // them focused (otherwise the focusRole 'wave' would mask
-          // the actual work pose). Otherwise focusRole, otherwise
-          // pace/rest/idle.
-          const atAssignedRoom = !!a.manualAssignment?.roomId
-            && a.assignment?.roomId === a.manualAssignment.roomId
-            && a.state === 'work'
+          // Otherwise we fall through to the pacing logic — workers
+          // assigned to a room pace just like unassigned agents, but
+          // their resting role is one of work/work2/work3 (chosen by
+          // the resolver via paceRestRole) instead of idle/wave.
           const wantedRole = existing.tutorialRole
             ? existing.tutorialRole
-            : isWalking
-              ? 'walk'
-              : atAssignedRoom
-                ? 'work'
-                : isFocused
-                  ? (existing.focusRole ?? 'wave')
-                  : isLerping
-                    ? 'walk'
-                    : isResting
-                  ? (a.paceRestRole ?? 'idle')
-                  : 'idle'
+            : isFocused
+              ? (existing.focusRole ?? 'wave')
+              : isWalking
+                ? 'walk'
+                : isLerping
+                  ? 'walk'
+                  : isResting
+                    ? (a.paceRestRole ?? 'idle')
+                    : 'idle'
           // Only the kimodo-rigged avatar tier exposes setMotion — the
           // static + fallback tiers use a THREE.AnimationMixer-shaped
           // animator that has no role concept. Skip role-swap for
@@ -2830,6 +2994,7 @@ export default function ShelterStage3D({ onFocusChange = null, onAgentFocusChang
         // Tag the wrapper with the agent id so the click raycast can
         // walk parents from a mesh hit back to the owning agent.
         handle.object3d.userData.agentId = a.id
+        if (handle.hitTarget) handle.hitTarget.userData.agentId = a.id
         worldRoot.add(handle.object3d)
         // For lerping agents (walking or pacing), place at the
         // current source so they don't pop to the destination before

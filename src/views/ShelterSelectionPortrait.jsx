@@ -28,7 +28,7 @@ const SHELTER_AVATAR_HEIGHT_M = 0.5
 const AVATAR_HEIGHT_M = 1.7
 const AVATAR_UPSCALE = AVATAR_HEIGHT_M / SHELTER_AVATAR_HEIGHT_M
 
-export default function ShelterSelectionPortrait({ pubkey }) {
+export default function ShelterSelectionPortrait({ pubkey, onClick = null }) {
   const hostRef = useRef(null)
   // Held false until the avatar GLB has spawned + an idle motion has
   // landed, so the slide-in only runs after there's actually a
@@ -173,11 +173,21 @@ export default function ShelterSelectionPortrait({ pubkey }) {
     <motion.div
       key={pubkey}
       ref={hostRef}
-      className="shelter-selection-portrait"
+      className={`shelter-selection-portrait${onClick ? ' is-clickable' : ''}`}
       initial={{ x: -160, opacity: 0 }}
       animate={loaded ? { x: 0, opacity: 1 } : { x: -160, opacity: 0 }}
       exit={{ x: -160, opacity: 0 }}
       transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
-    />
+    >
+      {onClick && (
+        <div
+          className="shelter-selection-portrait-hit"
+          onClick={onClick}
+          role="button"
+          tabIndex={0}
+          aria-label="Focus this character"
+        />
+      )}
+    </motion.div>
   )
 }

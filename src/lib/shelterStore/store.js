@@ -513,6 +513,26 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
     return { ...base, [key]: { score, updatedAt: snapshot.simMinutes } }
   }
 
+  /**
+   * Absolute setter for a relationship score. Clamps to [0, 100].
+   * Used by the demo / trailer to script bond changes outside the
+   * usual bump path.
+   */
+  function setRelationship(a, b, score) {
+    const key = pairKey(a, b)
+    if (!key) return
+    const next = Math.max(0, Math.min(100, Number(score) || 0))
+    const prev = snapshot.relationships?.[key]?.score ?? 0
+    if (next === prev) return
+    commit({
+      ...snapshot,
+      relationships: {
+        ...(snapshot.relationships ?? {}),
+        [key]: { score: next, updatedAt: snapshot.simMinutes },
+      },
+    })
+  }
+
   function relationshipScore(a, b) {
     const key = pairKey(a, b)
     if (!key) return 0
@@ -542,6 +562,13 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
       nextRooms[id] = { ...r, xp: 0, level: 1 }
     }
     commit({ ...snapshot, playerXp: 0, rooms: nextRooms })
+  }
+
+  /** Force-set the player's cumulative XP (and let levelForXp re-derive
+   *  the level on the next read). Used by the demo seed so the player
+   *  starts at a non-zero level and won't level-up on the first reward. */
+  function setPlayerXp(xp) {
+    commit({ ...snapshot, playerXp: Math.max(0, Math.floor(xp)) })
   }
 
   function clearAssignment(agentId) {
@@ -683,8 +710,8 @@ export function createShelterStore({ sync = LocalOnlySync } = {}) {
     getSnapshot, listAgents, getAgent,
     // mutations
     addAgent, updateAgent, removeAgent, upsertRoom, clear,
-    setAssignment, clearAssignment, collectRoom, resetPlayerProgress,
-    relationshipScore, relationshipBand,
+    setAssignment, clearAssignment, collectRoom, resetPlayerProgress, setPlayerXp,
+    relationshipScore, relationshipBand, setRelationship,
     addBuiltRoom, clearBuiltRooms, resetRoomProduction, setBuildingTier, setColumns,
     // clock
     advanceClock, fastForward,

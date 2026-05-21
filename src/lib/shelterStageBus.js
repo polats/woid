@@ -123,6 +123,15 @@ export function walkInAgent({ pubkey, fromOffsetX = 1.5, dx = -1.5, ms = 2500 } 
   })
 }
 
+/**
+ * Trigger the room-built celebration fx for a freshly-placed room.
+ * The stage handler resolves the room's world position, projects it
+ * to screen, and emits sparkle + popup events on the FX bus.
+ */
+export function celebrateRoom(roomId) {
+  if (handler && roomId) handler({ type: 'celebrateRoom', roomId })
+}
+
 // True when a stage is currently mounted and listening on the bus.
 // Used by the tutorial host to detect the no-stage case for tests.
 export function hasStageHandler() {

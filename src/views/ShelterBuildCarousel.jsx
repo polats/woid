@@ -52,10 +52,18 @@ export default function ShelterBuildCarousel() {
   if (!mounted) return null
 
   const builtTypes = new Set((snap?.builtRooms ?? []).map((r) => r.type))
-  const buildable = Object.values(ROOM_TYPES).filter((t) => (
-    t.defaultBuilt === false
-    && (t.tier ?? 1) <= playerLevel
-  ))
+  // Static buildable rooms — break room is pinned to the front so the
+  // player's first menu option in the demo is the comfort space; the
+  // rest of the list is then reversed so newer types surface earlier.
+  const buildable = Object.values(ROOM_TYPES)
+    .filter((t) => t.defaultBuilt === false && (t.tier ?? 1) <= playerLevel)
+    .reverse()
+  buildable.sort((a, b) => {
+    const aBreak = a.id === 'break-room' ? 0 : 1
+    const bBreak = b.id === 'break-room' ? 0 : 1
+    return aBreak - bBreak
+  })
+  const generatedTypes = [...generated.types].reverse()
 
   const onCardClick = (type) => {
     if (builtTypes.has(type.id) && type.id !== 'pattern-sorting') {
@@ -83,32 +91,6 @@ export default function ShelterBuildCarousel() {
         </p>
       ) : (
         <ul className="shelter-build-carousel-list">
-          {generated.types.map((t) => {
-            const isSelected = buildState.selectedType === t.id
-            return (
-              <li
-                key={t.id}
-                className={`shelter-build-card${isSelected ? ' selected' : ''}`}
-              >
-                <button
-                  type="button"
-                  className="shelter-build-card-btn"
-                  onClick={() => onCardClick(t)}
-                >
-                  <strong>{t.name}</strong>
-                  <div className="shelter-build-card-tags">
-                    <span className="shelter-build-card-tag is-generated" style={{ background: '#3a4658', color: '#cfe0f4' }}>
-                      Generated
-                    </span>
-                    <span className="shelter-build-card-tag" style={{ background: '#2c3340', color: '#a8b3c4' }}>
-                      {t.gridW}×{t.gridH}
-                    </span>
-                  </div>
-                  {t.description && <p>{t.description}</p>}
-                </button>
-              </li>
-            )
-          })}
           {buildable.map((t) => {
             const isSelected = buildState.selectedType === t.id
             const isBuilt = builtTypes.has(t.id)
@@ -145,6 +127,32 @@ export default function ShelterBuildCarousel() {
                   </div>
                   {t.description && <p>{t.description}</p>}
                   {isBuilt && <code>Built</code>}
+                </button>
+              </li>
+            )
+          })}
+          {generatedTypes.map((t) => {
+            const isSelected = buildState.selectedType === t.id
+            return (
+              <li
+                key={t.id}
+                className={`shelter-build-card${isSelected ? ' selected' : ''}`}
+              >
+                <button
+                  type="button"
+                  className="shelter-build-card-btn"
+                  onClick={() => onCardClick(t)}
+                >
+                  <strong>{t.name}</strong>
+                  <div className="shelter-build-card-tags">
+                    <span className="shelter-build-card-tag is-generated" style={{ background: '#3a4658', color: '#cfe0f4' }}>
+                      Generated
+                    </span>
+                    <span className="shelter-build-card-tag" style={{ background: '#2c3340', color: '#a8b3c4' }}>
+                      {t.gridW}×{t.gridH}
+                    </span>
+                  </div>
+                  {t.description && <p>{t.description}</p>}
                 </button>
               </li>
             )

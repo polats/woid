@@ -21,7 +21,21 @@ export function subscribe(fn) {
 /**
  * `flyCash` — a coin animates from (fromX, fromY) on screen toward
  *   the cash counter, fades out on arrival.
+ *   payload: { amount, fromX, fromY,
+ *              burstIndex?, burstTotal?,  // optional for coin bursts
+ *              showAmount? }              // render "¤N" on this coin
+ *
+ * `rewardPopup` — floating "+¤<amount>" label that rises and fades
+ *   above the collected room.
  *   payload: { amount, fromX, fromY }
+ *
+ * `cashBump` — short scale pulse on the cash counter when coins land.
+ *   payload: {}
+ *
+ * `roomBuilt` — celebration when a new room is placed by the player.
+ *   Emits a ring shockwave, sparkle particles, and a "BUILT" popup
+ *   at the room's screen position.
+ *   payload: { roomId, fromX, fromY }
  *
  * `levelUp` — celebration overlay. Triggered when playerXp crosses
  *   a level threshold.

@@ -24,6 +24,52 @@ const PERSONA_PROMPT = (
   'Generate one persona now.'
 )
 
+// Pulls the most recent {name, about} object out of Gemma's streamed
+// output. Tolerant of trailing prose and code fences.
+function parsePersona(text) {
+  if (!text) return null
+  const m = String(text).match(/\{[\s\S]*?"about"[\s\S]*?\}/)
+  if (!m) return null
+  try { const o = JSON.parse(m[0]); if (o && o.name && o.about) return o } catch { /* ignore */ }
+  return null
+}
+
+// FNV-1a 32-bit hash → stable seed so the same persona always yields
+// the same face on re-generate.
+function seedFromString(s) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0
+  }
+  return h >>> 0
+}
+
+// Compose an AbsoluteReality-friendly portrait prompt. AR is a
+// SD 1.5 photographic finetune — quality tags + a photographic
+// vocabulary land much better than painterly directives, and the
+// negative prompt steers it away from anime / cgi drift.
+function buildAvatarPrompt(persona) {
+  const name = persona?.name || 'an unnamed shelter survivor'
+  const about = persona?.about || 'a weathered survivor of a long underground winter'
+  const prompt = [
+    `portrait photograph of ${name}`,
+    about,
+    'close-up headshot, 3/4 view, soft natural window light, neutral background',
+    'detailed eyes, realistic skin texture, dirt and stubble, post-apocalyptic shelter survivor',
+    'photorealistic, 50mm lens, shallow depth of field, sharp focus',
+    'masterpiece, best quality, ultra-detailed, 8k',
+  ].join(', ')
+  const negativePrompt = [
+    'worst quality', 'low quality', 'normal quality', 'lowres', 'blurry', 'out of focus',
+    'cartoon', 'anime', 'cgi', 'drawing', 'painting', 'illustration', '3d render',
+    'deformed', 'extra fingers', 'extra limbs', 'bad anatomy', 'bad hands',
+    'watermark', 'signature', 'text', 'logo', 'pixelated', 'duplicate',
+  ].join(', ')
+  const seed = seedFromString(`${name}|${about}`)
+  return { prompt, negativePrompt, seed }
+}
+
 function fmtBytes(n) {
   if (!n) return '0 B'
   const u = ['B', 'KB', 'MB', 'GB']
@@ -131,18 +177,16 @@ export default function Personas() {
         await refreshImagenStatus()
       }
       setImagenPhase('generate')
-      // Compose an avatar prompt. Once Gemma's persona JSON has been
-      // generated above, we could lift `name` / `about` from there.
-      // For the standalone test we hard-code a representative prompt.
-      const prompt = (
-        'portrait of a shelter survivor, weathered face, soft window light, ' +
-        'oil painting, 3/4 view, neutral background'
-      )
-      // Back to 512×512 / 20 steps. The speed boost now comes from
-      // sd.cpp's flash_attn + TAESD decoder (5 MB tiny autoencoder
-      // replacing the heavy VAE), validated by rmatif/Local-Diffusion.
+      // Pull the persona Gemma just produced (if any) so the avatar
+      // reflects this specific NPC. Falls back to a generic survivor
+      // if no persona has been generated yet in this session.
+      const persona = parsePersona(gemmaOutput)
+      const { prompt, negativePrompt, seed } = buildAvatarPrompt(persona)
+      console.log('[Imagen] persona=' + JSON.stringify(persona) + ' gemmaOutputLen=' + (gemmaOutput?.length || 0))
+      console.log('[Imagen] prompt=' + prompt)
+      console.log('[Imagen] seed=' + seed)
       const done = await imagenGenerate(
-        { prompt, steps: 20, width: 512, height: 512, seed: Math.floor(Math.random() * 1e9) },
+        { prompt, negativePrompt, steps: 20, width: 512, height: 512, seed },
         (e) => setImagenStep(e),
       )
       setImagenImagePath(done.path)
@@ -370,21 +414,37 @@ export default function Personas() {
               </span>
             </div>
             {imagenPhase === 'download' && imagenProgress && (
-              <div style={{ marginTop: 10 }}>
-                <div style={{ height: 8, background: '#1a1a22', borderRadius: 4, overflow: 'hidden' }}>
-                  <div
-                    style={{
-                      height: '100%',
-                      width: imagenProgress.total ? `${(imagenProgress.got / imagenProgress.total) * 100}%` : '5%',
-                      background: '#ff7ac8', transition: 'width 0.2s',
-                    }}
-                  />
+              imagenProgress.phase === 'extracting' ? (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 12, opacity: 0.85 }}>
+                    Extracting model bundle… {imagenProgress.filesExtracted ?? 0} files
+                  </div>
+                  <div style={{ height: 8, background: '#1a1a22', borderRadius: 4, overflow: 'hidden', marginTop: 4 }}>
+                    {/* Indeterminate stripe — extract finishes in seconds */}
+                    <div style={{
+                      height: '100%', width: '40%',
+                      background: 'linear-gradient(90deg, transparent, #ff7ac8, transparent)',
+                      animation: 'imagen-extract-stripe 1.2s infinite linear',
+                    }} />
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, marginTop: 4, opacity: 0.8 }}>
-                  {fmtBytes(imagenProgress.got)} / {fmtBytes(imagenProgress.total)}
-                  {imagenProgress.bytesPerSec ? <> · {fmtBytes(imagenProgress.bytesPerSec)}/s</> : null}
+              ) : (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ height: 8, background: '#1a1a22', borderRadius: 4, overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        height: '100%',
+                        width: imagenProgress.total ? `${(imagenProgress.got / imagenProgress.total) * 100}%` : '5%',
+                        background: '#ff7ac8', transition: 'width 0.2s',
+                      }}
+                    />
+                  </div>
+                  <div style={{ fontSize: 12, marginTop: 4, opacity: 0.8 }}>
+                    Downloading · {fmtBytes(imagenProgress.got)} / {fmtBytes(imagenProgress.total)}
+                    {imagenProgress.bytesPerSec ? <> · {fmtBytes(imagenProgress.bytesPerSec)}/s</> : null}
+                  </div>
                 </div>
-              </div>
+              )
             )}
             {imagenPhase === 'init' && (
               <p style={{ fontSize: 12, marginTop: 8, opacity: 0.8 }}>Loading diffusion context…</p>

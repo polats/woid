@@ -115,9 +115,60 @@ export default function ShelterCharacterCard({ agent }) {
   // real `next` and the padding) render as lock-only — no title, no
   // condition text — until they unlock.
   const MIN_CHIPS = 5
+  const displayNameForNotes =
+    character?.name || agent?.name || ''
   const notePages = useMemo(() => {
     const real = [...(notes?.pages ?? [])]
-    if (notes?.next) real.push({ ...notes.next, isLocked: true })
+    // Demo-specific synthetic locked-next entries for the trailer cast.
+    // If the bridge already returned a `next`, we patch it; otherwise
+    // we inject one so the trailer always shows a teaser file.
+    const lower = displayNameForNotes.toLowerCase()
+    const isGianni = lower.includes('gianni soriano')
+    const isNina = lower.includes('nina voss')
+    const isMika = lower.includes('mika chen')
+    const isElina = lower.includes('elina ribeiro')
+    let next = notes?.next ? { ...notes.next, isLocked: true } : null
+    if (!next && (isGianni || isNina || isMika || isElina)) {
+      const slug = isGianni
+        ? 'gianni'
+        : isNina
+          ? 'nina'
+          : isMika
+            ? 'mika'
+            : 'elina'
+      next = {
+        id: `demo-next-${slug}`,
+        title: null,
+        isLocked: true,
+        conditionText: '',
+      }
+    }
+    if (next) {
+      if (isGianni) next.conditionText = 'Reach Player Bond 40'
+      if (isMika) next.conditionText = "Work at Director's Antechamber 10 times"
+      if (isNina) {
+        next.isClassified = true
+        if (!next.conditionText) next.conditionText = 'Access Restricted'
+      }
+      if (isElina) {
+        // Elina's entry is *condition met* in the demo — the chip
+        // glows as "ready" and a single tap plays an unlock
+        // celebration before opening the full file.
+        next.isReady = true
+        next.conditionText = 'Reach bond 40 with Jeremias'
+        next.title = 'Echoes of Jeremias'
+        next.tags = ['Jeremias', 'former lover']
+        next.body = (
+          "Elina keeps catching herself — a hand reaches for someone "
+          + 'who isn\'t there. A laugh she half-remembers in the elevator. '
+          + 'Standing two desks from Jeremias she gets little flashes: '
+          + 'his apartment lit warm, a key on the table she somehow '
+          + 'knows is hers. In this life they are colleagues. In some '
+          + 'other one, she is certain, they were more.'
+        )
+      }
+      real.push(next)
+    }
     while (real.length < MIN_CHIPS) {
       real.push({
         id: `placeholder-${real.length}`,
@@ -127,7 +178,7 @@ export default function ShelterCharacterCard({ agent }) {
       })
     }
     return real
-  }, [notes])
+  }, [notes, displayNameForNotes])
 
   if (!agent) return null
 
@@ -323,6 +374,11 @@ function NotesPanel({ pages, index, onSelect, specialty, personality }) {
   const [originRect, setOriginRect] = useState(null)
   const [portalTarget, setPortalTarget] = useState(null)
   const [shakeId, setShakeId] = useState(null)
+  // Demo unlock state — chips with `isReady` glow on first sight; a
+  // tap plays a brief celebration animation, then auto-opens the
+  // folder modal so the player can read the freshly unlocked file.
+  const [unlockingId, setUnlockingId] = useState(null)
+  const [unlockedReadyIds, setUnlockedReadyIds] = useState(() => new Set())
   // Auto-close when the page chain length changes (a new unlock).
   useEffect(() => { setOpenId(null) }, [pages.length])
 
@@ -366,9 +422,39 @@ function NotesPanel({ pages, index, onSelect, specialty, personality }) {
   }
   const openPage = openId ? pages.find((p) => p.id === openId) : null
 
+  const captureOrigin = (p) => {
+    const chipEl = chipRefs.current[p.id]
+    if (!chipEl || !portalTarget) return null
+    const cRect = chipEl.getBoundingClientRect()
+    const pRect = portalTarget.getBoundingClientRect()
+    return {
+      origin: {
+        x: cRect.left - pRect.left,
+        y: cRect.top - pRect.top,
+        width: cRect.width,
+        height: cRect.height,
+      },
+    }
+  }
+
   const tapChip = (p, i) => {
     onSelect(i)
-    if (p.isLocked || p.isPlaceholder) {
+    // Ready (condition-met but not yet unlocked) chips play a brief
+    // celebration animation, mark themselves unlocked, and auto-open
+    // the folder modal once the burst settles.
+    if (p.isReady && !unlockedReadyIds.has(p.id)) {
+      setUnlockingId(p.id)
+      setTimeout(() => {
+        setUnlockedReadyIds((s) => {
+          const n = new Set(s); n.add(p.id); return n
+        })
+        setUnlockingId(null)
+        const r = captureOrigin(p)
+        if (r) { setOriginRect(r); setOpenId(p.id) }
+      }, 720)
+      return
+    }
+    if ((p.isLocked && !unlockedReadyIds.has(p.id)) || p.isPlaceholder) {
       setShakeId(p.id)
       setTimeout(() => setShakeId(null), 360)
       return
@@ -376,18 +462,9 @@ function NotesPanel({ pages, index, onSelect, specialty, personality }) {
     // Measure the chip rect RELATIVE TO THE PORTAL TARGET (the phone
     // screen container, or body as fallback). The modal positions
     // itself inside that container so we don't escape the phone mock.
-    const chipEl = chipRefs.current[p.id]
-    if (!chipEl || !portalTarget) return
-    const cRect = chipEl.getBoundingClientRect()
-    const pRect = portalTarget.getBoundingClientRect()
-    setOriginRect({
-      origin: {
-        x: cRect.left - pRect.left,
-        y: cRect.top - pRect.top,
-        width: cRect.width,
-        height: cRect.height,
-      },
-    })
+    const r = captureOrigin(p)
+    if (!r) return
+    setOriginRect(r)
     setOpenId(p.id)
   }
 
@@ -410,6 +487,9 @@ function NotesPanel({ pages, index, onSelect, specialty, personality }) {
           const isOpen = p.id === openId
           const isActive = i === index && !isOpen
           const isShaking = p.id === shakeId
+          const isReady = p.isReady && !unlockedReadyIds.has(p.id)
+          const isUnlocking = p.id === unlockingId
+          const effectivelyLocked = p.isLocked && !unlockedReadyIds.has(p.id)
           return (
             <button
               key={p.id}
@@ -419,18 +499,25 @@ function NotesPanel({ pages, index, onSelect, specialty, personality }) {
               className={[
                 'shelter-card-notes-chip',
                 isActive ? 'is-active' : '',
-                p.isLocked ? 'is-locked' : '',
+                effectivelyLocked ? 'is-locked' : '',
                 p.isPlaceholder ? 'is-placeholder' : '',
+                p.isClassified ? 'is-classified' : '',
+                isReady ? 'is-ready' : '',
+                isUnlocking ? 'is-unlocking' : '',
                 isShaking ? 'is-shaking' : '',
               ].filter(Boolean).join(' ')}
               style={isOpen ? { visibility: 'hidden' } : undefined}
               onClick={() => tapChip(p, i)}
-              title={p.isLocked ? '' : (p.title ?? '')}
+              title={effectivelyLocked ? '' : (p.title ?? '')}
             >
-              {p.isLocked ? (
+              {effectivelyLocked ? (
                 p.isPlaceholder ? (
                   // Far-future placeholder — pure lock, no info.
                   <span className="shelter-card-notes-chip-lock" aria-hidden>🔒</span>
+                ) : isReady ? (
+                  // Condition-met, awaiting tap — no padlock, just
+                  // the requirement copy under a glow.
+                  <span className="shelter-card-notes-chip-cond">{p.conditionText}</span>
                 ) : (
                   // Real locked-next page — show the unlock condition
                   // so the player has a visible quest.
@@ -441,6 +528,9 @@ function NotesPanel({ pages, index, onSelect, specialty, personality }) {
                 )
               ) : (
                 <span className="shelter-card-notes-chip-title">{p.title}</span>
+              )}
+              {isUnlocking && (
+                <span className="shelter-card-notes-chip-burst" aria-hidden />
               )}
               <span className="shelter-card-notes-chip-stripe" aria-hidden />
             </button>
@@ -618,6 +708,13 @@ function OpenCard({ page, originRect, portalTarget, onClose, specialty, personal
                   )}
                 </div>
               )}
+              {Array.isArray(page.tags) && page.tags.length > 0 && (
+                <div className="folder-modal-page-tags">
+                  {page.tags.map((t) => (
+                    <span key={t} className="shelter-card-tag is-specialty">{t}</span>
+                  ))}
+                </div>
+              )}
               <div className="folder-modal-page-body">{page.body}</div>
             </motion.div>
           </div>
@@ -755,7 +852,9 @@ function AssignmentPanel({
 }) {
   const ready = !!assignedRoom?.productionReady
   const reward = Number(assignedRoomType?.rewardCash ?? 0)
-  const dur = Number(assignedRoomType?.productionDuration ?? 0)
+  // Per-room override wins over the type default (demo seeder uses it
+  // to stagger production by floor; see lib/demoMode.js + tick.js).
+  const dur = Number(assignedRoom?.productionDuration ?? assignedRoomType?.productionDuration ?? 0)
   const timer = Number(assignedRoom?.productionTimer ?? 0)
   const productionPct = dur > 0 ? Math.min(100, (timer / dur) * 100) : 0
 
