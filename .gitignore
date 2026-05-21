@@ -5,10 +5,10 @@ dist
 dist-mobile
 
 # Capacitor native platform projects — generated locally via
-# `npm run mobile:add:ios` / `mobile:add:android`. Native source
-# (signing configs, app icons) lives outside the repo for now.
-ios/
-android/
+# `npm run mobile:add:ios` / `mobile:add:android`. Anchored to repo root
+# so we don't accidentally ignore plugin source under mobile/plugins/*.
+/ios/
+/android/
 
 # Gradle build artifacts for our local Capacitor plugins. Plugin source
 # lives in mobile/plugins/<name>/{src,android/src,android/build.gradle};
@@ -47,3 +47,13 @@ __pycache__/
 
 # Bridge probe scripts — ad-hoc debug helpers, never source-of-truth.
 agent-sandbox/pi-bridge/probe*.mjs
+
+# Native binaries for the on-device imagen plugin — vendored locally
+# from the Qualcomm AI SDK release. Too large for git; document install
+# steps separately and fetch as part of mobile setup.
+mobile/plugins/imagen/android/src/main/assets/qnnlibs/
+mobile/plugins/imagen/android/src/main/jniLibs/
+
+# Third-party reference clones kept locally for inspiration; not ours.
+# (polats-radio is an embedded git repo — git treats it as a submodule,
+# so .gitignore can't suppress its status line. Don't `git add` it.)

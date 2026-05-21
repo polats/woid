@@ -1,20 +1,14 @@
 /**
  * Facade over the @woid/capacitor-imagen native plugin.
  *
- * stable-diffusion.cpp under the hood (same library rmatif/Local-Diffusion
- * uses, Apache 2.0). Performance comes from runtime flags wired in the
- * native plugin: flash_attn + diffusion_flash_attn + TAESD decoder.
+ * Backed by the local-dream subprocess pattern (xororz/local-dream,
+ * CC-BY-NC). The plugin spawns a native binary that talks to the
+ * Hexagon DSP via Qualcomm QNN. On Snapdragon 8 Gen 3 a 20-step
+ * 512×512 SD 1.5 image lands in ~7–10 s.
  */
 
-// SD 1.5 precompiled for Snapdragon 8 Gen 3 (Samsung Galaxy S24) by
-// Qualcomm AI Hub. Anonymous S3, ~680 MB zip → ~1.1 GB extracted.
-// Runs entirely on Hexagon NPU via ONNX Runtime QNN execution provider.
-export const DEFAULT_MODEL_URL =
-  'https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/stable_diffusion_v1_5/releases/v0.53.1/stable_diffusion_v1_5-precompiled_qnn_onnx-w8a16-qualcomm_snapdragon_8gen3.zip'
-
-// Unused under MediaPipe — kept exported so older Personas.jsx imports
-// don't break during the swap.
-export const DEFAULT_TAESD_URL = ''
+export const DEFAULT_MODEL_URL = null   // let plugin pick by chipset
+export const DEFAULT_MODEL_ID = 'absolute_reality'
 
 function pluginRef() {
   if (typeof window === 'undefined') return null
@@ -30,35 +24,34 @@ export async function ping() {
   return p.ping()
 }
 
-export async function modelStatus() {
+export async function modelStatus(modelId = DEFAULT_MODEL_ID) {
   const p = pluginRef(); if (!p) throw new Error('Imagen plugin not available')
-  return p.modelStatus()
+  return p.modelStatus({ modelId })
 }
 
-export async function downloadModel(url, onProgress, taesdUrl) {
+export async function downloadModel(url, onProgress, modelId = DEFAULT_MODEL_ID) {
   const p = pluginRef(); if (!p) throw new Error('Imagen plugin not available')
   const off = await p.addListener('download-progress', (e) => { onProgress?.(e) })
   try {
-    return await p.downloadModel({
-      url: url || DEFAULT_MODEL_URL,
-      taesdUrl: taesdUrl || DEFAULT_TAESD_URL,
-    })
+    return await p.downloadModel({ url: url || undefined, modelId })
   } finally { off?.remove?.() }
 }
 
-export async function initModel() {
+export async function initModel({ modelId = DEFAULT_MODEL_ID, width = 512, height = 512 } = {}) {
   const p = pluginRef(); if (!p) throw new Error('Imagen plugin not available')
-  return p.initModel()
+  return p.initModel({ modelId, width, height })
 }
 
 export async function generate(
-  { prompt, steps = 20, width = 512, height = 512, seed = 0 } = {},
+  { prompt, negativePrompt = '', steps = 20, cfg = 7.0, width = 512, height = 512, seed } = {},
   onStep,
 ) {
   const p = pluginRef(); if (!p) throw new Error('Imagen plugin not available')
   const off = await p.addListener('step', (e) => { onStep?.(e) })
   try {
-    return await p.generate({ prompt, steps, width, height, seed })
+    const args = { prompt, negativePrompt, steps, cfg, width, height }
+    if (seed != null) args.seed = seed
+    return await p.generate(args)
   } finally { off?.remove?.() }
 }
 
