@@ -16,6 +16,10 @@ import Network from './views/Network.jsx'
 import Journal from './views/Journal.jsx'
 import Game from './views/Game.jsx'
 import Shelter from './views/Shelter.jsx'
+import Colony from './views/Colony.jsx'
+import AgentSandboxOverlay from './AgentSandboxOverlay.jsx'
+import DropToast from './components/DropToast.jsx'
+import WorldRegistrations from './components/WorldRegistrations.jsx'
 import SpellsSandbox from './SpellsSandbox.jsx'
 import AnimationsSandbox from './AnimationsSandbox.jsx'
 import NPCs from './views/NPCs.jsx'
@@ -58,6 +62,7 @@ function parseHash() {
   if (h === 'journal') return { view: 'journal' }
   if (h === 'game') return { view: 'game' }
   if (h === 'shelter') return { view: 'shelter' }
+  if (h === 'colony') return { view: 'colony' }
   if (h === 'spells') return { view: 'spells' }
   if (h === 'animations') return { view: 'animations' }
   if (h === 'npcs') return { view: 'npcs' }
@@ -226,6 +231,7 @@ export default function App() {
         <div className="game-mount" hidden={route.view !== 'shelter'}>
           {route.view === 'shelter' && <Shelter />}
         </div>
+        {route.view === 'colony' && config.features?.colony !== false && <Colony />}
         {route.view === 'testing' && <Testing initialSession={route.sessionName} />}
         {route.view === 'diagram' && <Diagram key={route.id} id={route.id} />}
         {route.view === 'reference' && <Reference key={route.id} id={route.id} />}
@@ -238,6 +244,9 @@ export default function App() {
           />
         )}
       </main>
+      <AgentSandboxOverlay />
+      <DropToast />
+      <WorldRegistrations />
     </div>
   )
 }

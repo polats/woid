@@ -14,6 +14,7 @@ export default function MapView({
   selectedRoomId = null,
   onSelectRoom,
   onActivateRoom,
+  onDropCharacter,
 }) {
   if (!grid) {
     return <div className="game-placeholder"><span>loading map…</span></div>
@@ -33,6 +34,7 @@ export default function MapView({
         selectedRoomId={selectedRoomId}
         onSelectRoom={onSelectRoom}
         onActivateRoom={onActivateRoom}
+        onDropCharacter={onDropCharacter}
       />
     </div>
   )

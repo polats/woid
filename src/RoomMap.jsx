@@ -11,8 +11,12 @@ const OBJECT_GLYPHS = {
   jukebox: '🎵',
   table: '🍽️',
   fridge: '🧊',
+  // Colony tile glyphs (additive; doesn't break Shelter/Sims usage).
+  ore_deposit: '⛰️',
+  kitchen: '🍳',
+  wall: '▣',
 }
-const objectGlyph = (type) => OBJECT_GLYPHS[type] || '◆'
+const defaultObjectGlyph = (type) => OBJECT_GLYPHS[type] || '◆'
 
 const WELLBEING_BANDS = [
   { name: 'thriving',   min: 70 },
@@ -51,7 +55,9 @@ export default function RoomMap({
   selectedRoomId = null,
   onSelectRoom,        // (roomId | null) -> select a room by tap
   onActivateRoom,      // (roomId) -> double-tap activate (e.g. open in 3D)
+  glyphFor,            // optional: (type) => string. Defaults to the built-in OBJECT_GLYPHS map.
 }) {
+  const objectGlyph = glyphFor ?? defaultObjectGlyph
   const [dragOver, setDragOver] = useState(null)
 
   // Tile (x,y) → room object. Doors checked first so they win when
@@ -142,6 +148,10 @@ export default function RoomMap({
         e.preventDefault()
         setDragOver(null)
         const pubkey = e.dataTransfer.getData('application/x-character-pubkey')
+        // RoomMap accepts the same two signatures it always has:
+        //   onDropCharacter(pubkey, x, y)        — Sims, kept for compat
+        //   onDropCharacter(pubkey, { x, y })    — new unified shape
+        // Both are supported so existing call sites don't break.
         if (pubkey) onDropCharacter?.(pubkey, x, y)
       }
       // Selection mode (onSelectRoom provided) takes precedence over

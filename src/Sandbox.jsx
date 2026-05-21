@@ -2,107 +2,36 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import config from './config.js'
 import { useSandboxRoom } from './hooks/useSandboxRoom.js'
 import { useBridgeModels } from './hooks/useBridgeModels.js'
+import { useBridgeCharacters } from './hooks/useBridgeCharacters.js'
 import AgentDrawer from './AgentDrawer.jsx'
 import RoomMap from './RoomMap.jsx'
 import Recap from './Recap.jsx'
 import Storyteller from './Storyteller.jsx'
 import SimClock from './SimClock.jsx'
+import SandboxCards from './components/SandboxCards.jsx'
+import { useWorldDrop } from './hooks/useWorldDrop.js'
+import { spawnOrMoveBridgeAgent } from './lib/bridgeSpawn.js'
 
 const cfg = config.agentSandbox || {}
-const JUMBLE_URL = cfg.jumbleUrl || 'http://localhost:18089'
 
 export default function Sandbox() {
-  const [characters, setCharacters] = useState([])
-  // Filter strip for the agents list. Mirrors the rooms page's
-  // built-in / drafts / added split so the two sidebars look
-  // alike. Reuses the .rooms-status-tabs CSS.
-  const [agentFilter, setAgentFilter] = useState('all')
+  // Bridge roster comes from the shared hook so the overlay and the
+  // sandbox see the same list with the same poll cadence.
+  const { characters, refresh: refreshCharacters } = useBridgeCharacters()
   const [objects, setObjects] = useState([])
   const [rooms, setRooms] = useState([])
   const [grid, setGrid] = useState(null) // { width, height } from /rooms
-  // Stage view toggle — tabs sit on the stage header so the user can
-  // switch between the room (the live map) and Recap (the daily
-  // session summary). Default to room since that's the main surface.
   const [stageView, setStageView] = useState('room')
   const [adminInfo, setAdminInfo] = useState(null)
   const [chatDraft, setChatDraft] = useState('')
   const [chatSending, setChatSending] = useState(false)
   const [chatError, setChatError] = useState(null)
-  // Unified drawer state — `inspectedId` can be an agentId (running
-  // runtime) or a pubkey (any character, running or not). `drawerTab`
-  // picks which tab opens first; users can flip it from inside.
   const [inspectedId, setInspectedId] = useState(null)
   const [drawerTab, setDrawerTab] = useState('context')
-  const [creating, setCreating] = useState(false)
-  const [spawnError, setSpawnError] = useState(null)
   const [humanInfo, setHumanInfo] = useState(null)
-  const [dropToast, setDropToast] = useState(null)
-  // Tracked profile-dirty flag from the drawer. We need it as a ref
-  // (not just state) so the click handlers in the card list see the
-  // current value at click time without re-binding on every re-render.
   const profileDirtyRef = useRef(false)
   const chatlogRef = useRef(null)
 
-  // Persona prompt editor (gear icon next to + New) — mirrors the NPCs
-  // view's settings panel. Lets the user inspect and override the
-  // 'player-persona' system prompt that drives kind:'player' character
-  // generation, with a one-click reset to the bridge default.
-  const [showSettings, setShowSettings] = useState(false)
-  // Sidebar tab — Agents vs Pets. Pets is a placeholder slot for a
-  // future feature; the layout shape is reused from when this tab held
-  // the Rooms catalogue (now lives at /rooms as its own page).
-  const [sidebarTab, setSidebarTab] = useState('agents')
-  const [promptText, setPromptText] = useState('')
-  const [promptDefault, setPromptDefault] = useState('')
-  const [promptOverridden, setPromptOverridden] = useState(false)
-  const [promptStatus, setPromptStatus] = useState(null)
-  const promptDirty = promptText !== '' && promptText !== promptDefault
-
-  const refreshPrompt = useCallback(async () => {
-    if (!cfg.bridgeUrl) return
-    try {
-      const r = await fetch(`${cfg.bridgeUrl}/v1/prompts/player-persona`)
-      if (!r.ok) return
-      const j = await r.json()
-      setPromptText(j.text || '')
-      setPromptDefault(j.default || '')
-      setPromptOverridden(!!j.overridden)
-    } catch { /* transient */ }
-  }, [])
-  useEffect(() => { refreshPrompt() }, [refreshPrompt])
-
-  async function savePrompt() {
-    setPromptStatus('saving…')
-    try {
-      const r = await fetch(`${cfg.bridgeUrl}/v1/prompts/player-persona`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: promptText }),
-      })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = await r.json()
-      setPromptText(j.text || '')
-      setPromptOverridden(!!j.overridden)
-      setPromptStatus('saved')
-      setTimeout(() => setPromptStatus(null), 2000)
-    } catch (e) { setPromptStatus(`error: ${e.message || e}`) }
-  }
-  async function resetPromptToDefault() {
-    setPromptStatus('resetting…')
-    try {
-      const r = await fetch(`${cfg.bridgeUrl}/v1/prompts/player-persona`, { method: 'DELETE' })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = await r.json()
-      setPromptText(j.text || '')
-      setPromptOverridden(false)
-      setPromptStatus('reset')
-      setTimeout(() => setPromptStatus(null), 2000)
-    } catch (e) { setPromptStatus(`error: ${e.message || e}`) }
-  }
-
-  // Wraps setInspectedId with a confirm prompt when the drawer's
-  // profile tab has unsaved changes. Used by every place that might
-  // swap the inspected character (card click, runtime click, etc).
   function safelySetInspectedId(next, tab) {
     if (
       next !== inspectedId &&
@@ -115,35 +44,31 @@ export default function Sandbox() {
     setInspectedId(next)
     if (tab) setDrawerTab(tab)
   }
-  const { models } = useBridgeModels(cfg.bridgeUrl)
 
+  const { models } = useBridgeModels(cfg.bridgeUrl)
   const { status: roomStatus, state: roomState, error: roomError } = useSandboxRoom({
     url: cfg.roomServerUrl,
     roomName: cfg.defaultRoom || 'sandbox',
   })
 
-  const refresh = useCallback(async () => {
+  const refreshWorld = useCallback(async () => {
     if (!cfg.bridgeUrl) return
     try {
-      const [chars, objs, rms] = await Promise.all([
-        fetch(`${cfg.bridgeUrl}/characters?kind=player`).then((r) => r.json()),
-        fetch(`${cfg.bridgeUrl}/objects`).then((r) => r.ok ? r.json() : { objects: [] }),
-        fetch(`${cfg.bridgeUrl}/rooms`).then((r) => r.ok ? r.json() : { rooms: [] }),
+      const [objs, rms] = await Promise.all([
+        fetch(`${cfg.bridgeUrl}/objects`).then((r) => (r.ok ? r.json() : { objects: [] })),
+        fetch(`${cfg.bridgeUrl}/rooms`).then((r) => (r.ok ? r.json() : { rooms: [] })),
       ])
-      setCharacters(chars.characters || [])
       setObjects(objs.objects || [])
       setRooms(rms.rooms || [])
       if (rms.grid) setGrid(rms.grid)
-    } catch {
-      /* transient fetch errors are fine */
-    }
+    } catch { /* transient */ }
   }, [])
 
   useEffect(() => {
-    refresh()
-    const t = setInterval(refresh, 3000)
+    refreshWorld()
+    const t = setInterval(refreshWorld, 3000)
     return () => clearInterval(t)
-  }, [refresh])
+  }, [refreshWorld])
 
   useEffect(() => {
     if (!cfg.bridgeUrl) return
@@ -151,85 +76,10 @@ export default function Sandbox() {
     fetch(`${cfg.bridgeUrl}/human`).then((r) => r.json()).then(setHumanInfo).catch(() => {})
   }, [])
 
-  // Keep the chat log scrolled to the newest message.
   useEffect(() => {
     const el = chatlogRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [roomState.messages.length])
-
-  async function newCharacter() {
-    setSpawnError(null)
-    try {
-      const r = await fetch(`${cfg.bridgeUrl}/characters`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-      if (!r.ok) throw new Error(await r.text())
-      const c = await r.json()
-      await refresh()
-      setInspectedId(c.pubkey)
-      setDrawerTab('profile')
-    } catch (err) {
-      setSpawnError(err.message || String(err))
-    }
-  }
-
-  // Spawn body. Pulls model/provider/harness/promptStyle straight from
-  // the character manifest. The bridge fills in its own defaults for
-  // any field the manifest doesn't have. Per-character editing is in
-  // the agent drawer's Profile tab.
-  function spawnBody(c, extra = {}) {
-    let provider
-    if (c.model) {
-      const hit = models.find((m) => m.id === c.model)
-      if (hit) provider = hit.provider
-    }
-    return {
-      pubkey: c.pubkey,
-      roomName: cfg.defaultRoom || 'sandbox',
-      ...(c.model ? { model: c.model } : {}),
-      ...(provider ? { provider } : {}),
-      ...(c.harness ? { harness: c.harness } : {}),
-      ...(c.promptStyle ? { promptStyle: c.promptStyle } : {}),
-      ...extra,
-    }
-  }
-
-  async function spawn(c) {
-    if (c.runtime) { setInspectedId(c.runtime.agentId); return }
-    setCreating(true)
-    setSpawnError(null)
-    try {
-      const r = await fetch(`${cfg.bridgeUrl}/agents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(spawnBody(c)),
-      })
-      if (!r.ok) throw new Error(await r.text())
-      const result = await r.json()
-      await refresh()
-      setInspectedId(result.agentId)
-    } catch (err) {
-      setSpawnError(err.message || String(err))
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  async function stopRuntime(agentId) {
-    try {
-      await fetch(`${cfg.bridgeUrl}/agents/${agentId}`, { method: 'DELETE' })
-      // Optimistically drop the runtime so the card reflects "stopped"
-      // before the next 3s /characters poll — otherwise a quick drag-back
-      // onto the map would try to MOVE the dead agent and hit /move 404.
-      setCharacters((prev) => prev.map((c) =>
-        c.runtime?.agentId === agentId ? { ...c, runtime: null } : c,
-      ))
-      if (inspectedId === agentId) setInspectedId(null)
-      await refresh()
-    } catch {}
-  }
 
   async function sendChat(e) {
     e?.preventDefault?.()
@@ -252,41 +102,22 @@ export default function Sandbox() {
     }
   }
 
-  // Drop a card onto a tile: spawn at coord if no runtime, otherwise
-  // move the existing runtime to the target tile.
-  async function onDropCharacter(pubkey, x, y) {
-    const c = characters.find((ch) => ch.pubkey === pubkey)
-    if (!c) return
-    setSpawnError(null)
-    try {
-      if (c.runtime?.running) {
-        const r = await fetch(`${cfg.bridgeUrl}/agents/${c.runtime.agentId}/move`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ x, y }),
-        })
-        if (!r.ok) throw new Error(await r.text())
-        setDropToast({ text: `${c.name} → (${x}, ${y})`, at: Date.now() })
-      } else {
-        setCreating(true)
-        try {
-          const r = await fetch(`${cfg.bridgeUrl}/agents`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(spawnBody(c, { x, y })),
-          })
-          if (!r.ok) throw new Error(await r.text())
-          const result = await r.json()
-          setInspectedId(result.agentId)
-          setDropToast({ text: `spawned ${c.name} at (${x}, ${y})`, at: Date.now() })
-        } finally { setCreating(false) }
-      }
-      await refresh()
-    } catch (err) {
-      setSpawnError(err.message || String(err))
-    }
-    setTimeout(() => setDropToast((t) => (t && Date.now() - t.at >= 2500 ? null : t)), 2700)
-  }
+  // Drop on the Sims map — bridge driver + toast envelope come from
+  // the harness; this view just supplies the post-spawn hook to open
+  // the inspector and refresh the roster.
+  const onDropCharacter = useWorldDrop({
+    world: 'Sims',
+    spawn: async (character, target) => {
+      const r = await spawnOrMoveBridgeAgent({
+        bridgeUrl: cfg.bridgeUrl,
+        character, target, models,
+        roomName: cfg.defaultRoom || 'sandbox',
+      })
+      if (!r.moved) setInspectedId(r.agentId)
+      await refreshCharacters()
+      return { toast: r.moved ? `${character.name} → (${r.x}, ${r.y})` : `${character.name} joined Sims` }
+    },
+  })
 
   async function onMoveSelf(x, y) {
     try {
@@ -298,10 +129,6 @@ export default function Sandbox() {
     } catch {}
   }
 
-  // Prefer the agentId match, but also accept a pubkey-only inspectedId
-  // (set when clicking a non-running character on the map). Fall back to
-  // a stub from inspectedId alone so the drawer still opens even while
-  // /characters refresh is in-flight.
   const inspectedCharacter = inspectedId
     ? characters.find((c) => c.runtime?.agentId === inspectedId || c.pubkey === inspectedId)
     : null
@@ -319,269 +146,12 @@ export default function Sandbox() {
 
   return (
     <div className="sandbox3">
-      <aside className="sandbox3-cards">
-        <nav className="sandbox3-sidebar-tabs" role="tablist" aria-label="sidebar">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={sidebarTab === 'agents'}
-            className={`sandbox3-sidebar-tab${sidebarTab === 'agents' ? ' active' : ''}`}
-            onClick={() => setSidebarTab('agents')}
-          >
-            Agents
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={sidebarTab === 'pets'}
-            className={`sandbox3-sidebar-tab${sidebarTab === 'pets' ? ' active' : ''}`}
-            onClick={() => setSidebarTab('pets')}
-          >
-            Pets
-          </button>
-        </nav>
-        {sidebarTab === 'agents' ? (
-        <>
-        <header>
-          <h2>Agents</h2>
-          <div className="npcs-header-actions">
-            <button onClick={newCharacter} title="Create a new character with a random name + keypair">
-              + New
-            </button>
-            <button
-              type="button"
-              className={`npcs-settings-toggle${showSettings ? ' is-open' : ''}`}
-              onClick={() => setShowSettings((v) => !v)}
-              title={showSettings ? 'Hide settings' : 'Persona settings'}
-              aria-expanded={showSettings}
-            >
-              <SandboxIconSettings />
-            </button>
-          </div>
-        </header>
-        {showSettings && (
-          <div className="npcs-settings-pane">
-            <section className="npcs-pane">
-              <h2>Persona prompt</h2>
-              <p className="muted">
-                System prompt used when generating a player character's persona.{' '}
-                {promptOverridden
-                  ? <strong>Currently overridden.</strong>
-                  : <span>Currently the default.</span>}
-              </p>
-              <textarea
-                className="npcs-prompt"
-                value={promptText}
-                onChange={(e) => setPromptText(e.target.value)}
-                spellCheck={false}
-                rows={14}
-              />
-              <div className="npcs-form-actions">
-                <button type="button" className="npcs-btn primary" onClick={savePrompt} disabled={!promptDirty}>
-                  Save
-                </button>
-                <button type="button" className="npcs-btn" onClick={resetPromptToDefault} disabled={!promptOverridden}>
-                  Reset to default
-                </button>
-                {promptStatus && <span className="npcs-status">{promptStatus}</span>}
-              </div>
-            </section>
-          </div>
-        )}
-        {spawnError && <p className="agent-sandbox-error">{spawnError}</p>}
-        {/* Filter strip — same shape + styling as the Rooms page's
-            status tabs. Lets us slice the agent roster by curation
-            flags without scrolling through everyone. */}
-        {characters.length > 0 && (() => {
-          const tabs = [
-            { id: 'all', label: 'All', count: characters.length },
-            { id: 'added', label: 'Added', count: characters.filter((c) => c.added).length },
-          ]
-          return (
-            <nav className="rooms-status-tabs" role="tablist" aria-label="agent filter">
-              {tabs.map((t) => (
-                <button
-                  key={t.id}
-                  type="button" role="tab"
-                  aria-selected={agentFilter === t.id}
-                  className={`rooms-status-tab${agentFilter === t.id ? ' active' : ''}`}
-                  onClick={() => setAgentFilter(t.id)}
-                >
-                  {t.label} <span className="rooms-status-tab-count">{t.count}</span>
-                </button>
-              ))}
-            </nav>
-          )
-        })()}
-        {characters.length === 0 ? (
-          <p className="muted">No agents yet. Click + New to mint one.</p>
-        ) : (() => {
-          const filtered = characters.filter((c) => {
-            if (agentFilter === 'added') return !!c.added
-            return true
-          })
-          if (filtered.length === 0) {
-            return <p className="muted">No agents match this filter.</p>
-          }
-          return (
-          <ul className="sandbox3-card-list">
-            {filtered.map((c) => {
-              const runtime = c.runtime?.running ? c.runtime : null
-              const thinking = !!runtime?.thinking
-              const selected = inspectedId && (inspectedId === c.pubkey || inspectedId === runtime?.agentId)
-              const initial = (c.name || '?').trim().charAt(0).toUpperCase()
-              return (
-                <li
-                  key={c.pubkey}
-                  className={`sandbox3-card${runtime ? ' running' : ''}${thinking ? ' thinking' : ''}${selected ? ' selected' : ''}`}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('application/x-character-pubkey', c.pubkey)
-                    e.dataTransfer.effectAllowed = 'copyMove'
-                    // Use the portrait as the drag preview — the full card is
-                    // too wide and hides the drop target.
-                    const portrait = e.currentTarget.querySelector('.sandbox3-card-portrait')
-                    if (portrait) {
-                      try { e.dataTransfer.setDragImage(portrait, 28, 28) } catch {}
-                    }
-                  }}
-                  onClick={() => {
-                    // Running → Context tab. Not running → Profile (only
-                    // thing interesting about a stopped character is its
-                    // config). Goes through safelySetInspectedId so we
-                    // confirm before discarding unsaved profile edits.
-                    safelySetInspectedId(
-                      runtime ? runtime.agentId : c.pubkey,
-                      runtime ? 'context' : 'profile',
-                    )
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  title={
-                    runtime
-                      ? "Click to inspect. Drag to move on the map. Use Profile to edit."
-                      : "Drag onto the map to spawn. Use Profile to edit."
-                  }
-                >
-                  <div className="sandbox3-card-portrait">
-                    {c.avatarUrl ? (
-                      <img src={c.avatarUrl} alt={c.name} draggable={false} />
-                    ) : (
-                      <div className="sandbox3-card-portrait-fallback">{initial}</div>
-                    )}
-                    {runtime && <span className="sandbox3-card-dot" title={thinking ? 'thinking' : 'listening'} />}
-                  </div>
-                  <div className="sandbox3-card-body">
-                    <div className="sandbox3-card-name">{c.name}</div>
-                    {runtime && (
-                      <div className="sandbox3-card-status">
-                        {thinking ? 'thinking…' : 'listening'} · {runtime.turns} turn{runtime.turns === 1 ? '' : 's'}
-                      </div>
-                    )}
-                    {(() => {
-                      // Prefer the live runtime values for spawned chars;
-                      // fall back to manifest. Two separate pills (model
-                      // + brain) so a long model id can truncate inside
-                      // its own pill without smushing the brain tag.
-                      const h = runtime?.harness || c.harness
-                      const isExternal = h === 'external'
-                      // For external harness, the bridge `model` is a
-                      // placeholder — the external client's own LLM does
-                      // the thinking. Show its self-declared driver
-                      // instead, or omit the pill if undeclared (the
-                      // harness pill alone carries the signal).
-                      const driver = runtime?.externalDriver || null
-                      const m = isExternal ? driver : (runtime?.model || c.model)
-                      if (!m && !h) return null
-                      // Trim long model ids: drop the org prefix and any
-                      // quantization suffix so each pill stays compact.
-                      const compactModel = !m
-                        ? null
-                        : isExternal
-                          ? m
-                          : m.split('/').pop().replace(/-(?:E?\d+B|Q\d+_K_M).*$/i, '')
-                      return (
-                        <div className="sandbox3-card-tags">
-                          {c.starter && (
-                            <span
-                              className="sandbox3-card-tag sandbox3-card-tag-starter"
-                              title="Featured in the wake-up tutorial recruit carousel"
-                            >
-                              starter
-                            </span>
-                          )}
-                          {c.added && (
-                            <span
-                              className="sandbox3-card-tag sandbox3-card-tag-added"
-                              title="In the curated pool for the live shelter + trailer demo"
-                            >
-                              added
-                            </span>
-                          )}
-                          {m && (
-                            <span
-                              className="sandbox3-card-tag sandbox3-card-tag-model"
-                              title={isExternal ? `external driver: ${m}` : `model: ${m}`}
-                            >
-                              {compactModel}
-                            </span>
-                          )}
-                          {h && (
-                            <span className="sandbox3-card-tag sandbox3-card-tag-harness" title={`brain: ${h}`}>
-                              {h}
-                            </span>
-                          )}
-                        </div>
-                      )
-                    })()}
-                    {runtime?.lastUsage && (() => {
-                      const total = runtime.lastUsage.totalTokens ?? 0
-                      // Models in our catalog currently report contextWindow=131072;
-                      // surface it here so the gauge scales as we add bigger models.
-                      const cap = 131072
-                      const pct = Math.min(100, (total / cap) * 100)
-                      const level = pct > 80 ? 'red' : pct > 50 ? 'amber' : 'green'
-                      return (
-                        <div
-                          className={`sandbox3-card-gauge level-${level}`}
-                          title={`${total.toLocaleString()} / ${cap.toLocaleString()} tokens · ${pct.toFixed(1)}%`}
-                        >
-                          <div className="sandbox3-card-gauge-bar">
-                            <div className="sandbox3-card-gauge-fill" style={{ width: `${pct}%` }} />
-                          </div>
-                          <span>{total.toLocaleString()}<small> / {(cap/1000).toFixed(0)}K</small></span>
-                        </div>
-                      )
-                    })()}
-                    {c.about && <p className="sandbox3-card-about">{c.about}</p>}
-                    {c.state && (
-                      <p className="sandbox3-card-state" title={c.state}>
-                        <span className="sandbox3-card-state-label">state</span>
-                        {c.state}
-                      </p>
-                    )}
-                    {runtime && (
-                      <div className="sandbox3-card-actions">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); stopRuntime(runtime.agentId) }}
-                          className="danger"
-                        >
-                          stop
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-          )
-        })()}
-        </>
-        ) : (
-          <PetsPlaceholder />
-        )}
-      </aside>
+      <SandboxCards
+        characters={characters}
+        onRefresh={refreshCharacters}
+        inspectedId={inspectedId}
+        onInspect={safelySetInspectedId}
+      />
 
       <section className="sandbox3-stage">
         <header>
@@ -643,29 +213,26 @@ export default function Sandbox() {
               />
             </div>
           ) : (
-          <RoomMap
-            objects={objects}
-            rooms={rooms}
-            width={grid?.width ?? roomState.width}
-            height={grid?.height ?? roomState.height}
-            characters={characters}
-            roomAgents={roomState.agents}
-            adminPubkey={adminInfo?.pubkey}
-            humanPubkey={humanInfo?.pubkey}
-            onDropCharacter={onDropCharacter}
-            onMoveSelf={onMoveSelf}
-            onSelectCharacter={(pubkey) => {
-              const c = characters.find((x) => x.pubkey === pubkey)
-              // If running: inspect by runtime id. Otherwise open by pubkey
-              // so the drawer shows past turns from the session file.
-              safelySetInspectedId(
-                c?.runtime?.agentId || pubkey,
-                c?.runtime?.agentId ? 'context' : 'profile',
-              )
-            }}
-          />
+            <RoomMap
+              objects={objects}
+              rooms={rooms}
+              width={grid?.width ?? roomState.width}
+              height={grid?.height ?? roomState.height}
+              characters={characters}
+              roomAgents={roomState.agents}
+              adminPubkey={adminInfo?.pubkey}
+              humanPubkey={humanInfo?.pubkey}
+              onDropCharacter={onDropCharacter}
+              onMoveSelf={onMoveSelf}
+              onSelectCharacter={(pubkey) => {
+                const c = characters.find((x) => x.pubkey === pubkey)
+                safelySetInspectedId(
+                  c?.runtime?.agentId || pubkey,
+                  c?.runtime?.agentId ? 'context' : 'profile',
+                )
+              }}
+            />
           )}
-          {dropToast && <div className="sandbox3-toast">{dropToast.text}</div>}
         </div>
 
         <div className="sandbox3-chatlog" ref={chatlogRef}>
@@ -695,10 +262,7 @@ export default function Sandbox() {
         </form>
       </section>
 
-      {/* Drawer is anchored to the right edge of the cards column and
-          slides out from behind them; the stage shrinks via grid-
-          template-columns to make room. */}
-      {inspectedId && sidebarTab === 'agents' && (
+      {inspectedId && (
         <AgentDrawer
           bridgeUrl={cfg.bridgeUrl}
           character={inspectedCharacter}
@@ -706,37 +270,10 @@ export default function Sandbox() {
           initialTab={drawerTab}
           onDirtyChange={(d) => { profileDirtyRef.current = d }}
           onClose={() => { profileDirtyRef.current = false; setInspectedId(null) }}
-          onUpdated={() => refresh()}
-          onDeleted={() => { setInspectedId(null); refresh() }}
+          onUpdated={() => refreshCharacters()}
+          onDeleted={() => { setInspectedId(null); refreshCharacters() }}
         />
       )}
     </div>
-  )
-}
-
-function PetsPlaceholder() {
-  return (
-    <>
-      <header>
-        <h2>Pets</h2>
-        <small className="muted">coming soon</small>
-      </header>
-      <div className="sandbox3-pets-placeholder">
-        <p className="muted">
-          A spot reserved for a future companions / familiars feature.
-          Cards will live here.
-        </p>
-      </div>
-    </>
-  )
-}
-
-
-function SandboxIconSettings() {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
-    </svg>
   )
 }

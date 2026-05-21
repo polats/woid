@@ -195,6 +195,11 @@ body {
 .persona-api-dot-amber { background: #d09b1c; }
 .persona-api-dot-red { background: #c83b3b; }
 
+@keyframes imagen-extract-stripe {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
 .github-status { margin-bottom: 16px; }
 .login-btn {
   width: 100%;
@@ -4022,6 +4027,38 @@ body {
   text-transform: uppercase; text-decoration: none; color: var(--ink);
 }
 .sandbox3-card-actions .sandbox3-card-jumble:hover { background: var(--ink); color: var(--paper); }
+.sandbox3-card-stop {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 5px; border: 1.5px solid var(--bad-ink); background: var(--paper);
+  color: var(--bad-ink); font-family: var(--font-mono); font-size: 11px;
+  line-height: 1; cursor: pointer; min-width: 0;
+}
+.sandbox3-card-stop:hover { background: var(--bad-ink); color: var(--paper); }
+.sandbox3-card-stop-icon { font-size: 12px; }
+.sandbox3-card-stop-x { font-size: 13px; font-weight: 700; }
+.sandbox3-worlds-legend {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 4px 8px; border-bottom: 1px dashed var(--ink-soft, var(--ink));
+  background: var(--paper);
+}
+.sandbox3-worlds-legend-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 6px; border: 1px solid var(--ink); background: var(--paper);
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink); line-height: 1;
+}
+.sandbox3-worlds-legend-icon { font-size: 11px; line-height: 1; }
+.sandbox3-worlds-legend-label { font-weight: 600; }
+.sandbox3-worlds-legend-chip { text-decoration: none; cursor: pointer; transition: background 80ms, color 80ms; }
+.sandbox3-worlds-legend-chip:hover { background: var(--ink); color: var(--paper); }
+.sandbox3-worlds-legend-chip.is-active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.sandbox3-worlds-legend-chip.is-active:hover { background: var(--transmit); border-color: var(--transmit); }
+
+.sidebar-world-icon {
+  display: inline-block; width: 1.1em; margin-right: 6px;
+  font-family: var(--font-mono); text-align: center;
+  opacity: 0.9;
+}
 .sandbox3-card-model {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -12515,3 +12552,526 @@ input.room-palette-chip::-moz-color-swatch { border: 0; }
   resize: vertical;
 }
 .room-props-item-input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--transmit); }
+
+/* ── Colony view ─────────────────────────────────────────────────── */
+
+.colony-view {
+  background: #0c0e12;
+  color: #e6e9ee;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+/* .game-screen-body defaults to flex-direction:row (Shelter/Sims use
+   tab panes that fill the row). Colony stacks header + map vertically. */
+.colony-view .game-screen-body {
+  flex-direction: column;
+}
+
+.colony-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* Top padding clears the FAB (top:8, ~30px tall) + DEV button
+     (top:10, 22px tall). Left padding clears the sidebar-reopen
+     button when the sidebar is collapsed on mobile (left:0, width:22). */
+  padding: 40px 10px 6px 30px;
+  border-bottom: 1px solid #1d2028;
+  background: #11141a;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.colony-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.colony-title strong { font-size: 14px; letter-spacing: 0.5px; }
+.colony-subtitle { font-size: 11px; color: #788292; font-family: ui-monospace, monospace; }
+
+.colony-resource-bar {
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+.colony-resource-bar li {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 3px 6px;
+  background: #1a1e26;
+  border: 1px solid #232732;
+  border-radius: 3px;
+}
+.colony-resource-bar .g { font-size: 12px; }
+.colony-resource-bar .v { font-weight: 600; min-width: 22px; text-align: right; }
+.colony-resource-bar .l { color: #6f7886; font-size: 10px; }
+@media (max-width: 480px) {
+  .colony-resource-bar .l { display: none; }
+}
+
+.colony-map-wrap {
+  flex: 1;
+  min-height: 0;
+  padding: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Inner wrap so the room-map gets a positioned ancestor it can
+   fill via max-width / max-height. */
+.colony-map-wrap > .room-map-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Colony tiles override the Shelter palette while reusing the
+ * RoomMap layout primitives. The grid fills its container in BOTH
+ * dimensions and the inline aspect-ratio keeps tiles square — so
+ * portrait viewports use vertical space, landscape use horizontal,
+ * and tiles stay as large as possible on phones. */
+.colony-view .room-map {
+  background: #0c0e12;
+  gap: 1px;
+  width: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0;
+}
+.colony-view .room-tile {
+  background: #181c24;
+  border: none;
+  font-size: 16px;
+}
+.colony-view .room-tile.region-type-floor { background: #181c24; }
+.colony-view .room-tile.is-wall { background: #0c0e12; }
+.colony-view .room-tile-object { font-size: 18px; opacity: 0.95; }
+.colony-view .room-tile-avatar {
+  font-size: 10px;
+  width: 80%;
+  height: 80%;
+  background: #2a8aa1;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  border: 1px solid #1a5c6e;
+}
+
+/* Colony dev panel actions (button column inside .shelter-debug-panel). */
+.colony-debug-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.colony-debug-actions button {
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e8e8e8;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.colony-debug-actions button:hover { background: rgba(255, 255, 255, 0.1); }
+.colony-debug-actions button.danger { color: #f88; border-color: rgba(255, 100, 100, 0.3); }
+.colony-debug-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Old Colony dev panel CSS (kept for back-compat refs) ─── */
+
+.colony-debug-fab-old {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 100;
+  padding: 8px 12px;
+  background: #1e232c;
+  color: #ccd2dc;
+  border: 1px solid #2c3240;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 1px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.colony-debug-fab:hover { opacity: 1; }
+
+.colony-debug-panel {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  width: 320px;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: #11141a;
+  color: #ddd;
+  border: 1px solid #2c3240;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  z-index: 200;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.colony-debug-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.colony-debug-panel header strong { font-size: 12px; letter-spacing: 1px; }
+.colony-debug-panel header button {
+  background: none;
+  border: 0;
+  color: #aab;
+  font-size: 18px;
+  cursor: pointer;
+}
+.colony-debug-panel section { margin-bottom: 12px; }
+.colony-debug-panel h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #889;
+}
+.colony-debug-stats { list-style: none; padding: 0; margin: 0; }
+.colony-debug-stats li { display: flex; justify-content: space-between; padding: 2px 0; }
+.colony-debug-stats span { color: #9ad; font-weight: 600; }
+.colony-debug-actions { display: flex; flex-direction: column; gap: 6px; }
+.colony-debug-actions button {
+  padding: 6px 8px;
+  background: #1c2029;
+  color: #ddd;
+  border: 1px solid #2c3240;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.colony-debug-actions button:hover { background: #242833; }
+.colony-debug-actions button.danger { color: #f5a; }
+.colony-debug-actions button.danger:hover { background: #2a1a22; }
+.colony-debug-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+.colony-debug-dupes {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 11px;
+}
+.colony-debug-dupes li {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px dotted #2a2e38;
+}
+.colony-debug-dupes li:last-child { border-bottom: 0; }
+.colony-debug-dupes .pos { color: #889; }
+.colony-debug-dupes .needs { color: #9ad; }
+.colony-debug-dupes .action { color: #ad9; font-size: 10px; }
+.colony-debug-dupes button {
+  background: none;
+  border: 0;
+  color: #f88;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* ── Agent Sandbox Overlay ───────────────────────────────────── */
+
+
+/* ──────────────────────────────────────────────────────────────
+   Agent sandbox overlay — cross-world roster + drag-to-spawn.
+   Slides in from the left like AgentDrawer. Paper/ink theme;
+   sandbox3-card pattern reused for roster items.
+   ────────────────────────────────────────────────────────────── */
+
+.agent-sandbox-fab {
+  /* Anchored inside the .game-phone-screen, top-left, with a left
+     offset that clears the sidebar-reopen button (22px wide at
+     left:0) when the sidebar is collapsed. */
+  position: absolute;
+  top: 8px;
+  left: 30px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 8px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  box-shadow: 2px 2px 0 var(--ink);
+  transition: transform .08s ease, box-shadow .08s ease, background .08s ease;
+}
+.agent-sandbox-fab:hover {
+  background: var(--paper-2);
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.agent-sandbox-fab:active {
+  transform: translate(1px, 1px);
+  box-shadow: 0 0 0 var(--ink);
+}
+.agent-sandbox-fab-icon { font-size: 13px; }
+.agent-sandbox-fab-label { font-weight: 600; }
+
+.agent-sandbox-overlay-dimmer {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 24, 33, 0.22);
+  z-index: 140;
+  animation: agent-sandbox-overlay-dim-in 180ms ease-out;
+}
+@keyframes agent-sandbox-overlay-dim-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.agent-sandbox-overlay {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 360px;
+  max-width: 92vw;
+  z-index: 150;
+  background: var(--paper);
+  color: var(--ink);
+  border-right: 2px solid var(--ink);
+  box-shadow: 6px 0 0 var(--ink);
+  display: flex;
+  flex-direction: column;
+  animation: agent-sandbox-overlay-slide-in 220ms ease-out;
+}
+@keyframes agent-sandbox-overlay-slide-in {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0);    }
+}
+
+.agent-sandbox-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--ink);
+  color: var(--paper);
+  border-bottom: 2px solid var(--ink);
+}
+.agent-sandbox-overlay-head .title { display: flex; align-items: baseline; gap: 8px; }
+.agent-sandbox-overlay-head .title strong { font-size: 14px; letter-spacing: 0.5px; }
+.agent-sandbox-overlay-head .muted { font-size: 11px; opacity: 0.7; font-family: ui-monospace, monospace; }
+.agent-sandbox-overlay-close {
+  background: transparent;
+  color: var(--paper);
+  border: 0;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.agent-sandbox-overlay-close:hover { color: var(--lime); }
+
+.agent-sandbox-overlay-worlds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper-2);
+}
+.agent-sandbox-world-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  border-radius: 12px;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  text-transform: lowercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  box-shadow: 1.5px 1.5px 0 var(--ink);
+  transition: transform .08s ease, box-shadow .08s ease;
+}
+.agent-sandbox-world-chip:hover { background: var(--paper-3); transform: translate(-1px, -1px); box-shadow: 2.5px 2.5px 0 var(--ink); }
+.agent-sandbox-world-chip.active { background: var(--ink); color: var(--lime); }
+.agent-sandbox-world-chip.offline { opacity: 0.45; }
+.agent-sandbox-world-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.agent-sandbox-world-chip.offline .dot { background: var(--transmit); }
+
+.agent-sandbox-overlay-deeplink {
+  display: block;
+  padding: 8px 14px;
+  background: var(--paper-2);
+  color: var(--ink);
+  border-bottom: 1.5px solid var(--ink);
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  text-decoration: none;
+  letter-spacing: 0.3px;
+}
+.agent-sandbox-overlay-deeplink:hover { background: var(--paper-3); color: var(--transmit); }
+
+.agent-sandbox-overlay-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  margin: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-sandbox-overlay-empty {
+  color: var(--ink-muted);
+  font-size: 12px;
+  padding: 18px 8px;
+  text-align: center;
+  border: 1.5px dashed var(--ink-faint);
+}
+
+/* Overlay roster cards use sandbox3-card directly; this is a thin
+   tweak so they fit the narrower drawer. */
+.agent-sandbox-overlay-card {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  box-shadow: 2px 2px 0 var(--ink);
+  cursor: grab;
+  user-select: none;
+}
+.agent-sandbox-overlay-card:hover { background: var(--paper-2); }
+.agent-sandbox-overlay-card:active { cursor: grabbing; transform: translate(1px, 1px); box-shadow: 0 0 0 var(--ink); }
+.agent-sandbox-overlay-card .sandbox3-card-portrait {
+  width: 44px;
+  height: 44px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--paper-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--ink);
+}
+.agent-sandbox-overlay-card .sandbox3-card-portrait img { width: 100%; height: 100%; object-fit: cover; }
+.agent-sandbox-overlay-card .sandbox3-card-portrait-fallback {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.agent-sandbox-overlay-card .sandbox3-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.agent-sandbox-overlay-card .sandbox3-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.agent-sandbox-overlay-card .sandbox3-card-tag {
+  font-size: 9px;
+  font-family: ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.agent-sandbox-overlay-card .sandbox3-card-tag.world-sims    { background: var(--lime); }
+.agent-sandbox-overlay-card .sandbox3-card-tag.world-shelter { background: #ffd84a; }
+.agent-sandbox-overlay-card .sandbox3-card-tag.world-colony  { background: #b6d1ff; }
+
+/* ── Unified drop toast (Colony / Shelter / Sims) ─────────────── */
+
+.drop-toast-stack {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  pointer-events: none;
+}
+.drop-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  box-shadow: 2px 2px 0 var(--ink);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  pointer-events: auto;
+  animation: drop-toast-slide-in 200ms ease-out;
+}
+@keyframes drop-toast-slide-in {
+  from { transform: translateY(-12px); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+.drop-toast-pending { background: var(--paper-2); }
+.drop-toast-success { background: var(--lime); }
+.drop-toast-error   { background: var(--paper); color: var(--transmit-2); border-color: var(--transmit-2); }
+.drop-toast-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drop-toast-spinner {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--ink);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: drop-toast-spinner 700ms linear infinite;
+}
+@keyframes drop-toast-spinner { to { transform: rotate(360deg); } }
+.drop-toast-check { font-weight: 800; color: var(--ink); }
+.drop-toast-x { font-weight: 800; color: var(--transmit); font-size: 14px; line-height: 1; }
+
+/* Phone-frame mobile (<= 768px) — center the stack on the phone
+   surface, which on mobile IS the viewport, so the same selector
+   works. Wider tap targets, slightly larger text. */
+@media (max-width: 480px) {
+  .drop-toast-stack { width: calc(100vw - 16px); top: 8px; }
+  .drop-toast { padding: 10px 12px; font-size: 13px; }
+}

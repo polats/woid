@@ -4,6 +4,11 @@ import Stage3D from './Stage3D.jsx'
 import MapView from './MapView.jsx'
 import SpellPicker from './SpellPicker.jsx'
 import { useSandboxRoom } from '../hooks/useSandboxRoom.js'
+import AgentSandboxFab from '../components/AgentSandboxFab.jsx'
+import { useBridgeModels } from '../hooks/useBridgeModels.js'
+import { useBridgeCharacters } from '../hooks/useBridgeCharacters.js'
+import { useWorldDrop } from '../hooks/useWorldDrop.js'
+import { spawnOrMoveBridgeAgent } from '../lib/bridgeSpawn.js'
 
 /**
  * Game view — mock mobile phone surface. Owns shared world state
@@ -35,7 +40,7 @@ export function PhoneScreen() {
   const [rooms, setRooms] = useState([])
   const [grid, setGrid] = useState(null)
   const [objects, setObjects] = useState([])
-  const [characters, setCharacters] = useState([])
+  const { characters, refresh: refreshCharacters } = useBridgeCharacters()
   // Spell picker state — { npub, name, x, y } when an agent is tapped.
   const [picker, setPicker] = useState(null)
   const stageRef = useRef(null)
@@ -49,22 +54,33 @@ export function PhoneScreen() {
     url: cfg.roomServerUrl,
     roomName: cfg.defaultRoom || 'sandbox',
   })
+  const { models } = useBridgeModels(cfg.bridgeUrl)
+
+  const onDropCharacter = useWorldDrop({
+    world: 'Sims',
+    spawn: async (character, target) => {
+      const r = await spawnOrMoveBridgeAgent({
+        bridgeUrl: cfg.bridgeUrl,
+        character, target, models,
+        roomName: cfg.defaultRoom || 'sandbox',
+      })
+      return { toast: r.moved ? `${character.name} → (${r.x}, ${r.y})` : `${character.name} joined Sims` }
+    },
+  })
 
   useEffect(() => {
     if (!cfg.bridgeUrl) return
     let cancelled = false
     const refresh = async () => {
       try {
-        const [rms, objs, chars] = await Promise.all([
+        const [rms, objs] = await Promise.all([
           fetch(`${cfg.bridgeUrl}/rooms`).then((r) => r.ok ? r.json() : null),
           fetch(`${cfg.bridgeUrl}/objects`).then((r) => r.ok ? r.json() : { objects: [] }),
-          fetch(`${cfg.bridgeUrl}/characters`).then((r) => r.ok ? r.json() : { characters: [] }),
         ])
         if (cancelled) return
         if (rms?.rooms) setRooms(rms.rooms)
         if (rms?.grid) setGrid(rms.grid)
         if (objs?.objects) setObjects(objs.objects)
-        if (chars?.characters) setCharacters(chars.characters)
       } catch { /* transient */ }
     }
     refresh()
@@ -110,6 +126,7 @@ export function PhoneScreen() {
 
   return (
     <div className="game-phone-screen">
+      <AgentSandboxFab />
       <div className="game-status-bar">
         <span>9:41</span>
         <span>●●● ▮▮</span>
@@ -165,6 +182,7 @@ export function PhoneScreen() {
             selectedRoomId={selectedRoomId}
             onSelectRoom={setSelectedRoomId}
             onActivateRoom={(id) => { setSelectedRoomId(id); setTab('stage') }}
+            onDropCharacter={onDropCharacter}
           />
         </div>
         <div className="game-tab-pane" hidden={tab !== 'chat'}><Placeholder label="chat" /></div>

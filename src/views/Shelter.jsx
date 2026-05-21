@@ -7,13 +7,24 @@ import ShelterCharacterCard from './ShelterCharacterCard.jsx'
 import ShelterSelectionPortrait from './ShelterSelectionPortrait.jsx'
 import ShelterRoomCard from './ShelterRoomCard.jsx'
 import ShelterStageActionButton from './ShelterStageActionButton.jsx'
+import ShelterInteractionCard from './ShelterInteractionCard.jsx'
+import ShelterCharacterDialog from './ShelterCharacterDialog.jsx'
+import * as shelterStageBus from '../lib/shelterStageBus.js'
+import AgentSandboxFab from '../components/AgentSandboxFab.jsx'
 import ShelterBuildCarousel from './ShelterBuildCarousel.jsx'
+import ShelterStoryPanel from './ShelterStoryPanel.jsx'
 import TutorialOverlay from './TutorialOverlay.jsx'
 import ShelterFxLayer from './ShelterFxLayer.jsx'
+import CrackCinematicOverlay from './CrackCinematicOverlay.jsx'
+import {
+  subscribe as subCrackCinematic,
+  getState as getCrackCinematic,
+} from '../lib/crackCinematic.js'
 import { subscribe as subTutorial, getState as getTutorial } from '../lib/tutorial/runtime.js'
 import { useShelterStore, useShelterStoreApi } from '../hooks/useShelterStore.js'
+import { useWorldDrop } from '../hooks/useWorldDrop.js'
 import { attachNotesEngineToStore } from '../lib/notesEngine.js'
-import { levelForXp, xpAtLevel } from '../lib/shelterStore/index.js'
+import { levelForXp, xpAtLevel, MANAGER_KEY } from '../lib/shelterStore/index.js'
 import {
   start as startBuildMode,
   cancel as cancelBuildMode,
@@ -24,30 +35,50 @@ import { getRoomType } from '../lib/shelterWorld/roomTypes.js'
 import { getState as getGeneratedState } from '../lib/generatedRoomTypes.js'
 
 const TABS = [
-  { id: 'stage',  label: 'Stage',  glyph: '◆' },
+  { id: 'stage',  label: 'Story',  glyph: '◆' },
   { id: 'build',  label: 'Build',  glyph: '◳' },
   { id: 'agents', label: 'Agents', glyph: '◌' },
 ]
 
 export default function Shelter() {
   const [tab, setTab] = useState('stage')
+  // Story + Agents are overlay toggles that sit on top of the stage,
+  // mirroring how Build behaves. Only one overlay (build, story, or
+  // agents) is open at a time — opening one closes the others.
+  const [storyOpen, setStoryOpen] = useState(false)
+  const [agentsOpen, setAgentsOpen] = useState(false)
+  // Demo chat state — when the player sends a message to a focused
+  // agent we show an animated ellipsis for ~1.5s then stream in a
+  // canned reply. Currently only Mika has a scripted line.
+  const [chatPending, setChatPending] = useState(false)
+  const [chatLine, setChatLine] = useState(null)
+  // Pulses the bond bar red briefly when Mika's bond is reduced.
+  const [bondFlashing, setBondFlashing] = useState(false)
+  // Transient toast shown below the chat (e.g. "Mika will remember that.").
+  const [chatToast, setChatToast] = useState(null)
   const [focused, setFocused] = useState(null)
   const [focusedAgent, setFocusedAgent] = useState(null)
   const [selection, setSelection] = useState(null)
   const tutorial = useSyncExternalStore(subTutorial, getTutorial)
+  const crackCinematic = useSyncExternalStore(subCrackCinematic, getCrackCinematic)
   // The character card overlays the lower portion of the stage. We
   // suppress it during a tutorial cinematic by default — but a step
   // can flip `cardVisible: true` (via the `showCard` action) when it
   // explicitly wants the player to see it (e.g. step 3 directs the
   // player at a specific tab).
   const cardSuppressed = tutorial.active && !tutorial.cardVisible
-  // Card shows on both selection (single-tap) and focus (double-tap).
-  // The portrait below is the visual differentiator for selection-only.
+  // Two distinct UIs:
+  //   - Selection (single-tap)  → dossier card + 3D portrait + stage
+  //                               action button
+  //   - Focus    (double-tap or portrait-tap) → interaction card +
+  //                               character dialog speech bubble
+  // Stays selection-only until the camera is actually zoomed onto
+  // the agent; focusedAgent is set by ShelterStage3D when that
+  // happens.
   const selectedAgent = selection?.kind === 'agent' ? selection : null
-  const cardAgent = cardSuppressed ? null : (focusedAgent || selectedAgent)
-  // 3D portrait of the selected character — shown only while the
-  // camera is zoomed out (i.e., selected but not focused).
-  const portraitPubkey = !focusedAgent && selectedAgent?.pubkey ? selectedAgent.pubkey : null
+  const isFocused = !!focusedAgent && !cardSuppressed
+  const dossierAgent = !isFocused && !cardSuppressed ? selectedAgent : null
+  const portraitPubkey = !isFocused && selectedAgent?.pubkey ? selectedAgent.pubkey : null
   // Cash + player XP from the shelter store. Cash floats bottom-left
   // over the stage (out of the status bar so the time can stand on
   // its own), and XP fills a thin bar across the bottom of the
@@ -70,11 +101,52 @@ export default function Shelter() {
   const buildState = useSyncExternalStore(subBuildMode, getBuildMode)
   const storeApi = useShelterStoreApi()
 
+  // Unified drop handler — same shape as Colony / Sims. Resolves the
+  // bridge character from the shared roster, then writes a Shelter
+  // agent keyed by the bridge pubkey (idempotent on re-drop).
+  const findShelterAgentId = (c) => {
+    const snap = storeApi.getSnapshot()
+    if (snap.agents?.[c.pubkey]) return c.pubkey
+    const hit = Object.values(snap.agents ?? {}).find((a) => a.pubkey === c.pubkey)
+    return hit?.id ?? null
+  }
+
+  const onDropCharacter = useWorldDrop({
+    world: 'Shelter',
+    isInstantiated: (c) => !!findShelterAgentId(c),
+    spawn: (character, target) => {
+      storeApi.addAgent({
+        id: character.pubkey,
+        name: character.name,
+        pubkey: character.pubkey,
+        kind: 'employee',
+        scheduleId: 'worker',
+        pos: { roomId: target.roomId, localU: target.localU, localV: target.localV },
+      })
+    },
+  })
+
   // Tutorial may pulse the Build tab — surfaces via tutorial state's
   // pulseGameTab field (added below in the runtime).
   const pulseGameTab = tutorial.pulseGameTab ?? null
 
   const handleTabClick = (id) => {
+    if (id === 'stage') {
+      // Toggle the story overlay. Close the other overlays so only
+      // one is visible at a time.
+      if (buildState.active) cancelBuildMode()
+      setAgentsOpen(false)
+      setStoryOpen((v) => !v)
+      setTab('stage')
+      return
+    }
+    if (id === 'agents') {
+      if (buildState.active) cancelBuildMode()
+      setStoryOpen(false)
+      setAgentsOpen((v) => !v)
+      setTab('stage')
+      return
+    }
     if (id === 'build') {
       // Toggle: tap Build while not in mode → start; tap while in
       // mode → cancel. Doesn't change the active tab pane (build is
@@ -82,6 +154,8 @@ export default function Shelter() {
       if (buildState.active) {
         cancelBuildMode()
       } else {
+        setStoryOpen(false)
+        setAgentsOpen(false)
         startBuildMode(({ type, gridX, gridY, gridW, gridH }) => {
           // Generated room types (id like "gen:e2e-v5-…") come from the
           // bridge layout registry, not the static ROOM_TYPES catalogue.
@@ -101,14 +175,63 @@ export default function Shelter() {
             ...(isGen ? { kind: 'generated', layoutId: rt.layoutId, palette: rt.palette } : {}),
           }
           storeApi.addBuiltRoom(newRoom)
+          // Celebrate — stage handler projects the room to screen and
+          // fires sparkle + popup FX. Fired AFTER addBuiltRoom so the
+          // room is already in the scene when the handler runs.
+          shelterStageBus.celebrateRoom(newRoom.id)
         })
         setTab('stage')   // make sure the stage canvas is the active pane
       }
       return
     }
-    // Switching to a non-build tab while in build-mode cancels the mode.
-    if (buildState.active) cancelBuildMode()
-    setTab(id)
+  }
+
+  // Reset the chat line whenever the focused agent changes so a
+  // scripted reply doesn't leak across characters.
+  useEffect(() => {
+    setChatPending(false)
+    setChatLine(null)
+    setBondFlashing(false)
+    setChatToast(null)
+  }, [focusedAgent?.id])
+
+  const handleChatSend = (msg) => {
+    if (!focusedAgent) return
+    setChatPending(true)
+    setChatLine(null)
+    const name = (focusedAgent.name ?? '').toLowerCase()
+    const pubkey = focusedAgent.pubkey
+    setTimeout(() => {
+      setChatPending(false)
+      if (name.includes('mika')) {
+        setChatLine(
+          "What?! What do you mean Johnny is dead?? I can't believe it, "
+          + 'I was just in the Archives with him a minute ago!',
+        )
+        // Beat the dialog with the body language: shock as the line
+        // lands, then settle into wary once she's had a moment.
+        if (pubkey) {
+          shelterStageBus.setAgentMotion({ pubkey, motion: 'shock' })
+          setTimeout(() => {
+            shelterStageBus.setAgentMotion({ pubkey, motion: 'wary' })
+          }, 2600)
+          // Bond consequence — drop from 40 → 20 with a red pulse on
+          // the bar and a "will remember that" toast under the chat.
+          // Slight delay so the audience reads the line first.
+          setTimeout(() => {
+            storeApi.setRelationship?.(pubkey, MANAGER_KEY, 20)
+            setBondFlashing(true)
+            setChatToast('Mika will remember that.')
+            setTimeout(() => setBondFlashing(false), 1200)
+            setTimeout(() => setChatToast(null), 3200)
+          }, 900)
+        }
+      } else {
+        // Other characters keep the default acknowledgement until
+        // we script their replies.
+        setChatLine('Hm?')
+      }
+    }, 1500)
   }
 
   // Notes engine — evaluates per-character quest conditions and posts
@@ -129,6 +252,7 @@ export default function Shelter() {
       <div className="game-phone-frame">
         <div className="game-phone-notch" />
         <div className="game-phone-screen">
+          <AgentSandboxFab />
           <div className="game-status-bar">
             <span>9:41</span>
             <span>●●● ▮▮</span>
@@ -137,37 +261,72 @@ export default function Shelter() {
             {/* Stage stays mounted across tab switches so the WebGL
                 context survives — same trick Sims uses. */}
             <div className="game-tab-pane" hidden={tab !== 'stage'}>
-              <div className="shelter-screen-body">
+              <div className={`shelter-screen-body${crackCinematic.active ? ' is-cracking' : ''}`}>
                 <ShelterStage3D
                   onFocusChange={setFocused}
                   onAgentFocusChange={setFocusedAgent}
                   onSelectionChange={setSelection}
+                  onDropCharacter={onDropCharacter}
                 />
-                {/* Room info card at the top — name, tier, level,
-                    multiplier, progress bar. Replaces the previous
-                    bottom-center label. */}
-                {(() => {
+                {/* Room info card at the top — hidden while a character
+                    is focused (the interaction card owns that real
+                    estate). */}
+                {!isFocused && (() => {
                   const id = focused?.id ?? (selection?.kind === 'room' ? selection.id : null)
                   const name = focused?.name ?? (selection?.kind === 'room' ? selection.name : null)
                   return <ShelterRoomCard roomId={id} name={name} />
                 })()}
-                {/* Card, portrait, and stage action all animate in
-                    and out together as the player selects/deselects.
-                    AnimatePresence keeps each component mounted long
-                    enough for its exit transition to play. */}
+                {/* Selection UI — single-tap state. Dossier card at
+                    top, 3D portrait bottom-left (tap it to escalate
+                    to focus), reassign/collect button bottom-center. */}
                 <AnimatePresence>
-                  {cardAgent && (
-                    <ShelterCharacterCard key="card" agent={cardAgent} />
+                  {dossierAgent && (
+                    <ShelterCharacterCard key="card" agent={dossierAgent} />
                   )}
                 </AnimatePresence>
                 <AnimatePresence mode="wait">
                   {portraitPubkey && (
-                    <ShelterSelectionPortrait key={portraitPubkey} pubkey={portraitPubkey} />
+                    <ShelterSelectionPortrait
+                      key={portraitPubkey}
+                      pubkey={portraitPubkey}
+                      onClick={() => {
+                        // eslint-disable-next-line no-console
+                        console.log('[portrait-click]', { id: selectedAgent?.id, cardSuppressed, tutorialActive: tutorial.active })
+                        if (selectedAgent?.id) shelterStageBus.focusAgent(selectedAgent.id)
+                      }}
+                    />
                   )}
                 </AnimatePresence>
                 <AnimatePresence>
-                  {portraitPubkey && cardAgent && (
-                    <ShelterStageActionButton key="action" agent={cardAgent} />
+                  {portraitPubkey && dossierAgent && (
+                    <ShelterStageActionButton key="action" agent={dossierAgent} />
+                  )}
+                </AnimatePresence>
+
+                {/* Focus UI — double-tap or portrait-tap state.
+                    Interaction card replaces the dossier; speech-
+                    bubble dialog shows the character acknowledging
+                    being approached. */}
+                <AnimatePresence>
+                  {isFocused && (
+                    <ShelterInteractionCard
+                      key="interaction"
+                      agent={focusedAgent}
+                      onClose={() => shelterStageBus.exitFocus()}
+                      onSend={handleChatSend}
+                      bondFlashing={bondFlashing}
+                      toast={chatToast}
+                    />
+                  )}
+                </AnimatePresence>
+                <AnimatePresence>
+                  {isFocused && (
+                    <ShelterCharacterDialog
+                      key="dialog"
+                      agent={focusedAgent}
+                      text={chatLine ?? 'Yes?'}
+                      pending={chatPending}
+                    />
                   )}
                 </AnimatePresence>
                 {/* Dev panel — hidden behind a backtick toggle (or the
@@ -185,6 +344,27 @@ export default function Shelter() {
                 {/* Build Mode carousel — slides down from the top
                     when build-mode is active. Overlays the stage. */}
                 <ShelterBuildCarousel />
+                {/* Story-so-far + Agents overlays — slide down from
+                    the top when their bottom-bar tab is toggled on.
+                    Same z-band as the build carousel. */}
+                <ShelterStoryPanel
+                  open={storyOpen}
+                  onClose={() => setStoryOpen(false)}
+                />
+                <div
+                  className={`shelter-agents-panel${agentsOpen ? ' visible' : ''}`}
+                >
+                  <div className="shelter-agents-panel-head">
+                    <span className="shelter-agents-panel-title">Agents</span>
+                    <button
+                      type="button"
+                      className="shelter-agents-panel-close"
+                      onClick={() => setAgentsOpen(false)}
+                      aria-label="Close agents"
+                    >×</button>
+                  </div>
+                  <ShelterAgentList />
+                </div>
                 {/* Tutorial scrim + dialog box. Sits above the stage
                     but below the dev panel so the panel can still be
                     toggled while a step is paused for input. */}
@@ -192,10 +372,13 @@ export default function Shelter() {
                 {/* Coin-fly + level-up celebration overlay. Mounts
                     transient effects sourced from the FX bus. */}
                 <ShelterFxLayer />
+                {/* Crack cinematic — the cracks themselves are
+                    rendered in-scene via a shader on the dirt-fill
+                    mesh. This DOM overlay only carries the dust +
+                    vignette + impact flash that should not be
+                    yanked around by the camera tween. */}
+                {crackCinematic.active && <CrackCinematicOverlay />}
               </div>
-            </div>
-            <div className="game-tab-pane" hidden={tab !== 'agents'}>
-              <ShelterAgentList />
             </div>
           </div>
           {/* Player XP bar — sits between the screen body and the
@@ -210,12 +393,13 @@ export default function Shelter() {
           </div>
           <nav className="game-tab-bar" role="tablist">
             {TABS.map((t) => {
-              // Build-tab "active" state tracks build-mode, not the
-              // current tab pane (Build overlays the stage).
+              // Build / Stage(=Story) / Agents are all overlay
+              // toggles on top of the stage — each tab reads as
+              // active when its overlay is open.
               const isBuildActive = t.id === 'build' && buildState.active
-              const isStageActive = t.id === 'stage' && tab === 'stage' && !buildState.active
-              const isOtherActive = t.id !== 'build' && t.id !== 'stage' && tab === t.id
-              const active = isBuildActive || isStageActive || isOtherActive
+              const isStoryActive = t.id === 'stage' && storyOpen
+              const isAgentsActive = t.id === 'agents' && agentsOpen
+              const active = isBuildActive || isStoryActive || isAgentsActive
               const isPulsing = pulseGameTab === t.id && !active
               return (
                 <button

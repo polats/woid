@@ -1,6 +1,7 @@
 import PersonaApiStatus from './PersonaApiStatus.jsx'
 import ApiStatusBadge from './ApiStatusBadge.jsx'
 import ImagePostsStatus from './ImagePostsStatus.jsx'
+import { WORLD_META } from '../lib/worldIcons.js'
 
 export default function Sidebar({
   config,
@@ -37,18 +38,28 @@ export default function Sidebar({
         {config.description && <p>{config.description}</p>}
       </div>
 
-      <h2>Game</h2>
+      <h2>Worlds</h2>
       <ul>
         <li>
-          <a href="#/game" className={linkClass(route.view === 'game')}>
-            Sims
+          <a href={WORLD_META.sims.href} className={linkClass(route.view === 'game')}>
+            <span className="sidebar-world-icon" aria-hidden="true">{WORLD_META.sims.icon}</span>
+            {WORLD_META.sims.label}
           </a>
         </li>
         <li>
-          <a href="#/shelter" className={linkClass(route.view === 'shelter')}>
-            Shelter
+          <a href={WORLD_META.shelter.href} className={linkClass(route.view === 'shelter')}>
+            <span className="sidebar-world-icon" aria-hidden="true">{WORLD_META.shelter.icon}</span>
+            {WORLD_META.shelter.label}
           </a>
         </li>
+        {config.features?.colony !== false && (
+          <li>
+            <a href={WORLD_META.colony.href} className={linkClass(route.view === 'colony')}>
+              <span className="sidebar-world-icon" aria-hidden="true">{WORLD_META.colony.icon}</span>
+              {WORLD_META.colony.label}
+            </a>
+          </li>
+        )}
       </ul>
 
       {config.features?.agentSandbox && (
