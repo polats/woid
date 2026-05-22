@@ -1,5 +1,4 @@
-// Re-exports for the harness reference implementations.
-
-export { createUtilityBrain } from './brains/UtilityBrain.js';
-export { createDeterministicBrain } from './brains/DeterministicBrain.js';
-export { createMemoryIdentityStore } from './identity/MemoryIdentityStore.js';
+/**
+ * Back-compat re-export.
+ */
+export * from "../../../../agent-sandbox/woid-core/harness/impls/index.js";
