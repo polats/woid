@@ -14,6 +14,12 @@ import * as piPool from "./pi-pool.js";
 import * as rateLimiter from "./rate-limiter.js";
 import * as apiQuota from "./api-quota.js";
 import * as personaLog from "./persona-log.js";
+import {
+  sanitizeName as _coreSanitizeName,
+  trimTag as _coreTrimTag,
+  extractFirstJsonObject as _coreExtractFirstJsonObject,
+  parsePersonaJson as _corePersonaParse,
+} from "../woid-core/persona/parse.js";
 import * as services from "./service-state.js";
 import { SERVICES as SERVICE_REGISTRY } from "./service-registry.js";
 import { createHarness, KNOWN_HARNESSES, DEFAULT_HARNESS } from "./harnesses/index.js";
@@ -1013,74 +1019,12 @@ registerPrompt("player-persona", PERSONA_SYSTEM);
 
 // Characters can now carry realistic human names (spaces, accents, hyphens,
 // apostrophes, periods). Kind:0 profiles are display names, not DNS labels.
-function sanitizeName(raw) {
-  const s = String(raw ?? "")
-    // Strip surrounding punctuation (LLMs occasionally wrap in quotes).
-    .replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/gu, "")
-    // Collapse internal whitespace.
-    .replace(/\s+/g, " ")
-    .trim();
-  if (s.length < 2 || s.length > 40) return "";
-  // Reject obvious LLM leakage.
-  if (/^(name|character|persona)\s*[:=]/i.test(s)) return "";
-  return s;
-}
-
-// Walk forward from each `{` until we find a bracket-balanced, string-aware
-// matching `}`. First successful parse wins. Handles trailing prose, multi-
-// object emissions, and embedded `}` characters inside string literals.
-function extractFirstJsonObject(raw) {
-  for (let i = 0; i < raw.length; i++) {
-    if (raw[i] !== "{") continue;
-    let depth = 0, inStr = false, esc = false;
-    for (let j = i; j < raw.length; j++) {
-      const ch = raw[j];
-      if (inStr) {
-        if (esc) esc = false;
-        else if (ch === "\\") esc = true;
-        else if (ch === '"') inStr = false;
-        continue;
-      }
-      if (ch === '"') inStr = true;
-      else if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          const slice = raw.slice(i, j + 1);
-          try { return JSON.parse(slice); } catch { break; }
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function parsePersonaJson(raw) {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = (fenced?.[1] ?? raw).trim();
-  const parsed = extractFirstJsonObject(candidate);
-  if (!parsed) throw new Error("model did not return a parseable JSON object");
-  const name = sanitizeName(parsed.name ?? parsed.callSign ?? "");
-  // `about` is still the canonical bio. `specialty` + `personality` are
-  // optional structured tags — if a model returns them as separate
-  // fields, capture them; otherwise leave null and let downstream
-  // backfill extract them from the bio. Older models that nested the
-  // personality inside `about` continue to work (we don't fold those
-  // into the bio anymore, but we also don't reject them).
-  const about = (typeof parsed.about === "string" ? parsed.about.trim() : "")
-    .slice(0, 1000);
-  if (!about) throw new Error("model did not return an about");
-  const specialty = trimTag(parsed.specialty ?? parsed.role ?? parsed.job ?? null);
-  const personality = trimTag(parsed.personality ?? parsed.personalityTag ?? null);
-  return { name: name || null, about, specialty, personality };
-}
-
-function trimTag(raw) {
-  if (typeof raw !== "string") return null;
-  const s = raw.trim().replace(/\.\s*$/, "");
-  if (!s) return null;
-  return s.length > 48 ? s.slice(0, 46).trim() + "…" : s;
-}
+// Persona JSON helpers — canonical impl lives in woid-core/persona/parse.js.
+// Local aliases preserved so existing call sites read naturally.
+const sanitizeName = _coreSanitizeName;
+const trimTag = _coreTrimTag;
+const extractFirstJsonObject = _coreExtractFirstJsonObject;
+const parsePersonaJson = _corePersonaParse;
 
 async function nimChatJson({ model, systemPrompt, userPrompt }) {
   if (!NVIDIA_NIM_API_KEY) throw new Error("NVIDIA_NIM_API_KEY not configured");

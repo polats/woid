@@ -83,6 +83,10 @@ services:
       # deps intact (host has no node_modules in this dir).
       - ./pi-bridge:/app/bridge
       - /app/bridge/node_modules
+      # woid-core is a sibling lib pi-bridge imports from. Mount at the same
+      # relative path (../../woid-core) so the import statements in
+      # pi-bridge/providers/*.js resolve identically inside the container.
+      - ./woid-core:/app/woid-core
     command: ["npm", "run", "dev"]
     # Let the bridge reach a llama.cpp server running on the host via
     # host.docker.internal:18080 (set LOCAL_LLM_BASE_URL accordingly).

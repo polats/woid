@@ -1,0 +1,19 @@
+{
+  "name": "woid-brain-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Transport-agnostic brain server. Hosts woid's harness logic over HTTP for s&box, mobile, or any other client. See ../../examples/woid/CONTRACT.md (in sbox-public) for the wire contract.",
+  "scripts": {
+    "start": "node --env-file-if-exists=../.env server.js",
+    "dev": "node --env-file-if-exists=../.env --watch server.js",
+    "scenarios": "node --env-file-if-exists=../.env scripts/scenarios.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
