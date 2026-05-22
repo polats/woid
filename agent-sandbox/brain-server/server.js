@@ -5,6 +5,7 @@ import { verbsRouter } from './routes/verbs.js';
 import { characterRouter } from './routes/character.js';
 import { brainRouter } from './routes/brain.js';
 import { personaRouter } from './routes/persona.js';
+import { perceptionRouter } from './routes/perception.js';
 
 // 8080 because s&box's HTTP whitelist (engine source: SboxHttpHandler.IsAllowedLoopbackPort)
 // only permits loopback ports 80/443/8080/8443 from game code unless launched with
@@ -26,6 +27,7 @@ app.use(verbsRouter);
 app.use(characterRouter);
 app.use(brainRouter);
 app.use(personaRouter);
+app.use(perceptionRouter);
 
 // Bind to 0.0.0.0 so the user can test from their browser or another machine
 // on LAN. sbox itself still connects via 127.0.0.1 (loopback-allowlist).
