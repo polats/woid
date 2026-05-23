@@ -23,6 +23,14 @@ export const STANDALONE_VERBS = {
     prompt: "Speak out loud. Use to greet, react, or banter with another character. Keep it short and in-character.",
     preconditions: ["someone_to_hear"],
   },
+  drink: {
+    name: "drink",
+    args: {
+      object_id: { type: "string", required: true, desc: "holdable mug/cup/glass to pick up and sip from" },
+    },
+    prompt: "Pick up a mug or cup and drink from it. Use when slightly hungry or just to take a moment.",
+    preconditions: ["object_holdable", "adjacent"],
+  },
 };
 
 /**
