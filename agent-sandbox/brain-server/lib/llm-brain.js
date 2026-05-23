@@ -66,7 +66,7 @@ export async function step({ obs, character }) {
   const { text, usage, model } = await chatJson({
     systemPrompt: system,
     messages: [{ role: 'user', content: userPrompt }],
-    maxTokens: 600,
+    maxTokens: 1200,
     temperature: 0.8,
   });
   const ms = Date.now() - startTs;
